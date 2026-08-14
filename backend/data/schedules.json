@@ -1,0 +1,197 @@
+[
+  {
+    "id": "preset_matayom_8",
+    "name": "มัธยม 8 คาบ (พักคาบ 4)",
+    "description": "5 วัน × 8 คาบ, พักเที่ยงคาบ 4",
+    "days_per_week": 5,
+    "periods_per_day": 8,
+    "lunch_periods": [
+      4
+    ],
+    "period_definitions": [
+      {
+        "period_num": 1,
+        "start_time": "08:30",
+        "end_time": "09:20",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 2,
+        "start_time": "09:20",
+        "end_time": "10:10",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 3,
+        "start_time": "10:10",
+        "end_time": "11:00",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 4,
+        "start_time": "11:00",
+        "end_time": "11:50",
+        "period_type": "lunch",
+        "label": "พักเที่ยง"
+      },
+      {
+        "period_num": 5,
+        "start_time": "12:30",
+        "end_time": "13:20",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 6,
+        "start_time": "13:20",
+        "end_time": "14:10",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 7,
+        "start_time": "14:10",
+        "end_time": "15:00",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 8,
+        "start_time": "15:00",
+        "end_time": "15:50",
+        "period_type": "teaching"
+      }
+    ],
+    "grade_levels": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "special_days": [],
+    "grade_activities": [],
+    "is_preset": true,
+    "is_active": true
+  },
+  {
+    "id": "preset_matayom_7",
+    "name": "มัธยม 7 คาบ (พักคาบ 4)",
+    "description": "5 วัน × 7 คาบ, พักเที่ยงคาบ 4",
+    "days_per_week": 5,
+    "periods_per_day": 7,
+    "lunch_periods": [
+      4
+    ],
+    "period_definitions": [
+      {
+        "period_num": 1,
+        "start_time": "08:30",
+        "end_time": "09:25",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 2,
+        "start_time": "09:25",
+        "end_time": "10:20",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 3,
+        "start_time": "10:20",
+        "end_time": "11:15",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 4,
+        "start_time": "11:15",
+        "end_time": "12:00",
+        "period_type": "lunch",
+        "label": "พักเที่ยง"
+      },
+      {
+        "period_num": 5,
+        "start_time": "12:30",
+        "end_time": "13:25",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 6,
+        "start_time": "13:25",
+        "end_time": "14:20",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 7,
+        "start_time": "14:20",
+        "end_time": "15:15",
+        "period_type": "teaching"
+      }
+    ],
+    "grade_levels": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "special_days": [],
+    "grade_activities": [],
+    "is_preset": true,
+    "is_active": true
+  },
+  {
+    "id": "preset_prathom_5",
+    "name": "ประถม 5 คาบ (พักคาบ 3)",
+    "description": "5 วัน × 5 คาบ, พักเที่ยงคาบ 3",
+    "days_per_week": 5,
+    "periods_per_day": 5,
+    "lunch_periods": [
+      3
+    ],
+    "period_definitions": [
+      {
+        "period_num": 1,
+        "start_time": "08:30",
+        "end_time": "09:30",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 2,
+        "start_time": "09:30",
+        "end_time": "10:30",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 3,
+        "start_time": "10:30",
+        "end_time": "11:15",
+        "period_type": "lunch",
+        "label": "พักเที่ยง"
+      },
+      {
+        "period_num": 4,
+        "start_time": "12:00",
+        "end_time": "13:00",
+        "period_type": "teaching"
+      },
+      {
+        "period_num": 5,
+        "start_time": "13:00",
+        "end_time": "14:00",
+        "period_type": "teaching"
+      }
+    ],
+    "grade_levels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "special_days": [],
+    "grade_activities": [],
+    "is_preset": true,
+    "is_active": true
+  }
+]
