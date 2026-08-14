@@ -1,15 +1,13 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { Calendar, Users, AlertTriangle, ArrowRight, Rocket } from 'lucide-react'
+import { Calendar, AlertTriangle, ArrowRight, Rocket, CheckCircle, XCircle } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import TimetableGrid from '../components/grid/TimetableGrid.jsx'
-import SolverMetrics from '../components/metrics/SolverMetrics.jsx'
 import TeacherLoadTable from '../components/load/TeacherLoadTable.jsx'
 import LoadStatusBadge from '../components/load/LoadStatusBadge.jsx'
 import UnassignedSidebar from '../components/timetable/UnassignedSidebar.jsx'
 import SolverToolbar from '../components/timetable/SolverToolbar.jsx'
 import StickyFooter from '../components/timetable/StickyFooter.jsx'
 import ConstraintsOverviewModal from '../components/modals/ConstraintsOverviewModal.jsx'
-
 export default function TimetableView() {
   const {
     result,
@@ -18,14 +16,40 @@ export default function TimetableView() {
     setStep,
     runSolver,
     isGenerating,
-    optimizationMode,
-    setOptimizationMode,
+    solverPreset,
+    setSolverPreset,
     userPlacements,
     placeLessonBlock,
     clearPlacements,
     clearResult,
     clearAllSlots,
     clearByTeacher,
+    // Batch pin/unpin/clear actions
+    pinByTeacher,
+    unpinByTeacher,
+    pinByClass,
+    unpinByClass,
+    pinAllSolverSlots,
+    unpinAll,
+    clearByClass,
+    clearSolverOnly,
+    // Slot-level editing
+    moveSlot,
+    deleteSlot,
+    removePlacement,
+    lockSlot,
+    unlockSlot,
+    // Snapshot versioning
+    snapshots,
+    activeSnapshotId,
+    activeSnapshotLabel,
+    isSnapshotDirty,
+    lastSnapshotSaveAt,
+    saveSnapshot,
+    loadSnapshot,
+    deleteSnapshot,
+    exportSnapshot,
+    importSnapshot,
   } = useApp()
   const [activeTab, setActiveTab] = useState('timetable')
   const [viewMode, setViewMode] = useState('class') // 'class' | 'teacher'
@@ -35,8 +59,30 @@ export default function TimetableView() {
   const [transitioning, setTransitioning] = useState(false)
   const [sidebarDragBlock, setSidebarDragBlock] = useState(null)
   const [showConstraintsModal, setShowConstraintsModal] = useState(false)
+  const [completionToast, setCompletionToast] = useState(null)
   const gridAreaRef = useRef(null)
   const wheelCooldownRef = useRef(false)
+  const wasGeneratingRef = useRef(false)
+
+  // ── Auto-toast when solver finishes ───────────────────────────────
+  // Fires when isGenerating transitions true → false AND a fresh result
+  // with metrics is present. Skips initial mount and snapshot restores.
+  useEffect(() => {
+    const wasGenerating = wasGeneratingRef.current
+    wasGeneratingRef.current = isGenerating
+    if (wasGenerating && !isGenerating && result?.metrics) {
+      const m = result.metrics
+      const secs = m.wall_time_seconds != null ? `${m.wall_time_seconds.toFixed(3)}s` : ''
+      const status = m.status || 'UNKNOWN'
+      const isOk = status === 'OPTIMAL' || status === 'FEASIBLE'
+      const msg = isOk
+        ? `จัดตารางสำเร็จ${secs ? ` (ใช้เวลา ${secs} • ${status})` : ` • ${status}`}`
+        : `จัดตารางไม่สำเร็จ${secs ? ` (ใช้เวลา ${secs} • ${status})` : ` • ${status}`}`
+      setCompletionToast({ ok: isOk, msg })
+      const t = setTimeout(() => setCompletionToast(null), 4000)
+      return () => clearTimeout(t)
+    }
+  }, [isGenerating, result])
 
   // Empty state — no fixture data yet
   if (!fixtureData) {
@@ -288,6 +334,31 @@ export default function TimetableView() {
     placeLessonBlock(lessonBlock.id, day, period)
   }
 
+  // ❌ Remove a slot/placement from the grid (button on card)
+  function handleRemoveFromGrid(lessonBlockId, isPreAssigned, day, period) {
+    if (isPreAssigned) {
+      removePlacement(lessonBlockId, day, period)
+    } else {
+      deleteSlot(lessonBlockId)
+    }
+  }
+
+  // 📌 Toggle pin on a slot (button on card)
+  function handleTogglePin(lessonBlockId, day, period, isPinned) {
+    if (isPinned) {
+      // Unpin: remove the placement (slot reverts to solver-controlled)
+      removePlacement(lessonBlockId, day, period)
+    } else {
+      // Pin: place as user placement (locks position)
+      placeLessonBlock(lessonBlockId, day, period)
+    }
+  }
+
+  // Drag from grid → drop in drawer (unassign)
+  function handleDropFromGrid(lessonBlockId, isPreAssigned, day, period) {
+    handleRemoveFromGrid(lessonBlockId, isPreAssigned, day, period)
+  }
+
   function handleGenerateRemaining() {
     runSolver({ preAssignments: userPlacements })
   }
@@ -296,6 +367,16 @@ export default function TimetableView() {
   const handleClearSolver = useCallback(() => clearResult(), [clearResult])
   const handleClearAll = useCallback(() => clearAllSlots(), [clearAllSlots])
   const handleClearByTeacher = useCallback((tid) => clearByTeacher(tid), [clearByTeacher])
+
+  // ── Batch pin/unpin/clear handlers ──────────────────────────────────
+  const handlePinByTeacher = useCallback((tid) => pinByTeacher(tid), [pinByTeacher])
+  const handleUnpinByTeacher = useCallback((tid) => unpinByTeacher(tid), [unpinByTeacher])
+  const handlePinByClass = useCallback((cid) => pinByClass(cid), [pinByClass])
+  const handleUnpinByClass = useCallback((cid) => unpinByClass(cid), [unpinByClass])
+  const handlePinAllSolver = useCallback(() => pinAllSolverSlots(), [pinAllSolverSlots])
+  const handleUnpinAll = useCallback(() => unpinAll(), [unpinAll])
+  const handleClearByClass = useCallback((cid) => clearByClass(cid), [clearByClass])
+  const handleClearSolverOnly = useCallback(() => clearSolverOnly(), [clearSolverOnly])
 
   const hasResult = result?.slots && result.slots.length > 0
   const hasPlacements = Object.keys(userPlacements).length > 0
@@ -344,58 +425,62 @@ export default function TimetableView() {
         </div>
       )}
 
-      {/* Solver Metrics (only when result exists) */}
-      {result && <SolverMetrics metrics={result.metrics} />}
-
-      {/* Tab Toggle: ตารางสอน / ภาระงานครู */}
-      <div className="flex items-center gap-2">
-        <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
-          <button
-            onClick={() => setActiveTab('timetable')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all
-              ${activeTab === 'timetable' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-          >
-            <Calendar className="w-4 h-4" />
-            ตารางสอน
-          </button>
-          <button
-            onClick={() => setActiveTab('teachers')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all
-              ${activeTab === 'teachers' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-          >
-            <Users className="w-4 h-4" />
-            ภาระงานครู
-          </button>
-        </div>
-      </div>
-
-      {/* Top Solver Toolbar — below Tab Selector, above three-panel layout */}
-      {activeTab === 'timetable' && (
-        <SolverToolbar
-          optimizationMode={optimizationMode}
-          onModeChange={setOptimizationMode}
-          onGenerate={handleGenerateRemaining}
-          isGenerating={isGenerating}
-          disabled={!fixtureData}
-          fixedCount={fixedCount}
-          preAssignedCount={preAssignedCount}
-          onClearManual={handleClearManual}
-          onClearSolver={handleClearSolver}
-          onClearAll={handleClearAll}
-          onClearByTeacher={handleClearByTeacher}
-          teachers={teachers}
-          hasResult={hasResult}
-          hasPlacements={hasPlacements}
-          className={viewMode === 'class' ? selectedClass?.name : selectedTeacher?.name}
-          onOpenConstraints={() => setShowConstraintsModal(true)}
-        />
-      )}
+      {/* Top 4-Card Toolbar — below dirty banner, above tab content */}
+      <SolverToolbar
+        solverPreset={solverPreset}
+        onPresetChange={setSolverPreset}
+        onGenerate={handleGenerateRemaining}
+        isGenerating={isGenerating}
+        disabled={!fixtureData}
+        metrics={result?.metrics}
+        fixedCount={fixedCount}
+        preAssignedCount={preAssignedCount}
+        onClearManual={handleClearManual}
+        onClearSolver={handleClearSolver}
+        onClearAll={handleClearAll}
+        onClearByTeacher={handleClearByTeacher}
+        onClearSolverOnly={handleClearSolverOnly}
+        onClearByClass={handleClearByClass}
+        onPinAllSolver={handlePinAllSolver}
+        onUnpinAll={handleUnpinAll}
+        teachers={teachers}
+        classes={classes}
+        hasResult={hasResult}
+        hasPlacements={hasPlacements}
+        className={viewMode === 'class' ? selectedClass?.name : selectedTeacher?.name}
+        onOpenConstraints={() => setShowConstraintsModal(true)}
+        // Version / Save props
+        snapshots={snapshots}
+        activeSnapshotId={activeSnapshotId}
+        activeSnapshotLabel={activeSnapshotLabel}
+        isSnapshotDirty={isSnapshotDirty}
+        lastSnapshotSaveAt={lastSnapshotSaveAt}
+        onSaveSnapshot={saveSnapshot}
+        onLoadSnapshot={loadSnapshot}
+        onDeleteSnapshot={deleteSnapshot}
+        onExportSnapshot={exportSnapshot}
+        onImportSnapshot={importSnapshot}
+        // Tab + Export props
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        exportData={{
+          slots: resultSlots,
+          classes,
+          subjects,
+          teachers,
+          gridConfig,
+          userPlacements,
+          lessonBlocks: lesson_blocks,
+          fixedSlots: fixed_slots,
+          label: activeSnapshotLabel || (selectedClass?.name || 'ตารางสอน'),
+        }}
+      />
 
       {/* Tab Content */}
       {activeTab === 'timetable' && (
         <div className="card p-0 overflow-hidden">
           {/* Three-panel layout: [Drawer (left) | Grid (center) | Mini Rail (right)] */}
-          <div className="flex" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
+          <div className="flex" style={{ height: 'calc(100vh - 340px)', minHeight: '400px' }}>
             {/* 1. Left: collapsible unassigned drawer */}
             <div className={`relative shrink-0 transition-all duration-300 ease-out ${drawerOpen ? 'w-[250px]' : 'w-0'}`}>
               <UnassignedSidebar
@@ -410,6 +495,7 @@ export default function TimetableView() {
                 onToggle={() => setDrawerOpen(!drawerOpen)}
                 onDragStartBlock={(lb) => setSidebarDragBlock(lb)}
                 onDragEndBlock={() => setSidebarDragBlock(null)}
+                onDropFromGrid={handleDropFromGrid}
               />
             </div>
 
@@ -436,6 +522,24 @@ export default function TimetableView() {
                   selectedTeacher={viewMode === 'teacher' ? selectedTeacher?.id : null}
                   viewMode={viewMode}
                   onViewModeChange={handleViewModeChange}
+                  // Slot-level editing callbacks
+                  onSlotMove={moveSlot}
+                  onSlotDelete={deleteSlot}
+                  onRemovePlacement={removePlacement}
+                  onLockSlot={lockSlot}
+                  onUnlockSlot={unlockSlot}
+                  // Interactive block editing (buttons on cards)
+                  onRemoveSlot={handleRemoveFromGrid}
+                  onTogglePin={handleTogglePin}
+                  // Batch pin/clear actions (sub-header)
+                  selectedClassId={viewMode === 'class' ? selectedClass?.id : null}
+                  selectedTeacherId={viewMode === 'teacher' ? selectedTeacher?.id : null}
+                  onPinByClass={handlePinByClass}
+                  onPinByTeacher={handlePinByTeacher}
+                  onUnpinByClass={handleUnpinByClass}
+                  onUnpinByTeacher={handleUnpinByTeacher}
+                  onClearByClass={handleClearByClass}
+                  onClearByTeacher={handleClearByTeacher}
                 />
               </div>
             </div>
@@ -566,12 +670,11 @@ export default function TimetableView() {
         </div>
       )}
 
-      {/* Sticky Global Footer */}
+      {/* Sticky Global Footer — Back button + completion status */}
       <StickyFooter
         onBack={() => setStep(4)}
         placedCount={placedCount}
         totalCount={totalCount}
-        exportDisabled={true}
       />
 
       {/* Constraints Overview Modal */}
@@ -585,6 +688,18 @@ export default function TimetableView() {
         onNavigateStep={(step) => { setShowConstraintsModal(false); setStep(step) }}
         onClearPins={() => { clearPlacements(); setShowConstraintsModal(false) }}
       />
+
+      {/* ── Auto completion toast (bottom-right) ─────────────────────── */}
+      {completionToast && (
+        <div className={`fixed bottom-6 right-6 z-[120] px-4 py-3 rounded-xl shadow-lg
+          text-sm font-medium flex items-center gap-2 max-w-sm
+          ${completionToast.ok ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
+          {completionToast.ok
+            ? <CheckCircle className="w-5 h-5 shrink-0" />
+            : <XCircle className="w-5 h-5 shrink-0" />}
+          {completionToast.msg}
+        </div>
+      )}
     </div>
   )
 }

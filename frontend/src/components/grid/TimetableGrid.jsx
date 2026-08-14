@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo } from 'react'
 import GridCell, { getClassColors } from './GridCell.jsx'
 import GridLegend from './GridLegend.jsx'
 import { DAY_LABELS } from './GridLegend.jsx'
+import CellContextMenu from './CellContextMenu.jsx'
 
 export default function TimetableGrid({
   slots = [],
@@ -32,12 +33,31 @@ export default function TimetableGrid({
   viewMode = 'class',
   // Callback when user switches view mode via header toggle
   onViewModeChange,
+  // ── Slot-level editing (persisted to AppContext) ──
+  onSlotMove,         // (lessonBlockId, newDay, newPeriod) => void
+  onSlotDelete,       // (lessonBlockId) => void
+  onRemovePlacement,  // (lessonBlockId, day, period) => void
+  onLockSlot,         // (day, period) => void
+  onUnlockSlot,       // (day, period) => void
+  // ── Interactive block editing (buttons on cards) ──
+  onRemoveSlot,       // (lessonBlockId, isPreAssigned, day, period) => void
+  onTogglePin,        // (lessonBlockId, day, period, isPinned) => void
+  // ── Batch pin/clear actions (sub-header) ──
+  selectedClassId = null,
+  selectedTeacherId = null,
+  onPinByClass,       // (classId) => void
+  onPinByTeacher,     // (teacherId) => void
+  onUnpinByClass,     // (classId) => void
+  onUnpinByTeacher,   // (teacherId) => void
+  onClearByClass,     // (classId) => void
+  onClearByTeacher,   // (teacherId) => void
 }) {
   const [dragSource, setDragSource] = useState(null) // { day, period, classId, lessonBlockId }
   const [dragTarget, setDragTarget] = useState(null)
   const [forcePlacePending, setForcePlacePending] = useState(null) // { lb, day, period, classId, reason }
   const [showForceConfirm, setShowForceConfirm] = useState(false)
   const [localSlots, setLocalSlots] = useState(slots)
+  const [contextMenu, setContextMenu] = useState(null) // { x, y, cellType, slot, day, period, classId }
 
   // Update localSlots when props change (but not during active drag)
   if (slots !== localSlots && !dragSource) {
@@ -153,6 +173,10 @@ export default function TimetableGrid({
         className: classMap.get(s.class_id)?.name || s.class_id,
         subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
         subjectCategory: subjectMap.get(s.subject_id)?.category,
+        isPreAssigned: (() => {
+          const placements = userPlacements[s.lesson_block_id]
+          return !!(placements && placements.some((pp) => pp.day === s.day && pp.period === s.period))
+        })(),
       }))
   }
 
@@ -169,6 +193,13 @@ export default function TimetableGrid({
   function handleDragStart(e, slot, classId) {
     setDragSource({ day: slot.day, period: slot.period, classId, lessonBlockId: slot.lesson_block_id })
     e.dataTransfer.effectAllowed = 'move'
+    // Also set grid slot info for drag-to-drawer support
+    e.dataTransfer.setData('application/x-grid-slot', JSON.stringify({
+      lessonBlockId: slot.lesson_block_id,
+      day: slot.day,
+      period: slot.period,
+      classId,
+    }))
   }
 
   function handleDragEnd() {
@@ -283,6 +314,8 @@ export default function TimetableGrid({
     })
     setLocalSlots(newSlots)
     if (onSlotSwap) onSlotSwap(newSlots)
+    // Persist move to AppContext so it survives refresh
+    if (onSlotMove) onSlotMove(draggedSlot.lesson_block_id, d, p)
 
     setDragSource(null)
     setDragTarget(null)
@@ -306,6 +339,20 @@ export default function TimetableGrid({
       onDropFromSidebar(lb, d, p, classId)
     } catch { /* ignore parse errors */ }
     setDragTarget(null)
+  }
+
+  // ── Right-click context menu ──────────────────────────────────────
+  function handleContextMenu(e, d, p, classId, cellType, slot) {
+    e.preventDefault()
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      cellType, // 'solver' | 'placement' | 'fixed' | 'empty'
+      slot,
+      day: d,
+      period: p,
+      classId,
+    })
   }
 
   // ── Single class grid (full-width) ────────────────────────────────
@@ -378,9 +425,12 @@ export default function TimetableGrid({
                     displayTeacher = teacherMap.get(lb.teacher_id)
                     displayClass = classMap.get(lb.class_id)
                     isPreAssigned = true
-                  } else if (slot && userPlacements[slot.lesson_block_id]) {
-                    // Solver slot that also has user placements → mark as pre-assigned
-                    isPreAssigned = true
+                  } else if (slot) {
+                    // Solver slot that also has a user placement at this exact (day, period) → pinned
+                    const placements = userPlacements[slot.lesson_block_id]
+                    if (placements && placements.some((p) => p.day === slot.day && p.period === slot.period)) {
+                      isPreAssigned = true
+                    }
                   }
 
                   return (
@@ -405,9 +455,15 @@ export default function TimetableGrid({
                           handleDrop(e, d, p, classId)
                         }
                       }}
+                      onContextMenu={(e) => handleContextMenu(e, d, p, classId,
+                        isFixed ? 'fixed' : isPreAssigned ? 'placement' : slot ? 'solver' : 'empty',
+                        displaySlot,
+                      )}
                       subject={displaySubject}
                       teacher={displayTeacher}
                       classGroup={displayClass}
+                      onRemoveSlot={displaySlot && !isFixed ? () => onRemoveSlot?.(displaySlot.lesson_block_id, isPreAssigned, d, p) : undefined}
+                      onTogglePin={displaySlot && !isFixed ? () => onTogglePin?.(displaySlot.lesson_block_id, d, p, isPreAssigned) : undefined}
                     />
                   )
                 })}
@@ -484,6 +540,11 @@ export default function TimetableGrid({
                           handleDrop(e, d, p, null)
                         }
                       }}
+                      onContextMenu={(e) => handleContextMenu(e, d, p, null,
+                        isFixed ? 'fixed' : teacherSlots.length > 0 ? 'solver' : 'empty',
+                        teacherSlots[0],
+                      )}
+                      onTogglePinSlot={onTogglePin ? (s) => onTogglePin(s.lesson_block_id, s.day, s.period, s.isPreAssigned) : undefined}
                     />
                   )
                 })}
@@ -534,6 +595,48 @@ export default function TimetableGrid({
             👤 ดูตามครูผู้สอน
           </button>
         </div>
+
+        {/* Context-sensitive batch actions */}
+        {viewMode === 'class' && selectedClassId && (
+          <div className="flex items-center gap-1.5 ml-auto">
+            <button
+              onClick={() => onPinByClass?.(selectedClassId)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-amber-700
+                bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-lg transition-colors"
+              title="ล็อกทุกคาบของห้องนี้ (ปักหมุดผล AI ทั้งหมดของห้อง)"
+            >
+              📌 ล็อกห้องนี้
+            </button>
+            <button
+              onClick={() => onClearByClass?.(selectedClassId)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-700
+                bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition-colors"
+              title="ล้างทุกคาบของห้องนี้ (คืนวิชาทั้งหมดเข้าคลัง)"
+            >
+              🗑️ ล้างห้องนี้
+            </button>
+          </div>
+        )}
+        {viewMode === 'teacher' && selectedTeacherId && (
+          <div className="flex items-center gap-1.5 ml-auto">
+            <button
+              onClick={() => onPinByTeacher?.(selectedTeacherId)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-amber-700
+                bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-lg transition-colors"
+              title="ล็อกทุกคาบของครูท่านนี้ (ปักหมุดผล AI ทั้งหมดของครู)"
+            >
+              📌 ล็อกตารางครูท่านนี้
+            </button>
+            <button
+              onClick={() => onClearByTeacher?.(selectedTeacherId)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-700
+                bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition-colors"
+              title="ล้างทุกคาบของครูท่านนี้ (คืนวิชาทั้งหมดเข้าคลัง)"
+            >
+              🗑️ ล้างตารางครูท่านนี้
+            </button>
+          </div>
+        )}
       </div>
 
       <GridLegend
@@ -589,6 +692,16 @@ export default function TimetableGrid({
           </div>
         </div>
       )}
+
+      {/* Right-click context menu */}
+      <CellContextMenu
+        menu={contextMenu}
+        onClose={() => setContextMenu(null)}
+        onDeleteSlot={onSlotDelete}
+        onRemovePlacement={onRemovePlacement}
+        onLockSlot={onLockSlot}
+        onUnlockSlot={onUnlockSlot}
+      />
     </div>
   )
 }

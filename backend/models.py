@@ -43,6 +43,7 @@ class AdminRole(str, Enum):
 class OptimizationMode(str, Enum):
     FAST = "FAST"
     BALANCED = "BALANCED"
+    DEEP = "DEEP"
 
 
 # ── Input models ───────────────────────────────────────────────────────────
@@ -241,7 +242,7 @@ class TimetableRequest(BaseModel):
     fixed_slots: list[FixedSlot] = Field(default_factory=list)
     schedule_blocks: list[ScheduleBlock] = Field(default_factory=list)
     schedule_config: ScheduleConfig = Field(default_factory=ScheduleConfig, description="Legacy single-block config (used if schedule_blocks is empty)")
-    solver_time_limit_seconds: float = Field(default=2.0, ge=0.5, le=30.0)
+    solver_time_limit_seconds: float = Field(default=2.0, ge=0.5, le=120.0)
     optimization_mode: OptimizationMode = Field(
         default=OptimizationMode.BALANCED,
         description="FAST: stop at first feasible solution; BALANCED: optimize soft constraints within time limit",

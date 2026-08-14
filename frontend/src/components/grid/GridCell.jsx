@@ -44,13 +44,21 @@ export default function GridCell({
   onDragEnd,
   onDragOver,
   onDrop,
+  onContextMenu,
+  // ── Interactive block editing ──
+  onRemoveSlot,     // () => void — called when ❌ clicked
+  onTogglePin,      // () => void — called when 📌 clicked
+  onTogglePinSlot,  // (slot) => void — called when 📌 clicked in multi-slot (teacher) mode
 }) {
   const [showTooltip, setShowTooltip] = useState(false)
 
   // ── Lunch break cell ──────────────────────────────────────────────
   if (isLunch) {
     return (
-      <div className="bg-gray-100 border border-gray-200 rounded-lg p-2 min-h-[80px] flex items-center justify-center">
+      <div
+        className="bg-gray-100 border border-gray-200 rounded-lg p-2 min-h-[80px] flex items-center justify-center"
+        onContextMenu={onContextMenu}
+      >
         <span className="text-sm font-semibold text-gray-400">พักเที่ยง</span>
       </div>
     )
@@ -62,6 +70,7 @@ export default function GridCell({
       <div
         className="bg-gray-200 border-2 border-gray-400 border-dashed rounded-lg p-2 min-h-[80px] flex flex-col items-center justify-center cursor-not-allowed"
         onDragOver={(e) => e.preventDefault()} // block drops on fixed slots
+        onContextMenu={onContextMenu}
       >
         <div className="text-xs sm:text-sm font-bold text-gray-600 truncate w-full text-center">
           {fixedSlotName || 'บล็อกกิจกรรม'}
@@ -79,6 +88,7 @@ export default function GridCell({
       <div
         onDragOver={onDragOver}
         onDrop={onDrop}
+        onContextMenu={onContextMenu}
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
         className={`bg-white border rounded-lg p-1.5 min-h-[80px] flex flex-col transition-all overflow-hidden
@@ -95,11 +105,27 @@ export default function GridCell({
                 draggable={isDraggable}
                 onDragStart={(e) => onDragStart?.(e, s)}
                 onDragEnd={onDragEnd}
-                className={`${sColors.bg} ${sColors.border} border rounded px-1.5 py-0.5 cursor-grab hover:shadow-sm transition-all flex-1 flex items-center min-h-0`}
+                className={`group/sub relative ${sColors.bg} ${sColors.border} border rounded px-1.5 py-0.5
+                  cursor-grab hover:shadow-sm transition-all flex-1 flex items-center min-h-0
+                  ${s.isPreAssigned ? 'ring-1 ring-green-400' : ''}`}
               >
-                <div className={`text-xs sm:text-sm font-bold ${sColors.text} truncate w-full`}>
+                <div className={`text-xs sm:text-sm font-bold ${sColors.text} truncate w-full pr-4`}>
+                  {s.isPreAssigned && <span className="mr-0.5">📌</span>}
                   {s.className || s.class_id} · {s.subjectName || s.subject_id}
                 </div>
+                {onTogglePinSlot && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onTogglePinSlot(s) }}
+                    className={`absolute right-0.5 top-0.5 w-4 h-4 rounded-full transition-colors
+                      flex items-center justify-center text-[10px] shadow-sm
+                      ${s.isPreAssigned
+                        ? 'bg-green-500 text-white hover:bg-green-600'
+                        : 'bg-white/80 text-gray-400 hover:bg-gray-200 hover:text-gray-700 opacity-0 group-hover/sub:opacity-100'}`}
+                    title={s.isPreAssigned ? 'ปลดล็อกหมุด' : 'ปักหมุด (ล็อกตำแหน่ง)'}
+                  >
+                    📌
+                  </button>
+                )}
               </div>
             )
           })}
@@ -131,6 +157,7 @@ export default function GridCell({
               : 'border-gray-100 hover:border-gray-300'}`}
         onDragOver={onDragOver}
         onDrop={onDrop}
+        onContextMenu={onContextMenu}
       >
         {isValid && (
           <div className="absolute inset-0 flex items-center justify-center p-1 pointer-events-none">
@@ -156,7 +183,6 @@ export default function GridCell({
   const clsColors = getClassColors(classGroup?.id || slot.class_id, classColorMap)
   const colors = colorMode === 'class' ? clsColors : subjColors
   const hasConflict = conflicts.length > 0
-  const showPreAssignedBadge = isPreAssigned
   const isBlockedTarget = isDragTarget && dragTargetInfo?.valid === false
 
   return (
@@ -166,15 +192,16 @@ export default function GridCell({
       onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDrop={onDrop}
+      onContextMenu={onContextMenu}
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
-      className={`relative ${colors.bg} ${colors.border} border rounded-lg p-2 min-h-[80px] transition-all
+      className={`group relative ${colors.bg} ${colors.border} border rounded-lg p-2 min-h-[80px] transition-all
         ${isDraggable && !isPreAssigned ? 'cursor-grab hover:shadow-md' : 'cursor-default'}
         ${isDragTarget && !isBlockedTarget ? 'ring-2 ring-emerald-500 ring-offset-1' : ''}
         ${isBlockedTarget ? 'ring-2 ring-amber-500 ring-offset-1' : ''}
         ${hasConflict ? 'ring-2 ring-red-400' : ''}`}
     >
-      <div className={`text-base sm:text-lg font-bold leading-tight ${colors.text} truncate`}>
+      <div className={`text-base sm:text-lg font-bold leading-tight ${colors.text} truncate pr-6`}>
         {subject?.name || slot.subject_id}
         {hasConflict && <span className="ml-1 text-red-500">⚠</span>}
       </div>
@@ -185,11 +212,32 @@ export default function GridCell({
         {classGroup?.name || slot.class_id}
       </div>
 
-      {/* 📌 Pre-assigned badge */}
-      {showPreAssignedBadge && (
-        <span className="absolute top-1 right-1 inline-flex items-center text-[10px] font-semibold text-gray-700 bg-white/80 rounded-full px-1.5 py-0.5 leading-tight shadow-sm">
+      {/* ❌ Remove button (top-right) — visible on hover */}
+      {onRemoveSlot && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onRemoveSlot() }}
+          className="absolute top-1 right-1 w-5 h-5 rounded-full bg-white/80 text-gray-600
+            hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center
+            text-xs font-bold shadow-sm opacity-0 group-hover:opacity-100"
+          title="นำออกจากตาราง"
+        >
+          ✕
+        </button>
+      )}
+
+      {/* 📌 Pin toggle (bottom-right) */}
+      {onTogglePin && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onTogglePin() }}
+          className={`absolute bottom-1 right-1 w-5 h-5 rounded-full transition-colors
+            flex items-center justify-center text-xs shadow-sm
+            ${isPreAssigned
+              ? 'bg-green-500 text-white hover:bg-green-600'
+              : 'bg-white/80 text-gray-400 hover:bg-gray-200 hover:text-gray-700 opacity-0 group-hover:opacity-100'}`}
+          title={isPreAssigned ? 'ปลดล็อกหมุด' : 'ปักหมุด (ล็อกตำแหน่ง)'}
+        >
           📌
-        </span>
+        </button>
       )}
 
       {/* Blocked reason overlay during sidebar drag */}
@@ -208,7 +256,7 @@ export default function GridCell({
           <div>{subject?.name || slot.subject_id}</div>
           <div className="text-gray-300">{teacher?.name || slot.teacher_id}</div>
           <div className="text-gray-300">{classGroup?.name || slot.class_id}</div>
-          {showPreAssignedBadge && (
+          {isPreAssigned && (
             <div className="text-amber-300 mt-1">📌 วางด้วยมือ</div>
           )}
           {hasConflict && (

@@ -16,6 +16,7 @@ import { getSubjectColor } from '../../utils/subjectColors.js'
  *   filterClass    — current grid class filter (to scope sidebar)
  *   isOpen         — boolean: drawer visible or hidden
  *   onToggle       — () => void: toggle drawer open/closed
+ *   onDropFromGrid — (lessonBlockId, isPreAssigned, day, period) => void
  */
 export default function UnassignedSidebar({
   lessonBlocks = [],
@@ -29,9 +30,11 @@ export default function UnassignedSidebar({
   onToggle,
   onDragStartBlock,
   onDragEndBlock,
+  onDropFromGrid,
 }) {
   const [groupBy, setGroupBy] = useState('class') // 'class' | 'teacher'
   const [searchQuery, setSearchQuery] = useState('')
+  const [isGridDragOver, setIsGridDragOver] = useState(false)
 
   const subjectMap = useMemo(() => new Map(subjects.map((s) => [s.id, s])), [subjects])
   const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers])
@@ -101,6 +104,38 @@ export default function UnassignedSidebar({
     onDragEndBlock?.()
   }
 
+  // ── Grid → Drawer drop (unassign block) ──────────────────────────
+  function handleDrawerDragOver(e) {
+    // Only react to grid slot drags
+    if (e.dataTransfer.types.includes('application/x-grid-slot')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      setIsGridDragOver(true)
+    }
+  }
+
+  function handleDrawerDragLeave(e) {
+    // Only clear if leaving the drawer container (not entering a child)
+    if (e.currentTarget === e.target) {
+      setIsGridDragOver(false)
+    }
+  }
+
+  function handleDrawerDrop(e) {
+    const json = e.dataTransfer.getData('application/x-grid-slot')
+    if (!json) return
+    e.preventDefault()
+    setIsGridDragOver(false)
+    try {
+      const { lessonBlockId, day, period } = JSON.parse(json)
+      // Determine if it was a pre-assigned placement by checking userPlacements
+      const isPreAssigned = !!(userPlacements[lessonBlockId]?.some(
+        (p) => p.day === day && p.period === period,
+      ))
+      onDropFromGrid?.(lessonBlockId, isPreAssigned, day, period)
+    } catch { /* ignore parse errors */ }
+  }
+
   return (
     <>
       {/* Floating toggle button — always visible on the left edge */}
@@ -123,8 +158,12 @@ export default function UnassignedSidebar({
         className={`absolute top-0 left-0 bottom-0 z-30 transition-transform duration-300 ease-out
           ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
         style={{ width: '250px' }}
+        onDragOver={handleDrawerDragOver}
+        onDragLeave={handleDrawerDragLeave}
+        onDrop={handleDrawerDrop}
       >
-        <div className="h-full bg-white border-r border-gray-200 shadow-lg flex flex-col">
+        <div className={`h-full bg-white border-r shadow-lg flex flex-col transition-colors
+          ${isGridDragOver ? 'border-emerald-400 border-r-4 bg-emerald-50/50' : 'border-gray-200'}`}>
           {/* Header */}
           <div className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-100 shrink-0">
             <Package className="w-5 h-5 text-orange-600 shrink-0" />
@@ -140,6 +179,13 @@ export default function UnassignedSidebar({
               <X className="w-4 h-4" />
             </button>
           </div>
+
+          {/* Drop zone hint when dragging grid slot over drawer */}
+          {isGridDragOver && (
+            <div className="mx-3 mt-2 mb-1 px-3 py-2 rounded-lg bg-emerald-100 border border-emerald-300 text-emerald-700 text-xs font-semibold text-center">
+              วางที่นี่เพื่อนำวิชาออกจากตาราง
+            </div>
+          )}
 
           {/* Group toggle */}
           <div className="flex gap-1 px-3 pt-2 shrink-0">

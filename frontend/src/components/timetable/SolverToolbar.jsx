@@ -1,5 +1,119 @@
-import { useState } from 'react'
-import { Rocket, Zap, Target, Loader2, ChevronDown, SlidersHorizontal } from 'lucide-react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import {
+  Rocket,
+  Target,
+  Loader2,
+  ChevronDown,
+  SlidersHorizontal,
+  Check,
+  FolderOpen,
+  Save,
+  Trash2,
+  Upload,
+  Download,
+  Plus,
+  AlertCircle,
+  Clock,
+  Boxes,
+  AlertTriangle,
+  Gauge,
+  Calendar,
+  Users,
+  FileText,
+  Image as ImageIcon,
+  Table,
+} from 'lucide-react'
+import { SOLVER_PRESETS, getPreset } from '../../utils/scoreCalculator.js'
+import { formatSnapshotDate, generateLabel } from '../../utils/versionManager.js'
+import { runExport } from '../../utils/exportEngine.js'
+
+/**
+ * Solver status config for the compact badge.
+ */
+const STATUS_CONFIG = {
+  OPTIMAL: { dot: 'bg-green-500', text: 'text-green-700', label: 'OPTIMAL' },
+  FEASIBLE: { dot: 'bg-yellow-500', text: 'text-yellow-700', label: 'FEASIBLE' },
+  INFEASIBLE: { dot: 'bg-red-500', text: 'text-red-700', label: 'INFEASIBLE' },
+  UNKNOWN: { dot: 'bg-gray-400', text: 'text-gray-600', label: 'UNKNOWN' },
+}
+
+/**
+ * Compact inline metrics badge.
+ * Renders: `[ ⚡ 0.90s • OPTIMAL ]`
+ */
+function MetricsBadge({ metrics, onClick }) {
+  if (!metrics) return null
+  const cfg = STATUS_CONFIG[metrics.status] || STATUS_CONFIG.UNKNOWN
+  const secs = metrics.wall_time_seconds != null
+    ? `${metrics.wall_time_seconds.toFixed(2)}s`
+    : '—'
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium
+        bg-gray-50 border border-gray-200 hover:bg-gray-100 hover:border-gray-300
+        transition-colors"
+      title="ดูสถิติการคำนวณแบบเต็ม"
+    >
+      <span className="text-amber-500">⚡</span>
+      <span className="text-gray-600 tabular-nums">{secs}</span>
+      <span className="text-gray-300">•</span>
+      <span className={`flex items-center gap-1 font-semibold ${cfg.text}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
+        {cfg.label}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * Popover panel showing full technical metrics.
+ */
+function MetricsPopover({ metrics, onClose }) {
+  if (!metrics) return null
+  const cfg = STATUS_CONFIG[metrics.status] || STATUS_CONFIG.UNKNOWN
+  const rows = [
+    { icon: Clock, label: 'เวลาประมวลผล (Wall Time)', value: `${metrics.wall_time_seconds?.toFixed(3)}s` },
+    { icon: Boxes, label: 'จำนวนตัวแปร (Variables)', value: metrics.num_variables?.toLocaleString() },
+    { icon: Target, label: 'จำนวนข้อจำกัด (Constraints)', value: metrics.num_constraints?.toLocaleString() },
+    { icon: AlertTriangle, label: 'Hard Violations', value: metrics.hard_violations, danger: metrics.hard_violations > 0 },
+    { icon: AlertTriangle, label: 'Soft Violations', value: metrics.soft_violations, danger: metrics.soft_violations > 0 },
+  ]
+  if (metrics.objective_value !== undefined) {
+    rows.push({ icon: Gauge, label: 'Objective Value', value: metrics.objective_value?.toFixed(1) })
+  }
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="absolute left-0 top-full mt-1 z-50 w-72 bg-white rounded-xl shadow-xl
+        border border-gray-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+          <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+            สถิติการคำนวณ
+          </span>
+          <span className={`flex items-center gap-1 text-xs font-bold ${cfg.text}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
+            {cfg.label}
+          </span>
+        </div>
+        <div className="divide-y divide-gray-50">
+          {rows.map((row) => {
+            const Icon = row.icon
+            return (
+              <div key={row.label} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                <Icon className={`w-4 h-4 shrink-0 ${row.danger ? 'text-red-500' : 'text-gray-400'}`} />
+                <span className="text-gray-600 flex-1">{row.label}</span>
+                <span className={`font-bold tabular-nums ${row.danger ? 'text-red-600' : 'text-gray-900'}`}>
+                  {row.value}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </>
+  )
+}
 
 /**
  * Clear dropdown option helper.
@@ -24,58 +138,183 @@ function ClearOption({ icon, title, desc, disabled, danger, onClick }) {
 }
 
 /**
+ * Preset dropdown option row.
+ */
+function PresetOption({ preset, timeHint, isActive, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-start gap-3 px-4 py-3 text-left transition-colors border-t border-gray-100 first:border-t-0
+        ${isActive ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+    >
+      <span className="text-lg leading-none mt-0.5 shrink-0">{preset.icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className={`font-semibold text-sm ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>
+            {preset.name}
+          </span>
+          {isActive && <Check className="w-3.5 h-3.5 text-blue-600" />}
+        </div>
+        <div className="text-xs text-gray-500 mt-0.5">{preset.description}</div>
+        <div className="text-[11px] text-gray-400 mt-0.5">{timeHint}</div>
+      </div>
+    </button>
+  )
+}
+
+/**
  * Top Solver Toolbar — full-width horizontal panel placed below the Tab Selector
  * and above the three-panel layout (Drawer | Grid | MiniRail).
  *
- * Left side:  Optimization mode selector (segmented toggle) + Clear dropdown
- * Right side: Primary "generate remaining" action button (large, prominent)
+ * Left side:  Solver preset selector (dropdown) + Clear dropdown + Constraint info
+ *             + Version dropdown + Save buttons + Import/Export JSON
+ * Right side: Primary "generate remaining" action button
  *
  * Props:
- *   optimizationMode  — 'BALANCED' | 'FAST'
- *   onModeChange      — (mode) => void
- *   onGenerate        — () => void
- *   isGenerating      — boolean
- *   disabled          — boolean (e.g. when no fixture data)
- *   fixedCount        — int: number of 🔒 locked fixed slots
- *   preAssignedCount  — int: number of 📌 user-placed slots
- *   onClearManual     — () => void
- *   onClearSolver     — () => void
- *   onClearAll        — () => void
- *   onClearByTeacher  — (teacherId: string) => void
- *   teachers          — { id, name }[]
- *   hasResult         — boolean
- *   hasPlacements     — boolean
- *   className         — string (selected class/teacher name for confirmation)
- *   onOpenConstraints — () => void  (opens the constraints overview modal)
+ *   solverPreset          — 'fast' | 'balanced' | 'deep'
+ *   onPresetChange        — (presetId) => void
+ *   onGenerate            — () => void
+ *   isGenerating          — boolean
+ *   disabled              — boolean (e.g. when no fixture data)
+ *   fixedCount            — int: number of 🔒 locked fixed slots
+ *   preAssignedCount      — int: number of 📌 user-placed slots
+ *   onClearManual         — () => void
+ *   onClearSolver         — () => void
+ *   onClearAll            — () => void
+ *   onClearByTeacher      — (teacherId: string) => void
+ *   teachers              — { id, name }[]
+ *   hasResult             — boolean
+ *   hasPlacements         — boolean
+ *   className             — string (selected class/teacher name for confirmation)
+ *   onOpenConstraints     — () => void  (opens the constraints overview modal)
+ *   // ── Version / Save props ──
+ *   snapshots             — array of snapshot metadata
+ *   activeSnapshotId      — string | null
+ *   activeSnapshotLabel   — string | null
+ *   isSnapshotDirty       — boolean
+ *   lastSnapshotSaveAt    — number | null
+ *   onSaveSnapshot        — (label, opts?) => { ok, error? }
+ *   onLoadSnapshot        — (id) => { ok, error? }
+ *   onDeleteSnapshot      — (id) => boolean
+ *   onExportSnapshot      — (id?) => void
+ *   onImportSnapshot      — (file) => Promise<{ ok, error? }>
  */
 export default function SolverToolbar({
-  optimizationMode = 'BALANCED',
-  onModeChange,
+  solverPreset = 'balanced',
+  onPresetChange,
   onGenerate,
   isGenerating = false,
   disabled = false,
+  metrics = null,
   fixedCount = 0,
   preAssignedCount = 0,
   onClearManual,
   onClearSolver,
   onClearAll,
   onClearByTeacher,
+  onClearSolverOnly,
+  onClearByClass,
+  onPinAllSolver,
+  onUnpinAll,
   teachers = [],
+  classes = [],
   hasResult = false,
   hasPlacements = false,
   className: selectedClassName,
   onOpenConstraints,
+  // ── Version / Save props ──
+  snapshots = [],
+  activeSnapshotId = null,
+  activeSnapshotLabel = null,
+  isSnapshotDirty = false,
+  lastSnapshotSaveAt = null,
+  onSaveSnapshot,
+  onLoadSnapshot,
+  onDeleteSnapshot,
+  onExportSnapshot,
+  onImportSnapshot,
+  // ── Tab + Export props ──
+  activeTab = 'timetable',
+  onTabChange,
+  exportData = null,
 }) {
-  const [dropdownOpen, setDropdownOpen] = useState(false)
-  const [pendingAction, setPendingAction] = useState(null) // 'manual'|'solver'|'all'|'teacher'
+  const [presetDropdownOpen, setPresetDropdownOpen] = useState(false)
+  const [metricsPopoverOpen, setMetricsPopoverOpen] = useState(false)
+  const [clearDropdownOpen, setClearDropdownOpen] = useState(false)
+  const [pinDropdownOpen, setPinDropdownOpen] = useState(false)
+  const [pendingAction, setPendingAction] = useState(null) // 'manual'|'solver'|'all'|'teacher'|'class'
   const [showConfirm, setShowConfirm] = useState(false)
   const [selectedTeacherId, setSelectedTeacherId] = useState(null)
+  const [selectedClassId, setSelectedClassId] = useState(null)
+  // ── Version state ──
+  const [versionDropdownOpen, setVersionDropdownOpen] = useState(false)
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [saveLabel, setSaveLabel] = useState('')
+  const [toast, setToast] = useState(null)
+  // ── Export state ──
+  const [exportFormat, setExportFormat] = useState('pdf') // 'pdf' | 'png' | 'xlsx'
+  const [exportScope, setExportScope] = useState({ classes: true, teachers: false })
+  const [exporting, setExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState('')
+  const fileInputRef = useRef(null)
+
+  // Sync export scope defaults with active tab
+  useEffect(() => {
+    if (activeTab === 'teachers') {
+      setExportScope({ classes: false, teachers: true })
+    } else {
+      setExportScope({ classes: true, teachers: false })
+    }
+  }, [activeTab])
+
+  const showToast = useCallback((type, msg) => {
+    setToast({ type, msg })
+    setTimeout(() => setToast(null), 3000)
+  }, [])
+
+  // ── Unified export handler ───────────────────────────────────────
+  async function handleDownload() {
+    if (!exportData) {
+      showToast('err', 'ไม่มีข้อมูลที่จะส่งออก')
+      return
+    }
+    if (!exportScope.classes && !exportScope.teachers) {
+      showToast('err', 'กรุณาเลือกอย่างน้อย 1 ขอบเขต')
+      return
+    }
+    setExporting(true)
+    try {
+      const result = await runExport({
+        format: exportFormat,
+        scope: exportScope,
+        data: exportData,
+        onProgress: (msg) => setExportProgress(msg),
+      })
+      if (result.ok) {
+        const fmtLabel = exportFormat === 'pdf' ? 'PDF' : exportFormat === 'png' ? 'PNG' : 'Excel'
+        showToast('ok', `ส่งออก ${fmtLabel} สำเร็จ${result.count ? ` (${result.count} ตาราง)` : ''}`)
+      } else {
+        showToast('err', result.error || 'ส่งออกไม่สำเร็จ')
+      }
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        // User cancelled folder picker — silent
+      } else {
+        showToast('err', 'ส่งออกไม่สำเร็จ: ' + e.message)
+      }
+    }
+    setExporting(false)
+    setExportProgress('')
+  }
+
+  const currentPreset = getPreset(solverPreset)
 
   function openConfirm(action) {
     setPendingAction(action)
     if (action === 'teacher') setSelectedTeacherId(null)
+    if (action === 'class') setSelectedClassId(null)
     setShowConfirm(true)
-    setDropdownOpen(false)
+    setClearDropdownOpen(false)
   }
 
   function handleConfirm() {
@@ -83,15 +322,23 @@ export default function SolverToolbar({
     else if (pendingAction === 'solver') onClearSolver?.()
     else if (pendingAction === 'all') onClearAll?.()
     else if (pendingAction === 'teacher') onClearByTeacher?.(selectedTeacherId)
+    else if (pendingAction === 'class') onClearByClass?.(selectedClassId)
     setShowConfirm(false)
     setPendingAction(null)
     setSelectedTeacherId(null)
+    setSelectedClassId(null)
   }
 
   function handleCancel() {
     setShowConfirm(false)
     setPendingAction(null)
     setSelectedTeacherId(null)
+    setSelectedClassId(null)
+  }
+
+  function handlePresetSelect(presetId) {
+    setPresetDropdownOpen(false)
+    onPresetChange?.(presetId)
   }
 
   const confirmMessage =
@@ -101,153 +348,593 @@ export default function SolverToolbar({
     : pendingAction === 'teacher' && selectedTeacherId
       ? `ยืนยันการล้างวิชาทั้งหมดของ ${teachers.find((t) => t.id === selectedTeacherId)?.name}`
       : pendingAction === 'teacher' ? 'กรุณาเลือกครูผู้สอน'
-      : ''
+      : pendingAction === 'class' && selectedClassId
+        ? `ยืนยันการล้างวิชาทั้งหมดของ ${classes.find((c) => c.id === selectedClassId)?.name}`
+        : pendingAction === 'class' ? 'กรุณาเลือกห้องเรียน'
+        : ''
 
-  const confirmDisabled = pendingAction === 'teacher' && !selectedTeacherId
+  const confirmDisabled =
+    (pendingAction === 'teacher' && !selectedTeacherId) ||
+    (pendingAction === 'class' && !selectedClassId)
+
+  // Build time hint for each preset option in the dropdown
+  function presetTimeHint(preset) {
+    return `~${preset.timeLimit} วินาที`
+  }
+
+  // ── Version handlers ──────────────────────────────────────────────
+  function handleSaveNew() {
+    const label = saveLabel.trim() || generateLabel(snapshots.length)
+    const result = onSaveSnapshot?.(label)
+    if (result?.ok) {
+      showToast('ok', `บันทึก "${label}" แล้ว`)
+    } else {
+      showToast('err', result?.error || 'บันทึกไม่สำเร็จ')
+    }
+    setShowSaveDialog(false)
+    setSaveLabel('')
+  }
+
+  function handleSaveCurrent() {
+    if (!activeSnapshotId) {
+      setShowSaveDialog(true)
+      return
+    }
+    const result = onSaveSnapshot?.(activeSnapshotLabel, { updateExisting: true })
+    if (result?.ok) {
+      showToast('ok', 'บันทึกการเปลี่ยนแปลงแล้ว')
+    } else {
+      showToast('err', result?.error || 'บันทึกไม่สำเร็จ')
+    }
+  }
+
+  function handleLoadSnap(id) {
+    const result = onLoadSnapshot?.(id)
+    if (result?.ok) {
+      showToast('ok', 'โหลดเวอร์ชันแล้ว')
+    } else {
+      showToast('err', result?.error || 'โหลดไม่สำเร็จ')
+    }
+    setVersionDropdownOpen(false)
+  }
+
+  function handleDeleteSnap(id, label) {
+    if (!confirm(`ยืนยันการลบ "${label}"?`)) return
+    const ok = onDeleteSnapshot?.(id)
+    if (ok) {
+      showToast('ok', `ลบ "${label}" แล้ว`)
+    } else {
+      showToast('err', 'ลบไม่สำเร็จ')
+    }
+  }
+
+  function handleExport() {
+    onExportSnapshot?.(activeSnapshotId)
+    showToast('ok', 'ดาวน์โหลดไฟล์ .json แล้ว')
+  }
+
+  async function handleImportClick(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const result = await onImportSnapshot?.(file)
+    if (result?.ok) {
+      showToast('ok', `นำเข้า "${file.name}" แล้ว`)
+    } else {
+      showToast('err', result?.error || 'นำเข้าไม่สำเร็จ')
+    }
+    e.target.value = ''
+  }
+
+  const dirtyIndicator = isSnapshotDirty ? '●' : '✓'
+  const dirtyColor = isSnapshotDirty ? 'text-amber-500' : 'text-green-500'
+  const dirtyText = isSnapshotDirty
+    ? 'ยังไม่ได้บันทึก'
+    : lastSnapshotSaveAt
+      ? `บันทึกล่าสุด ${formatSnapshotDate(lastSnapshotSaveAt)}`
+      : 'พร้อมใช้งาน'
+
+  const constraintCount = fixedCount + preAssignedCount
+  const isTeacherTab = activeTab === 'teachers'
 
   return (
     <>
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-5 py-3">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
-          {/* ── Left: Optimization Mode Selector ─────────────────────── */}
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-gray-500 uppercase tracking-wide shrink-0">
-              โหมดการคำนวณ
-            </span>
-            <div className="inline-flex rounded-lg border border-gray-300 bg-gray-50 p-1">
-              <button
-                onClick={() => onModeChange?.('BALANCED')}
-                disabled={isGenerating}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all
-                  ${optimizationMode === 'BALANCED'
-                    ? 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-200'
-                    : 'text-gray-500 hover:text-gray-700'
-                  } ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <span className="text-base leading-none">
-                  {optimizationMode === 'BALANCED' ? '◉' : '○'}
-                </span>
-                <Target className="w-4 h-4" />
-                🎯 สมดุล (BALANCED)
-              </button>
-              <button
-                onClick={() => onModeChange?.('FAST')}
-                disabled={isGenerating}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all
-                  ${optimizationMode === 'FAST'
-                    ? 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-200'
-                    : 'text-gray-500 hover:text-gray-700'
-                  } ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <span className="text-base leading-none">
-                  {optimizationMode === 'FAST' ? '◉' : '○'}
-                </span>
-                <Zap className="w-4 h-4" />
-                ⚡ เร็ว (FAST)
-              </button>
-            </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
+        {/* ════════════════════════════════════════════════════════════════
+            Card 1: View & Status (มุมมองและสถานะ)
+        ════════════════════════════════════════════════════════════════ */}
+        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
+          flex flex-col justify-between min-h-[92px] gap-2">
+          {/* Row 1: Segmented Tab — full width grid-cols-2 */}
+          <div className="w-full grid grid-cols-2 rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-medium">
+            <button
+              onClick={() => onTabChange?.('timetable')}
+              className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-md transition-all
+                ${activeTab === 'timetable' ? 'bg-white text-blue-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-700'}`}
+              title="ดูตารางสอนแบบกริด"
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              ตารางสอน
+            </button>
+            <button
+              onClick={() => onTabChange?.('teachers')}
+              className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-md transition-all
+                ${activeTab === 'teachers' ? 'bg-white text-blue-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-700'}`}
+              title="ดูภาระงานครูผู้สอน"
+            >
+              <Users className="w-3.5 h-3.5" />
+              ภาระงานครู
+            </button>
           </div>
 
-          {/* ── Clear Dropdown ────────────────────────────────────────── */}
+          {/* Row 2: Status badge + Constraint badge */}
+          <div className="flex items-center justify-between gap-1 text-xs">
+            {metrics ? (
+              <div className="relative flex items-center">
+                <MetricsBadge
+                  metrics={metrics}
+                  onClick={() => setMetricsPopoverOpen(!metricsPopoverOpen)}
+                />
+                {metricsPopoverOpen && (
+                  <MetricsPopover
+                    metrics={metrics}
+                    onClose={() => setMetricsPopoverOpen(false)}
+                  />
+                )}
+              </div>
+            ) : (
+              <span className="text-xs text-gray-400 italic px-2 py-1.5">ยังไม่มีผลลัพธ์</span>
+            )}
+
+            <button
+              onClick={onOpenConstraints}
+              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold
+                text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 hover:border-gray-400
+                transition-colors shrink-0"
+              title="เงื่อนไข & ข้อจำกัดทั้งหมด"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              เงื่อนไข
+              {constraintCount > 0 && (
+                <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">
+                  {constraintCount}
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* ════════════════════════════════════════════════════════════════
+            Card 2: Snapshots & Persistence (จัดการไฟล์ร่าง)
+        ════════════════════════════════════════════════════════════════ */}
+        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
+          flex flex-col justify-between min-h-[92px] gap-2">
+          {/* Row 1: Version dropdown (full width) */}
           <div className="relative">
             <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-600
-                hover:bg-gray-100 rounded-lg transition-colors"
+              onClick={() => setVersionDropdownOpen(!versionDropdownOpen)}
+              className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg text-xs font-semibold
+                bg-white border border-gray-300 hover:border-gray-400 hover:bg-gray-50
+                transition-colors"
+              title={dirtyText}
             >
-              🗑️ ล้างตาราง
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
+              <FolderOpen className="w-4 h-4 text-blue-600 shrink-0" />
+              <span className="truncate flex-1 text-left">
+                {activeSnapshotLabel || '— ยังไม่ได้บันทึก —'}
+              </span>
+              <span className={`text-xs ${dirtyColor} shrink-0`}>
+                {dirtyIndicator}
+              </span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-gray-500 transition-transform shrink-0
+                  ${versionDropdownOpen ? 'rotate-180' : ''}`}
+              />
             </button>
 
-            {dropdownOpen && (
+            {versionDropdownOpen && (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
-                <div className="absolute right-0 top-full mt-1 z-50 w-80 bg-white rounded-xl shadow-xl
-                  border border-gray-200 overflow-hidden">
-                  <ClearOption
-                    icon="📌"
-                    title="ล้างเฉพาะวิชาที่วางด้วยมือ"
-                    desc="นำการ์ด 📌 กลับคลังวิชา โดยไม่ลบผลจัดอัตโนมัติ"
-                    disabled={!hasPlacements}
-                    onClick={() => openConfirm('manual')}
-                  />
-                  <ClearOption
-                    icon="🚀"
-                    title="ล้างเฉพาะวิชาที่ระบบจัดอัตโนมัติ"
-                    desc="คงการ์ด 📌 ไว้ ลบเฉพาะผล 🚀 จาก Solver"
-                    disabled={!hasResult}
-                    onClick={() => openConfirm('solver')}
-                  />
-                  <ClearOption
-                    icon="🔄"
-                    title="ล้างทั้งหมดกลับเป็นตารางเปล่า"
-                    desc="ลบทั้ง 📌 และ 🚀 คงไว้เฉพาะ 🔒 กิจกรรมล็อก"
-                    danger
-                    disabled={!hasResult && !hasPlacements}
-                    onClick={() => openConfirm('all')}
-                  />
-                  <ClearOption
-                    icon="👤"
-                    title="ล้างเฉพาะตารางของครู..."
-                    desc="เลือกครูเพื่อลบเฉพาะวิชาที่ครูท่านนั้นสอน"
-                    disabled={teachers.length === 0}
-                    onClick={() => openConfirm('teacher')}
-                  />
+                <div className="fixed inset-0 z-40" onClick={() => setVersionDropdownOpen(false)} />
+                <div className="absolute left-0 top-full mt-1 z-50 w-80 bg-white rounded-xl
+                  shadow-xl border border-gray-200 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+                        เวอร์ชันที่บันทึกไว้
+                      </span>
+                      <span className="text-xs text-gray-400">{snapshots.length} รายการ</span>
+                    </div>
+                  </div>
+
+                  <div className="max-h-72 overflow-y-auto">
+                    {snapshots.length === 0 ? (
+                      <div className="px-4 py-8 text-center text-sm text-gray-400">
+                        ยังไม่มีเวอร์ชันที่บันทึกไว้
+                        <br />
+                        กด "บันทึกใหม่" เพื่อเริ่ม
+                      </div>
+                    ) : (
+                      snapshots.map((snap) => (
+                        <div
+                          key={snap.id}
+                          className={`flex items-center gap-2 px-4 py-3 border-t border-gray-50
+                            first:border-t-0 transition-colors
+                            ${snap.id === activeSnapshotId ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                        >
+                          <button
+                            onClick={() => handleLoadSnap(snap.id)}
+                            className="flex-1 text-left min-w-0"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold text-gray-800 truncate">
+                                {snap.label}
+                              </span>
+                              {snap.id === activeSnapshotId && (
+                                <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              )}
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0
+                                ${snap.status === 'final'
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-amber-100 text-amber-700'}`}>
+                                {snap.status === 'final' ? 'สมบูรณ์' : 'ร่าง'}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              {formatSnapshotDate(snap.updatedAt)}
+                              {snap.solverPreset && ` · ${snap.solverPreset}`}
+                            </div>
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteSnap(snap.id, snap.label) }}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50
+                              transition-colors shrink-0"
+                            title="ลบเวอร์ชันนี้"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               </>
             )}
           </div>
 
-          {/* ── Center: Constraint context info ──────────────────────── */}
-          <div className="flex items-center gap-2 text-xs text-gray-500 ml-2 flex-wrap">
-            {(fixedCount > 0 || preAssignedCount > 0) && (
-              <span className="flex items-center gap-1.5">
-                ส่งเป็น Hard Constraints:
-                {fixedCount > 0 && (
-                  <span className="badge bg-gray-100 text-gray-600 border border-gray-300">
-                    🔒 {fixedCount} กิจกรรมล็อก
-                  </span>
-                )}
-                {preAssignedCount > 0 && (
-                  <span className="badge bg-amber-100 text-amber-700 border border-amber-300">
-                    📌 {preAssignedCount} ล็อกด้วยมือ
-                  </span>
-                )}
-              </span>
+          {/* Row 2: Save / Import / Export JSON */}
+          <div className="flex items-center gap-1.5 w-full text-xs">
+            {activeSnapshotId && (
+              <button
+                onClick={handleSaveCurrent}
+                disabled={!isSnapshotDirty}
+                className={`flex items-center justify-center px-2 py-1.5 rounded-lg text-xs font-bold
+                  transition-colors shrink-0
+                  ${isSnapshotDirty
+                    ? 'bg-green-600 text-white hover:bg-green-700'
+                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                title={isSnapshotDirty
+                  ? 'บันทึกทับเวอร์ชันปัจจุบัน'
+                  : 'ไม่มีการเปลี่ยนแปลงที่ต้องบันทึก'}
+              >
+                <Save className="w-3.5 h-3.5" />
+              </button>
             )}
-
             <button
-              onClick={onOpenConstraints}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
-                text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 hover:border-gray-400
-                transition-colors"
+              onClick={() => setShowSaveDialog(true)}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold
+                bg-blue-600 text-white hover:bg-blue-700 transition-colors flex-1 justify-center"
+              title="บันทึกเป็นเวอร์ชันใหม่"
             >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              เงื่อนไข & ข้อจำกัดทั้งหมด
+              <Plus className="w-3.5 h-3.5" />
+              บันทึกใหม่
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={handleImportClick}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium
+                text-gray-700 bg-white border border-gray-300 hover:bg-gray-50
+                transition-colors shrink-0"
+              title="นำเข้าไฟล์ .json (สำรอง/กู้คืน)"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              นำเข้า
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={!activeSnapshotId && !snapshots.length}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium
+                text-gray-700 bg-white border border-gray-300 hover:bg-gray-50
+                transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="ส่งออกไฟล์ .json (สำรองข้อมูล)"
+            >
+              <Download className="w-3.5 h-3.5" />
+              ส่งออก JSON
             </button>
           </div>
+        </div>
 
-          {/* ── Spacer ───────────────────────────────────────────────── */}
-          <div className="flex-1" />
+        {/* ════════════════════════════════════════════════════════════════
+            Card 3: AI Solver Engine (สั่งประมวลผล AI)
+        ════════════════════════════════════════════════════════════════ */}
+        <div className={`bg-white p-3 rounded-xl border border-gray-200 shadow-sm
+          grid grid-cols-2 gap-2 min-h-[92px]
+          ${isTeacherTab ? 'opacity-50 pointer-events-none' : ''}`}>
+          {/* ── Left column: Controls ── */}
+          <div className="flex flex-col gap-1.5 justify-between">
+            {/* Row 1: Solver Preset Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setPresetDropdownOpen(!presetDropdownOpen)}
+                disabled={isGenerating}
+                className={`flex items-center gap-1.5 w-full px-2.5 py-1.5 rounded-md text-xs font-medium border transition-all
+                  bg-white border-gray-300 hover:border-gray-400 hover:bg-gray-50
+                  ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                <span className="text-xs leading-none shrink-0" aria-hidden>
+                  {currentPreset.icon}
+                </span>
+                <span className="font-semibold text-gray-800 flex-1 text-left truncate text-xs">
+                  {currentPreset.shortName}
+                </span>
+                <span className="text-[10px] text-gray-500 shrink-0">
+                  (~{currentPreset.timeLimit}วิ)
+                </span>
+                <ChevronDown
+                  className={`w-3 h-3 text-gray-500 transition-transform shrink-0
+                    ${presetDropdownOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
 
-          {/* ── Right: Primary Action Button ─────────────────────────── */}
+              {presetDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setPresetDropdownOpen(false)}
+                  />
+                  <div className="absolute left-0 top-full mt-1 z-50 w-80 bg-white rounded-xl
+                    shadow-xl border border-gray-200 overflow-hidden">
+                    {Object.values(SOLVER_PRESETS).map((preset) => (
+                      <PresetOption
+                        key={preset.id}
+                        preset={preset}
+                        timeHint={presetTimeHint(preset)}
+                        isActive={preset.id === currentPreset.id}
+                        onClick={() => handlePresetSelect(preset.id)}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Row 2: Pin + Clear side by side */}
+            <div className="grid grid-cols-2 gap-1">
+              {/* Pin dropdown */}
+              <div className="relative">
+                <button
+                  onClick={() => setPinDropdownOpen(!pinDropdownOpen)}
+                  className="flex items-center justify-center gap-0.5 w-full px-1.5 py-1 text-xs font-medium text-gray-600
+                    bg-white border border-gray-300 hover:bg-gray-100 rounded-md transition-colors"
+                  title="ปักหมุด / ล็อกตำแหน่ง"
+                >
+                  📌
+                  <span className="truncate">ปักหมุด</span>
+                  <ChevronDown
+                    className={`w-2.5 h-2.5 transition-transform shrink-0
+                      ${pinDropdownOpen ? 'rotate-180' : ''}`}
+                  />
+                </button>
+
+                {pinDropdownOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setPinDropdownOpen(false)}
+                    />
+                    <div className="absolute left-0 top-full mt-1 z-50 w-72 bg-white rounded-xl shadow-xl
+                      border border-gray-200 overflow-hidden">
+                      <ClearOption
+                        icon="🤖"
+                        title="ล็อกเฉพาะที่ AI เพิ่งจัด"
+                        desc="ปักหมุดผลลัพธ์จาก Solver ทั้งหมด (Pin All AI)"
+                        disabled={!hasResult}
+                        onClick={() => { onPinAllSolver?.(); setPinDropdownOpen(false) }}
+                      />
+                      <ClearOption
+                        icon="🔓"
+                        title="ปลดล็อกหมุดทั้งหมด"
+                        desc="นำการ์ด 📌 ออกทั้งหมด คงผลจัดของ Solver ไว้"
+                        disabled={!hasPlacements}
+                        onClick={() => { onUnpinAll?.(); setPinDropdownOpen(false) }}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Clear dropdown */}
+              <div className="relative">
+                <button
+                  onClick={() => setClearDropdownOpen(!clearDropdownOpen)}
+                  className="flex items-center justify-center gap-0.5 w-full px-1.5 py-1 text-xs font-medium text-gray-600
+                    bg-white border border-gray-300 hover:bg-gray-100 rounded-md transition-colors"
+                  title="ล้างตาราง"
+                >
+                  🗑️
+                  <span className="truncate">ล้าง</span>
+                  <ChevronDown
+                    className={`w-2.5 h-2.5 transition-transform shrink-0
+                      ${clearDropdownOpen ? 'rotate-180' : ''}`}
+                  />
+                </button>
+
+                {clearDropdownOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setClearDropdownOpen(false)}
+                    />
+                    <div className="absolute left-0 top-full mt-1 z-50 w-72 bg-white rounded-xl shadow-xl
+                      border border-gray-200 overflow-hidden">
+                      <ClearOption
+                        icon="📌"
+                        title="ล้างเฉพาะวิชาที่วางด้วยมือ"
+                        desc="นำการ์ด 📌 กลับคลังวิชา โดยไม่ลบผลจัดอัตโนมัติ"
+                        disabled={!hasPlacements}
+                        onClick={() => openConfirm('manual')}
+                      />
+                      <ClearOption
+                        icon="🤖"
+                        title="ล้างเฉพาะที่ AI จัด (เก็บหมุดไว้)"
+                        desc="ลบเฉพาะผล 🚀 ที่ไม่ได้ปักหมุด คงการ์ด 📌 ไว้"
+                        disabled={!hasResult}
+                        onClick={() => { onClearSolverOnly?.(); setClearDropdownOpen(false) }}
+                      />
+                      <ClearOption
+                        icon="🚀"
+                        title="ล้างเฉพาะวิชาที่ระบบจัดอัตโนมัติ"
+                        desc="คงการ์ด 📌 ไว้ ลบเฉพาะผล 🚀 จาก Solver ทั้งหมด"
+                        disabled={!hasResult}
+                        onClick={() => openConfirm('solver')}
+                      />
+                      <ClearOption
+                        icon="🔄"
+                        title="ล้างทั้งหมดกลับเป็นตารางเปล่า"
+                        desc="ลบทั้ง 📌 และ 🚀 คงไว้เฉพาะ 🔒 กิจกรรมล็อก"
+                        danger
+                        disabled={!hasResult && !hasPlacements}
+                        onClick={() => openConfirm('all')}
+                      />
+                      <ClearOption
+                        icon="👤"
+                        title="ล้างเฉพาะตารางของครู..."
+                        desc="เลือกครูเพื่อลบเฉพาะวิชาที่ครูท่านนั้นสอน"
+                        disabled={teachers.length === 0}
+                        onClick={() => openConfirm('teacher')}
+                      />
+                      <ClearOption
+                        icon="🏫"
+                        title="ล้างเฉพาะตารางของห้อง..."
+                        desc="เลือกห้องเพื่อลบเฉพาะวิชาของห้องเรียนนั้น"
+                        disabled={classes.length === 0}
+                        onClick={() => openConfirm('class')}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* ── Right column: Primary Hero CTA ── */}
           <button
             onClick={onGenerate}
             disabled={isGenerating || disabled}
-            className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-xl font-bold text-base hover:bg-blue-700 transition-colors shadow-lg whitespace-nowrap shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="h-full min-h-[64px] flex flex-col md:flex-row items-center justify-center gap-1.5
+              bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-sm text-sm
+              disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {isGenerating ? (
               <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                กำลังจัดตาราง...
+                <Loader2 className="w-4 h-4 animate-spin" />
+                กำลังจัด...
               </>
             ) : (
               <>
-                <Rocket className="w-5 h-5" />
-                สั่งจัดตารางสอนส่วนที่เหลืออัตโนมัติ
+                <Rocket className="w-4 h-4" />
+                สั่งจัดอัตโนมัติ
               </>
             )}
           </button>
+        </div>
+
+        {/* ════════════════════════════════════════════════════════════════
+            Card 4: Unified Export & Publish (ส่งออกใช้งานจริง)
+        ════════════════════════════════════════════════════════════════ */}
+        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
+          flex flex-col justify-between min-h-[92px] gap-2">
+          {/* Row 1: Format selector — compact radio tabs */}
+          <div className="flex items-center gap-1 w-full text-xs">
+            {[
+              { id: 'pdf', label: 'PDF', icon: FileText, title: 'ส่งออกเป็น PDF (พิมพ์/แจก)' },
+              { id: 'png', label: 'PNG', icon: ImageIcon, title: 'ส่งออกเป็นภาพ PNG (ความละเอียดสูง)' },
+              { id: 'xlsx', label: 'Excel', icon: Table, title: 'ส่งออกเป็น Excel .xlsx (แก้ไขต่อ)' },
+            ].map((opt) => {
+              const Icon = opt.icon
+              const isActive = exportFormat === opt.id
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => setExportFormat(opt.id)}
+                  className={`flex items-center justify-center gap-1 flex-1 px-2 py-1.5 rounded-lg text-xs font-medium
+                    transition-colors border
+                    ${isActive
+                      ? 'bg-slate-800 text-white border-slate-800 font-semibold'
+                      : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300'}`}
+                  title={opt.title}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {opt.label}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Row 2: Scope checkboxes + Download button */}
+          <div className="flex items-center justify-between gap-2 text-xs">
+            {/* Checkboxes */}
+            <div className="flex items-center gap-2 min-w-0">
+              <label
+                className="flex items-center gap-1 cursor-pointer select-none whitespace-nowrap"
+                title="ส่งออกตารางของทุกห้องเรียน"
+              >
+                <input
+                  type="checkbox"
+                  checked={exportScope.classes}
+                  onChange={(e) => setExportScope((s) => ({ ...s, classes: e.target.checked }))}
+                  className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                />
+                <span className="text-gray-700">ทุกห้องเรียน</span>
+              </label>
+              <label
+                className="flex items-center gap-1 cursor-pointer select-none whitespace-nowrap"
+                title="ส่งออกตารางของครูทุกคน"
+              >
+                <input
+                  type="checkbox"
+                  checked={exportScope.teachers}
+                  onChange={(e) => setExportScope((s) => ({ ...s, teachers: e.target.checked }))}
+                  className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                />
+                <span className="text-gray-700">ครูทุกคน</span>
+              </label>
+            </div>
+
+            {/* Download button */}
+            <button
+              onClick={handleDownload}
+              disabled={exporting || (!exportScope.classes && !exportScope.teachers)}
+              className="flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-800 text-white
+                rounded-lg font-bold text-xs transition-colors shadow-sm flex-shrink-0
+                hover:bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={
+                exporting
+                  ? exportProgress || 'กำลังส่งออก...'
+                  : `ดาวน์โหลด ${exportFormat.toUpperCase()}${exportScope.classes && exportScope.teachers ? ' (ห้อง + ครู)' : exportScope.classes ? ' (ห้องเรียน)' : exportScope.teachers ? ' (ครู)' : ''}`
+              }
+            >
+              {exporting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              {exporting ? '...' : 'ดาวน์โหลด'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -276,6 +963,20 @@ export default function SolverToolbar({
               </select>
             )}
 
+            {pendingAction === 'class' && (
+              <select
+                value={selectedClassId || ''}
+                onChange={(e) => setSelectedClassId(e.target.value)}
+                className="w-full mt-3 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white
+                  focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="" disabled>-- เลือกห้อง --</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            )}
+
             <div className="flex gap-3 mt-5">
               <button
                 onClick={handleCancel}
@@ -294,6 +995,54 @@ export default function SolverToolbar({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Save New Snapshot Dialog ──────────────────────────────── */}
+      {showSaveDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowSaveDialog(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-bold text-gray-900 mb-3">บันทึกเวอร์ชันใหม่</h3>
+            <input
+              type="text"
+              value={saveLabel}
+              onChange={(e) => setSaveLabel(e.target.value)}
+              placeholder={generateLabel(snapshots.length)}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSaveNew() }}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg
+                focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+            <div className="flex gap-3 mt-5">
+              <button
+                onClick={() => setShowSaveDialog(false)}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 bg-gray-100
+                  hover:bg-gray-200 rounded-xl transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={handleSaveNew}
+                className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-blue-600
+                  hover:bg-blue-700 rounded-xl transition-colors"
+              >
+                บันทึก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Toast ─────────────────────────────────────────────────── */}
+      {toast && (
+        <div className={`fixed bottom-20 left-1/2 -translate-x-1/2 z-[110] px-4 py-2.5
+          rounded-xl shadow-lg text-sm font-medium flex items-center gap-2
+          ${toast.type === 'ok' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
+          {toast.type === 'ok'
+            ? <Check className="w-4 h-4" />
+            : <AlertCircle className="w-4 h-4" />}
+          {toast.msg}
         </div>
       )}
     </>

@@ -1,21 +1,24 @@
-import { ArrowLeft, Download, CheckCircle, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, CheckCircle, AlertTriangle } from 'lucide-react'
 
 /**
- * Standardized global sticky bottom footer for the timetable workspace.
+ * Simplified sticky bottom footer for the timetable workspace.
+ *
+ * Now contains only:
+ *   - Back button (left)
+ *   - Completion status badge (center): % placed / total
+ *
+ * Export buttons (PDF/PNG/Excel) have been moved into the 4-card toolbar
+ * (Card 4: Export & Publish) in SolverToolbar.jsx.
  *
  * Props:
  *   onBack          — () => void  (navigate to verification step)
  *   placedCount     — int: total periods placed (solver + user)
  *   totalCount      — int: total periods required across all lesson blocks
- *   onExport        — () => void  (placeholder for future export)
- *   exportDisabled  — boolean
  */
 export default function StickyFooter({
   onBack,
   placedCount = 0,
   totalCount = 0,
-  onExport,
-  exportDisabled = false,
 }) {
   const isComplete = totalCount > 0 && placedCount >= totalCount
   const remaining = Math.max(0, totalCount - placedCount)
@@ -61,18 +64,6 @@ export default function StickyFooter({
             <span className="text-amber-700">{pct}%</span>
           )}
         </div>
-
-        {/* Right: Export button (placeholder — coming soon) */}
-        <button
-          onClick={onExport}
-          disabled={exportDisabled}
-          className="flex items-center gap-2 px-4 py-2.5 bg-gray-400 text-white rounded-xl font-bold text-sm transition-colors shadow-md whitespace-nowrap shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-          title="ฟีเจอร์ส่งออกจะพร้อมใช้งานในอนาคต"
-        >
-          <Download className="w-4 h-4" />
-          <span className="hidden sm:inline">📥 ส่งออกไฟล์ Excel (เร็วๆ นี้)</span>
-          <span className="sm:hidden">📥</span>
-        </button>
       </div>
     </div>
   )

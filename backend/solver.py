@@ -741,13 +741,20 @@ class TimetableSolver:
                 self._penalty_terms.append((over, PENALTY))
 
     def _add_s2_cognitive_load_morning(self) -> None:
-        """S2: Prefer heavy subjects in morning periods (1-3)."""
+        """S2: Prefer heavy subjects in morning periods (1-3).
+
+        Penalty weight is mode-aware:
+          - BALANCED: 1 (light nudge, avoids starving last period)
+          - DEEP: 10 (stronger push toward morning for better pedagogical quality)
+        """
+        from models import OptimizationMode
+        is_deep = self.req.optimization_mode == OptimizationMode.DEEP
         morning_periods = {p for p in self.valid_periods if p <= 3}
         afternoon_periods = {p for p in self.valid_periods if p > 3}
         # Reduced from 3 to 1: still nudges heavy subjects toward morning,
         # but no longer strong enough to push everything into periods 1-3
         # and starve period 7 (the last period of the day).
-        PENALTY = 1
+        PENALTY = 10 if is_deep else 1
 
         for i, lb in enumerate(self.lb_list):
             subj = self.subject_by_id.get(lb.subject_id)
@@ -773,6 +780,78 @@ class TimetableSolver:
         """
         return
 
+    def _add_teacher_gap_penalty(self) -> None:
+        """DEEP-only: Penalize idle gaps in a teacher's daily schedule.
+
+        For each teacher, each day, count transitions between "teaching" and
+        "not teaching" among consecutive STUDY periods. Each transition
+        represents the start or end of an idle gap. Penalizing transitions
+        encourages the solver to cluster a teacher's periods together
+        (smoother daily schedule with fewer holes).
+
+        Penalty weight = 3 per transition.
+        """
+        from models import OptimizationMode
+        if self.req.optimization_mode != OptimizationMode.DEEP:
+            return
+
+        PENALTY = 3
+        teacher_lbs: dict[str, list[int]] = {}
+        for i, lb in enumerate(self.lb_list):
+            teacher_lbs.setdefault(lb.teacher_id, []).append(i)
+
+        for d in self.days:
+            day_periods = self._get_valid_periods_for_day(d)
+            if len(day_periods) < 2:
+                continue
+            sorted_periods = sorted(day_periods)
+            for teacher_id, lb_indices in teacher_lbs.items():
+                # Build "teacher is teaching at period p" indicator for each period
+                indicators: dict[int, list] = {}
+                for p in sorted_periods:
+                    active = []
+                    for i in lb_indices:
+                        if (i, d, p) in self.x:
+                            active.append(self.x[(i, d, p)])
+                        if (i, d, p) in self.pair:
+                            active.append(self.pair[(i, d, p)])
+                        if (i, d, p - 1) in self.pair:
+                            active.append(self.pair[(i, d, p - 1)])
+                    if active:
+                        indicators[p] = active
+
+                if len(indicators) < 2:
+                    continue
+
+                # For each consecutive pair of study periods, penalize
+                # transitions (teaching then not teaching, or vice versa).
+                for idx in range(len(sorted_periods) - 1):
+                    p1 = sorted_periods[idx]
+                    p2 = sorted_periods[idx + 1]
+                    ind1 = indicators.get(p1)
+                    ind2 = indicators.get(p2)
+                    # Skip if neither period has any teaching vars
+                    if not ind1 and not ind2:
+                        continue
+                    # teaches_p1 = 1 if teacher teaches at p1, else 0
+                    if ind1:
+                        teaches1 = self.model.NewBoolVar(f"tg1_{teacher_id}_{d}_{p1}")
+                        self.model.AddBoolOr(ind1 + [teaches1.Not()]).OnlyEnforceIf(teaches1)
+                        self.model.AddBoolAnd([v.Not() for v in ind1]).OnlyEnforceIf(teaches1.Not())
+                    else:
+                        teaches1 = self.model.NewConstant(0)
+                    if ind2:
+                        teaches2 = self.model.NewBoolVar(f"tg2_{teacher_id}_{d}_{p2}")
+                        self.model.AddBoolOr(ind2 + [teaches2.Not()]).OnlyEnforceIf(teaches2)
+                        self.model.AddBoolAnd([v.Not() for v in ind2]).OnlyEnforceIf(teaches2.Not())
+                    else:
+                        teaches2 = self.model.NewConstant(0)
+
+                    # transition = |teaches1 - teaches2|
+                    transition = self.model.NewBoolVar(f"tgt_{teacher_id}_{d}_{p1}_{p2}")
+                    self.model.AddAbsEquality(transition, teaches1 - teaches2)
+                    self._penalty_terms.append((transition, PENALTY))
+
     # ── Objective ──────────────────────────────────────────────────────────
 
     def _add_objective(self) -> None:
@@ -782,6 +861,7 @@ class TimetableSolver:
         self._add_s2_cognitive_load_morning()
         self._add_s3_max_consecutive_teaching()
         self._add_elastic_workload_balance()
+        self._add_teacher_gap_penalty()
 
         if self._penalty_terms:
             obj = sum(expr * weight for expr, weight in self._penalty_terms)
