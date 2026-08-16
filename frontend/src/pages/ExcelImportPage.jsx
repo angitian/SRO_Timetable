@@ -77,15 +77,18 @@ export default function ExcelImportPage() {
       }))
 
       // Build rooms matching lesson_blocks room_id pattern (R_{class_id})
-      const rooms = (data.classes || []).map((c) => ({
+      const classRooms = (data.classes || []).map((c) => ({
         id: `R_${c.id}`,
         name: `ห้อง ${c.name}`,
         room_type: 'classroom',
       }))
+      const specialRooms = data.special_rooms || []
+      const rooms = (data.rooms || []).length > 0 ? data.rooms : [...classRooms, ...specialRooms]
 
       const fixtureData = {
         teachers,
         rooms,
+        special_rooms: specialRooms,
         subjects: data.subjects || [],
         classes: data.classes || [],
         lesson_blocks: data.lesson_blocks || [],

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { Calendar, AlertTriangle, ArrowRight, Rocket, CheckCircle, XCircle } from 'lucide-react'
+import { Calendar, AlertTriangle, ArrowRight, Rocket, CheckCircle, XCircle, FlaskConical, Table, LayoutGrid, Search, X } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import TimetableGrid from '../components/grid/TimetableGrid.jsx'
 import TeacherLoadTable from '../components/load/TeacherLoadTable.jsx'
@@ -8,6 +8,7 @@ import UnassignedSidebar from '../components/timetable/UnassignedSidebar.jsx'
 import SolverToolbar from '../components/timetable/SolverToolbar.jsx'
 import StickyFooter from '../components/timetable/StickyFooter.jsx'
 import ConstraintsOverviewModal from '../components/modals/ConstraintsOverviewModal.jsx'
+import { FACILITY_TYPE_ICONS, FACILITY_TYPE_LABELS } from '../utils/roomTypes.js'
 export default function TimetableView() {
   const {
     result,
@@ -39,6 +40,8 @@ export default function TimetableView() {
     removePlacement,
     lockSlot,
     unlockSlot,
+    // Special rooms
+    changeSlotRoom,
     // Snapshot versioning
     snapshots,
     activeSnapshotId,
@@ -55,11 +58,15 @@ export default function TimetableView() {
   const [viewMode, setViewMode] = useState('class') // 'class' | 'teacher'
   const [selectedClassIndex, setSelectedClassIndex] = useState(0)
   const [selectedTeacherIndex, setSelectedTeacherIndex] = useState(0)
+  const [selectedFacilityIndex, setSelectedFacilityIndex] = useState(0)
+  const [facilityViewMode, setFacilityViewMode] = useState('grid') // 'grid' | 'table'
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [transitioning, setTransitioning] = useState(false)
   const [sidebarDragBlock, setSidebarDragBlock] = useState(null)
   const [showConstraintsModal, setShowConstraintsModal] = useState(false)
   const [completionToast, setCompletionToast] = useState(null)
+  const [railSearch, setRailSearch] = useState('')
+  const [facilitySearch, setFacilitySearch] = useState('')
   const gridAreaRef = useRef(null)
   const wheelCooldownRef = useRef(false)
   const wasGeneratingRef = useRef(false)
@@ -106,7 +113,7 @@ export default function TimetableView() {
     )
   }
 
-  const { teachers, classes, subjects, fixed_slots, schedule_config, lesson_blocks, schedule_blocks = [] } = fixtureData
+  const { teachers, classes, subjects, fixed_slots, schedule_config, lesson_blocks, schedule_blocks = [], special_rooms = [] } = fixtureData
   const resultSlots = result?.slots || []
 
   // ── Derive grid structure from actual schedule_blocks data ────────
@@ -114,37 +121,46 @@ export default function TimetableView() {
   // falls back to legacy schedule_config when blocks are missing/empty.
   const gridConfig = useMemo(() => {
     if (schedule_blocks && schedule_blocks.length > 0) {
-      const allPeriodNumbers = schedule_blocks.flatMap((blk) =>
-        (blk.periods || []).map((p) => p.period_no),
-      )
+      const allPeriods = schedule_blocks.flatMap((blk) => blk.periods || [])
+      const allPeriodNumbers = allPeriods.map((p) => p.period_no)
 
       // Guard: ถ้ามี blocks แต่ไม่มี periods ด้านในเลย ให้ fallback
       if (allPeriodNumbers.length > 0) {
         const maxPeriod = Math.max(...allPeriodNumbers)
 
         const lunchSet = new Set()
-        for (const blk of schedule_blocks) {
-          for (const p of (blk.periods || [])) {
-            if (p.type === 'LUNCH') lunchSet.add(p.period_no)
-          }
+        const breakSet = new Set()
+        for (const p of allPeriods) {
+          if (p.type === 'LUNCH') lunchSet.add(p.period_no)
+          else if (p.type === 'BREAK') breakSet.add(p.period_no)
         }
 
         const maxDays = Math.max(
           ...schedule_blocks.map((blk) => blk.days_per_week || 5),
         )
 
+        // periodList = sorted unique period_no (may include decimals like 3.5
+        // for inserted short breaks). Used by grid render to know which
+        // columns to draw and in what order.
+        const periodList = [...new Set(allPeriodNumbers)].sort((a, b) => a - b)
+
         return {
           periodsPerDay: maxPeriod,
+          periodList,
           lunchPeriods: [...lunchSet].sort((a, b) => a - b),
+          breakPeriods: [...breakSet].sort((a, b) => a - b),
           daysPerWeek: maxDays,
         }
       }
     }
 
     // Legacy Fallback (เมื่อไม่มี schedule_blocks หรือ periods)
+    const periodsPerDay = schedule_config?.periods_per_day || 7
     return {
-      periodsPerDay: schedule_config?.periods_per_day || 7,
+      periodsPerDay,
+      periodList: Array.from({ length: periodsPerDay }, (_, i) => i + 1),
       lunchPeriods: schedule_config?.lunch_periods || [4],
+      breakPeriods: [],
       daysPerWeek: schedule_config?.days_per_week || 5,
     }
   }, [schedule_blocks, schedule_config])
@@ -231,6 +247,44 @@ export default function TimetableView() {
   const afterOver = loadAfter.filter((l) => l.load_status === 'over').length
   const beforeUnder = loadBefore.filter((l) => l.load_status === 'under').length
   const afterUnder = loadAfter.filter((l) => l.load_status === 'under').length
+
+  // ── Facility (special room) data ──────────────────────────────────
+  const subjectMap = useMemo(() => new Map(subjects.map((s) => [s.id, s])), [subjects])
+  const classMap = useMemo(() => new Map(classes.map((c) => [c.id, c])), [classes])
+  const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers])
+
+  const selectedFacility = special_rooms[selectedFacilityIndex] || null
+
+  // Facility timetable: slots filtered by selected room
+  const facilityTimetableSlots = useMemo(() => {
+    if (!selectedFacility) return []
+    const dayNames = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัส', 'ศุกร์']
+    return resultSlots
+      .filter((s) => s.room_id === selectedFacility.id)
+      .map((s) => ({
+        ...s,
+        dayName: dayNames[(s.day || 1) - 1] || `วัน${s.day}`,
+        subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
+        className: classMap.get(s.class_id)?.name || s.class_id,
+        teacherName: teacherMap.get(s.teacher_id)?.name || s.teacher_id,
+      }))
+      .sort((a, b) => (a.day || 0) - (b.day || 0) || (a.period || 0) - (b.period || 0))
+  }, [selectedFacility, resultSlots, subjectMap, classMap, teacherMap])
+
+  // Facility grid: organize slots into day×period matrix
+  const facilityGrid = useMemo(() => {
+    if (!selectedFacility) return { days: [], periods: [], cells: {} }
+    const dayNames = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัส', 'ศุกร์']
+    const days = dayNames.slice(0, schedule_config?.days_per_week || 5)
+    const maxPeriod = schedule_config?.periods_per_day || 8
+    const periods = Array.from({ length: maxPeriod }, (_, i) => i + 1)
+    const cells = {}
+    for (const s of facilityTimetableSlots) {
+      const key = `${s.day}-${s.period}`
+      cells[key] = s
+    }
+    return { days, periods, cells }
+  }, [selectedFacility, facilityTimetableSlots, schedule_config])
 
   // ── Unassigned count for drawer auto-close ────────────────────────
   const unassignedCount = useMemo(() => {
@@ -401,12 +455,31 @@ export default function TimetableView() {
 
   function handleViewModeChange(mode) {
     setViewMode(mode)
+    setRailSearch('')
     setTransitioning(true)
     setTimeout(() => setTransitioning(false), 250)
   }
 
+  // ── Filtered rail lists (search) ───────────────────────────────────
+  const railQuery = railSearch.trim().toLowerCase()
+  const filteredRailItems = useMemo(() => {
+    const items = viewMode === 'class' ? classes : teachers
+    if (!railQuery) return items
+    return items.filter((it) => (it.name || '').toLowerCase().includes(railQuery))
+  }, [viewMode, classes, teachers, railQuery])
+
+  const facilityQuery = facilitySearch.trim().toLowerCase()
+  const filteredFacilityRooms = useMemo(() => {
+    if (!facilityQuery) return special_rooms
+    return special_rooms.filter((r) => (r.name || '').toLowerCase().includes(facilityQuery))
+  }, [special_rooms, facilityQuery])
+
+  function handleNavigatePrintStudio() {
+    setStep(6)
+  }
+
   return (
-    <div className="w-full space-y-4 pb-24">
+    <div className="w-full space-y-4 pb-4">
       {/* Dirty warning banner */}
       {isDirty && (
         <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 text-amber-800">
@@ -443,6 +516,10 @@ export default function TimetableView() {
         onClearByClass={handleClearByClass}
         onPinAllSolver={handlePinAllSolver}
         onUnpinAll={handleUnpinAll}
+        onPinByTeacher={handlePinByTeacher}
+        onPinByClass={handlePinByClass}
+        onUnpinByTeacher={handleUnpinByTeacher}
+        onUnpinByClass={handleUnpinByClass}
         teachers={teachers}
         classes={classes}
         hasResult={hasResult}
@@ -460,27 +537,17 @@ export default function TimetableView() {
         onDeleteSnapshot={deleteSnapshot}
         onExportSnapshot={exportSnapshot}
         onImportSnapshot={importSnapshot}
-        // Tab + Export props
+        // Tab + Print Studio props
         activeTab={activeTab}
         onTabChange={setActiveTab}
-        exportData={{
-          slots: resultSlots,
-          classes,
-          subjects,
-          teachers,
-          gridConfig,
-          userPlacements,
-          lessonBlocks: lesson_blocks,
-          fixedSlots: fixed_slots,
-          label: activeSnapshotLabel || (selectedClass?.name || 'ตารางสอน'),
-        }}
+        onNavigatePrintStudio={handleNavigatePrintStudio}
       />
 
       {/* Tab Content */}
       {activeTab === 'timetable' && (
         <div className="card p-0 overflow-hidden">
           {/* Three-panel layout: [Drawer (left) | Grid (center) | Mini Rail (right)] */}
-          <div className="flex" style={{ height: 'calc(100vh - 340px)', minHeight: '400px' }}>
+          <div className="flex" style={{ height: 'calc(100vh - 220px)', minHeight: '450px' }}>
             {/* 1. Left: collapsible unassigned drawer */}
             <div className={`relative shrink-0 transition-all duration-300 ease-out ${drawerOpen ? 'w-[250px]' : 'w-0'}`}>
               <UnassignedSidebar
@@ -512,7 +579,9 @@ export default function TimetableView() {
                   classes={classes}
                   days={gridConfig.daysPerWeek}
                   periodsPerDay={gridConfig.periodsPerDay}
+                  periodList={gridConfig.periodList}
                   lunchPeriods={gridConfig.lunchPeriods}
+                  breakPeriods={gridConfig.breakPeriods}
                   fixedSlots={fixed_slots}
                   userPlacements={userPlacements}
                   onDropFromSidebar={handleDropFromSidebar}
@@ -540,6 +609,10 @@ export default function TimetableView() {
                   onUnpinByTeacher={handleUnpinByTeacher}
                   onClearByClass={handleClearByClass}
                   onClearByTeacher={handleClearByTeacher}
+                  // Special rooms
+                  specialRooms={fixtureData?.special_rooms || []}
+                  onChangeSlotRoom={changeSlotRoom}
+                  onTabChange={setActiveTab}
                 />
               </div>
             </div>
@@ -551,9 +624,39 @@ export default function TimetableView() {
                 {viewMode === 'class' ? 'ห้องเรียน' : 'ครูผู้สอน'}
               </div>
 
+              {/* Search input */}
+              <div className="p-1.5 border-b border-gray-200 bg-white">
+                <div className="relative">
+                  <Search className="w-3 h-3 text-gray-400 absolute left-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={railSearch}
+                    onChange={(e) => setRailSearch(e.target.value)}
+                    placeholder="ค้นหา..."
+                    className="w-full pl-6 pr-5 py-1 text-[11px] rounded-md border border-gray-200
+                      focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400
+                      placeholder:text-gray-400 bg-white"
+                  />
+                  {railSearch && (
+                    <button
+                      onClick={() => setRailSearch('')}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      title="ล้างคำค้นหา"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Scrollable pill list */}
               <div className="flex-1 overflow-y-auto py-1 px-1.5 space-y-1">
-                {(viewMode === 'class' ? classes : teachers).map((item) => {
+                {filteredRailItems.length === 0 && (
+                  <div className="text-[10px] text-gray-400 text-center py-3 px-1">
+                    ไม่พบผลลัพธ์
+                  </div>
+                )}
+                {filteredRailItems.map((item) => {
                   const isActive = viewMode === 'class'
                     ? selectedClass?.id === item.id
                     : selectedTeacher?.id === item.id
@@ -667,6 +770,213 @@ export default function TimetableView() {
             <h2 className="font-bold text-gray-900 mb-4">รายละเอียดภาระงาน (หลังจัดตาราง)</h2>
             <TeacherLoadTable loads={loadAfter} />
           </div>
+        </div>
+      )}
+
+      {/* Facilities Tab — Lab room schedules */}
+      {activeTab === 'facilities' && (
+        <div className="card p-0 overflow-hidden">
+          {/* Back button */}
+          <div className="px-4 py-2 border-b border-gray-200 bg-gray-50">
+            <button
+              onClick={() => setActiveTab('timetable')}
+              className="flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-800"
+            >
+              ← กลับไปตารางสอน
+            </button>
+          </div>
+          {special_rooms.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <FlaskConical className="w-10 h-10 mx-auto mb-3" />
+              <p className="text-sm">ยังไม่มีห้องปฏิบัติการ — เพิ่มได้ในขั้นตอน "เตรียมข้อมูล"</p>
+            </div>
+          ) : resultSlots.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <Calendar className="w-10 h-10 mx-auto mb-3" />
+              <p className="text-sm">ยังไม่มีตารางสอน — กด "จัดตาราง" ก่อน</p>
+            </div>
+          ) : (
+            <div className="flex">
+              {/* Left: Grid or Table */}
+              <div className="flex-1 p-4">
+                {/* Header with toggle */}
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                    <FlaskConical className="w-5 h-5 text-indigo-600" />
+                    {selectedFacility ? (
+                      <>
+                        <span className="text-lg">{FACILITY_TYPE_ICONS[selectedFacility.room_type] || '🔬'}</span>
+                        {selectedFacility.name}
+                        {selectedFacility.room_type && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                            {FACILITY_TYPE_LABELS[selectedFacility.room_type] || selectedFacility.room_type}
+                          </span>
+                        )}
+                      </>
+                    ) : 'เลือกห้องปฏิบัติการ'}
+                  </h3>
+                  {/* Toggle Grid/Table */}
+                  <div className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs">
+                    <button
+                      onClick={() => setFacilityViewMode('grid')}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-all
+                        ${facilityViewMode === 'grid' ? 'bg-white text-indigo-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      กริด
+                    </button>
+                    <button
+                      onClick={() => setFacilityViewMode('table')}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-all
+                        ${facilityViewMode === 'table' ? 'bg-white text-indigo-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      <Table className="w-3.5 h-3.5" />
+                      ตาราง
+                    </button>
+                  </div>
+                </div>
+
+                {!selectedFacility ? (
+                  <div className="text-center py-12 text-gray-400 text-sm">
+                    เลือกห้องปฏิบัติการจากแถบด้านขวา
+                  </div>
+                ) : facilityTimetableSlots.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400 text-sm">
+                    ยังไม่มีคาบที่ใช้ห้องนี้ในตารางสอนปัจจุบัน
+                  </div>
+                ) : facilityViewMode === 'grid' ? (
+                  /* Grid view: day × period */
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full border-collapse text-xs">
+                      <thead>
+                        <tr>
+                          <th className="border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-500 font-medium w-16">วัน</th>
+                          {facilityGrid.periods.map((p) => (
+                            <th key={p} className="border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-500 font-medium w-28">
+                              คาบ {p}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {facilityGrid.days.map((dayName, dayIdx) => {
+                          const day = dayIdx + 1
+                          return (
+                            <tr key={day}>
+                              <td className="border border-gray-200 bg-gray-50 px-2 py-1.5 font-medium text-gray-700">
+                                {dayName}
+                              </td>
+                              {facilityGrid.periods.map((period) => {
+                                const cell = facilityGrid.cells[`${day}-${period}`]
+                                return (
+                                  <td key={period} className="border border-gray-200 px-1.5 py-1 align-top">
+                                    {cell ? (
+                                      <div className="bg-indigo-50 rounded p-1.5 border border-indigo-100">
+                                        <div className="font-semibold text-indigo-800 text-[11px] truncate">
+                                          {cell.subjectName}
+                                        </div>
+                                        <div className="text-gray-600 text-[10px] truncate">{cell.className}</div>
+                                        <div className="text-gray-500 text-[10px] truncate">{cell.teacherName}</div>
+                                      </div>
+                                    ) : (
+                                      <div className="text-gray-200 text-center">—</div>
+                                    )}
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  /* Table view: list */
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200 text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-xs font-bold text-gray-600">วัน</th>
+                          <th className="px-3 py-2 text-center text-xs font-bold text-gray-600">คาบที่</th>
+                          <th className="px-3 py-2 text-left text-xs font-bold text-gray-600">ชั้น</th>
+                          <th className="px-3 py-2 text-left text-xs font-bold text-gray-600">วิชา</th>
+                          <th className="px-3 py-2 text-left text-xs font-bold text-gray-600">ครู</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 bg-white">
+                        {facilityTimetableSlots.map((s, i) => (
+                          <tr key={i} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900">{s.dayName}</td>
+                            <td className="px-3 py-2 text-center text-gray-700">{s.period}</td>
+                            <td className="px-3 py-2 text-gray-700">{s.className}</td>
+                            <td className="px-3 py-2 text-gray-700">{s.subjectName}</td>
+                            <td className="px-3 py-2 text-gray-700">{s.teacherName}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Right: Mini rail with facility chips */}
+              <div className="w-[135px] shrink-0 border-l border-gray-200 bg-gray-50/50 flex flex-col">
+                <div className="text-[11px] font-semibold text-gray-400 px-2 py-1 uppercase border-b border-gray-200">
+                  ห้องปฏิบัติการ
+                </div>
+
+                {/* Search input */}
+                <div className="p-1.5 border-b border-gray-200 bg-white">
+                  <div className="relative">
+                    <Search className="w-3 h-3 text-gray-400 absolute left-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={facilitySearch}
+                      onChange={(e) => setFacilitySearch(e.target.value)}
+                      placeholder="ค้นหา..."
+                      className="w-full pl-6 pr-5 py-1 text-[11px] rounded-md border border-gray-200
+                        focus:outline-none focus:ring-1 focus:ring-indigo-400 focus:border-indigo-400
+                        placeholder:text-gray-400 bg-white"
+                    />
+                    {facilitySearch && (
+                      <button
+                        onClick={() => setFacilitySearch('')}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        title="ล้างคำค้นหา"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto py-1 px-1.5 space-y-1">
+                  {filteredFacilityRooms.length === 0 && (
+                    <div className="text-[10px] text-gray-400 text-center py-3 px-1">
+                      ไม่พบผลลัพธ์
+                    </div>
+                  )}
+                  {filteredFacilityRooms.map((room) => {
+                    const idx = special_rooms.findIndex((r) => r.id === room.id)
+                    const isActive = selectedFacilityIndex === idx
+                    const icon = FACILITY_TYPE_ICONS[room.room_type] || '🔬'
+                    return (
+                      <button
+                        key={room.id}
+                        onClick={() => setSelectedFacilityIndex(idx)}
+                        className={`w-full text-left px-2 py-1.5 rounded-lg text-[11px] font-medium
+                          transition-all truncate bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100
+                          ${isActive ? 'ring-2 ring-indigo-500 font-bold shadow-sm' : ''}`}
+                      >
+                        <span className="mr-0.5">{icon}</span>
+                        {room.name}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

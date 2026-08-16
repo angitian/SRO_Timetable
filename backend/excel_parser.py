@@ -8,6 +8,8 @@ import io
 import re
 from typing import Any
 
+from utils import make_row_getter, safe_extract_int
+
 try:
     from openpyxl import load_workbook
 except ImportError:
@@ -41,8 +43,21 @@ KNOWN_LABELS: dict[str, list[str]] = {
         "คาบคู่", "คู่", "double", "double period", "2 periods", "is_double",
     ],
     "room_name": [
-        "ห้องเรียนกายภาพ", "ห้องปฏิบัติการ", "สถานที่", "lab",
-        "room", "facility", "location", "room_name", "required_facility",
+        "ห้องเรียนกายภาพ", "room_name",
+    ],
+    "special_room": [
+        "ห้องพิเศษ", "ห้องปฏิบัติการ", "ห้องแล็บ", "ห้องlab", "ห้องวิทยาศาสตร์",
+        "ห้องคอมพิวเตอร์", "ห้องดนตรี", "ห้องประดิษฐ์", "ห้องทำงาน",
+        "สถานที่", "สถานที่เรียน", "สถานที่ใช้งาน",
+        "special room", "special_room", "lab", "facility", "required_room",
+        "required facility", "required_facility", "location", "room",
+        "physical room", "room_name",
+    ],
+    "lab_periods": [
+        "คาบแล็บ", "คาบปฏิบัติการ", "คาบแลป", "คาบที่ใช้ห้องปฏิบัติการ",
+        "คาบห้องแล็บ", "คาบห้องปฏิบัติการ", "จำนวนคาบแล็บ",
+        "lab periods", "lab_periods", "lab hours", "practical periods",
+        "lab_periods_per_week", "practical_hours",
     ],
 }
 
@@ -60,11 +75,13 @@ def _similarity(a: str, b: str) -> float:
         return 1.0
     if na in nb or nb in na:
         return 0.9
-    # Check partial match
-    shorter = min(na, nb, key=len)
-    longer = max(na, nb, key=len)
-    if len(shorter) >= 3 and shorter in longer:
-        return 0.8
+    # Check partial match (proper substring only — when lengths are equal,
+    # min/max both return the same value, so guard against self-substring)
+    if len(na) != len(nb):
+        shorter = min(na, nb, key=len)
+        longer = max(na, nb, key=len)
+        if len(shorter) >= 3 and shorter in longer:
+            return 0.8
     # Character overlap
     common = set(na) & set(nb)
     total = set(na) | set(nb)
@@ -76,12 +93,35 @@ def _similarity(a: str, b: str) -> float:
 def auto_map_columns(headers: list[str]) -> dict[str, str | None]:
     """Auto-detect which header maps to which field.
 
+    Uses a two-pass strategy to avoid greedy mis-assignment:
+      Pass 1: assign exact normalized matches (score == 1.0) first, so that
+              e.g. "Lab_Periods" → lab_periods and "Required_Facility" →
+              special_room are claimed before fuzzy substring matches.
+      Pass 2: for remaining unassigned fields, pick the best fuzzy match
+              (score >= 0.7) among the still-free headers.
+
     Returns: { field_name: header_text | None }
     """
     mapping: dict[str, str | None] = {}
     used_headers: set[str] = set()
 
+    # Pass 1: exact normalized matches first.
     for field, labels in KNOWN_LABELS.items():
+        for header in headers:
+            if header in used_headers:
+                continue
+            for label in labels:
+                if _normalize(header) == _normalize(label):
+                    mapping[field] = header
+                    used_headers.add(header)
+                    break
+            if mapping.get(field) is not None:
+                break
+
+    # Pass 2: fuzzy matches for the remaining fields.
+    for field, labels in KNOWN_LABELS.items():
+        if mapping.get(field) is not None:
+            continue
         best_score = 0.0
         best_header = None
 
@@ -101,6 +141,62 @@ def auto_map_columns(headers: list[str]) -> dict[str, str | None]:
             mapping[field] = None
 
     return mapping
+
+
+def _dedup_lesson_blocks(
+    lesson_blocks: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Merge lesson blocks that are true duplicates (same teacher+subject+class+room+double flag).
+
+    Two rows in the Excel file with identical (subject_id, teacher_id, class_id,
+    room_id, is_double_period) are treated as accidental duplicates and merged
+    by summing their periods_per_week. Lesson blocks with different room_id
+    (e.g. a normal classroom block vs. a lab block for the same subject) are
+    NOT merged — that is an intentional split.
+
+    Returns:
+        (deduped_blocks, merged_info)
+        merged_info: list of {key, count, total_periods} for each merged group,
+                     useful for surfacing a warning to the user.
+    """
+    groups: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for lb in lesson_blocks:
+        key = (
+            lb.get("subject_id"),
+            lb.get("teacher_id"),
+            lb.get("class_id"),
+            lb.get("room_id"),
+            bool(lb.get("is_double_period", False)),
+        )
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(lb)
+
+    deduped: list[dict] = []
+    merged_info: list[dict] = []
+    for key in order:
+        entries = groups[key]
+        if len(entries) == 1:
+            deduped.append(entries[0])
+            continue
+        # Merge: keep the first block's id, sum periods_per_week
+        merged = {**entries[0]}
+        total_periods = sum(e.get("periods_per_week", 0) for e in entries)
+        merged["periods_per_week"] = total_periods
+        deduped.append(merged)
+        merged_info.append({
+            "subject_id": key[0],
+            "teacher_id": key[1],
+            "class_id": key[2],
+            "room_id": key[3],
+            "is_double_period": key[4],
+            "count": len(entries),
+            "total_periods": total_periods,
+        })
+
+    return deduped, merged_info
 
 
 def parse_excel(file_bytes: bytes) -> dict[str, Any]:
@@ -171,27 +267,24 @@ def import_with_mapping(
     teachers_map: dict[str, dict] = {}
     subjects_map: dict[str, dict] = {}
     classes_map: dict[str, dict] = {}
+    special_rooms_map: dict[str, dict] = {}  # name → {id, name, room_type}
     lesson_blocks: list[dict] = []
     lb_counter = 0
+
+    get_val = make_row_getter(mapping, header_idx)
 
     for row in rows[1:]:
         if all(c is None or str(c).strip() == "" for c in row):
             continue
 
-        def get_val(field):
-            header = mapping.get(field)
-            if not header or header not in header_idx:
-                return ""
-            idx = header_idx[header]
-            val = row[idx] if idx < len(row) else None
-            return str(val).strip() if val is not None else ""
-
-        teacher_name = get_val("teacher_name")
-        subject_name = get_val("subject")
-        class_name = get_val("class_name")
-        ppw_str = get_val("periods_per_week")
-        is_double_str = get_val("is_double")
-        room_name = get_val("room_name")
+        teacher_name = get_val(row, "teacher_name")
+        subject_name = get_val(row, "subject")
+        class_name = get_val(row, "class_name")
+        ppw_str = get_val(row, "periods_per_week")
+        is_double_str = get_val(row, "is_double")
+        room_name = get_val(row, "room_name")
+        special_room_name = get_val(row, "special_room")
+        lab_periods_str = get_val(row, "lab_periods")
 
         if not teacher_name or not subject_name or not class_name:
             continue
@@ -224,39 +317,99 @@ def import_with_mapping(
                 grade = base if "ป" in class_name else base + 6
             classes_map[class_name] = {"id": cid, "name": class_name, "grade_level": grade}
 
+        # Deduplicate special rooms (facilities)
+        # Use special_room_name if present, fall back to room_name (legacy column)
+        facility_name = special_room_name or room_name
+        if facility_name and facility_name not in special_rooms_map:
+            srid = f"SR_{len(special_rooms_map) + 1}"
+            special_rooms_map[facility_name] = {
+                "id": srid,
+                "name": facility_name,
+                "room_type": "lab",
+            }
+
         # Parse periods_per_week
-        try:
-            ppw = int(re.search(r"\d+", ppw_str).group()) if ppw_str else 1
-        except (AttributeError, ValueError):
-            ppw = 1
+        ppw = safe_extract_int(ppw_str, default=1)
 
         is_double = is_double_str.lower() in ("true", "1", "yes", "คู่", "double", "x")
 
-        lb_counter += 1
+        # Parse lab_periods (optional)
+        lab_periods = safe_extract_int(lab_periods_str, default=0)
+
         class_id = classes_map[class_name]["id"]
-        lesson_blocks.append({
-            "id": f"LB{lb_counter}",
-            "subject_id": subjects_map[subject_name]["id"],
-            "teacher_id": teachers_map[teacher_name]["id"],
-            "class_id": class_id,
-            "room_id": f"R_{class_id}",
-            "periods_per_week": ppw,
-            "is_double_period": is_double,
-            "is_fixed": False,
-            "fixed_day": None,
-            "fixed_period": None,
-        })
+        sid = subjects_map[subject_name]["id"]
+        tid = teachers_map[teacher_name]["id"]
+
+        # Auto-split if lab_periods specified and < total periods
+        has_lab = lab_periods > 0 and facility_name and lab_periods < ppw
+
+        if has_lab:
+            normal_periods = ppw - lab_periods
+            lab_room_id = special_rooms_map[facility_name]["id"]
+
+            lb_counter += 1
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": f"R_{class_id}",
+                "periods_per_week": normal_periods,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+            })
+
+            lb_counter += 1
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": lab_room_id,
+                "periods_per_week": lab_periods,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+                "special_room_name": facility_name,
+            })
+        else:
+            lb_counter += 1
+            room_id = special_rooms_map[facility_name]["id"] if facility_name else f"R_{class_id}"
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": room_id,
+                "periods_per_week": ppw,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+                "special_room_name": facility_name or None,
+            })
+
+    deduped_blocks, merged_info = _dedup_lesson_blocks(lesson_blocks)
 
     return {
         "teachers": list(teachers_map.values()),
         "subjects": list(subjects_map.values()),
         "classes": list(classes_map.values()),
-        "lesson_blocks": lesson_blocks,
+        "special_rooms": list(special_rooms_map.values()),
+        "lesson_blocks": deduped_blocks,
+        "warnings": (
+            [{"type": "merged_duplicates", "merged": merged_info}]
+            if merged_info else []
+        ),
         "summary": {
             "teachers": len(teachers_map),
             "subjects": len(subjects_map),
             "classes": len(classes_map),
-            "lesson_blocks": len(lesson_blocks),
+            "lesson_blocks": len(deduped_blocks),
+            "special_rooms": len(special_rooms_map),
         },
     }
 
@@ -322,6 +475,41 @@ def _find_sheet(wb, aliases: list[str]) -> Any:
     return None
 
 
+# Thai day name → 1-indexed day number (1=Monday … 5=Friday, 7=Sunday)
+_THAI_DAY_MAP = {
+    "จันทร์": 1, "จันทร": 1, "อังคาร": 2, "อังคาร": 2,
+    "พุธ": 3, "พุธ": 3, "พฤหัส": 4, "พฤหัสบดี": 4, "พฤ": 4,
+    "ศุกร์": 5, "ศุกร": 5, "เสาร์": 6, "เสาร": 6,
+    "อาทิตย์": 7, "อาทิตย": 7,
+}
+# English day names (lowercase)
+_EN_DAY_MAP = {
+    "monday": 1, "mon": 1, "tuesday": 2, "tue": 2, "wednesday": 3, "wed": 3,
+    "thursday": 4, "thu": 4, "friday": 5, "fri": 5, "saturday": 6, "sat": 6,
+    "sunday": 7, "sun": 7,
+}
+
+
+def _parse_day(raw: str, default: int = 1) -> int:
+    """Parse a day value that may be a number or a Thai/English day name."""
+    if not raw:
+        return default
+    raw = str(raw).strip()
+    # Try integer first
+    n = safe_extract_int(raw, default=-1)
+    if n >= 1:
+        return n
+    # Try Thai day name
+    raw_lower = raw.lower()
+    for name, num in _THAI_DAY_MAP.items():
+        if raw == name or raw.startswith(name):
+            return num
+    for name, num in _EN_DAY_MAP.items():
+        if raw_lower == name or raw_lower.startswith(name):
+            return num
+    return default
+
+
 def _parse_sheet(ws) -> tuple[list[str], list[list[str]]]:
     """Extract headers and data rows from a worksheet."""
     if ws is None:
@@ -356,7 +544,12 @@ def _parse_unavailable_slots(raw: str) -> list[str]:
 
 
 def _parse_class_ids(raw: str, classes_map: dict[str, dict]) -> list[str]:
-    """Parse comma-separated class names or IDs → list of class IDs."""
+    """Parse comma-separated class names or IDs → list of class IDs.
+
+    'ทุกห้อง' (all classes) or 'all' → empty list (meaning: applies to all).
+    Unknown strings that aren't in classes_map are dropped (not appended as-is)
+    to avoid sending invalid class IDs to the solver.
+    """
     if not raw:
         return []
     result = []
@@ -364,10 +557,15 @@ def _parse_class_ids(raw: str, classes_map: dict[str, dict]) -> list[str]:
         part = part.strip()
         if not part:
             continue
+        # 'ทุกห้อง' / 'all' / 'every' → empty list (applies to all classes)
+        if part in ("ทุกห้อง", "all", "every", "ทุกห้องเรียน"):
+            return []
         if part in classes_map:
             result.append(classes_map[part]["id"])
         else:
-            result.append(part)
+            # Unknown class name — drop it instead of appending the raw string
+            # (which would be an invalid class ID for the solver)
+            continue
     return result
 
 
@@ -401,23 +599,21 @@ def import_multi_sheet(
     teachers_map: dict[str, dict] = {}
     subjects_map: dict[str, dict] = {}
     classes_map: dict[str, dict] = {}
+    special_rooms_map: dict[str, dict] = {}  # name → {id, name, room_type}
     lesson_blocks: list[dict] = []
     lb_counter = 0
 
-    for row in data_rows:
-        def get_val(field):
-            header = mapping.get(field)
-            if not header or header not in header_idx:
-                return ""
-            idx = header_idx[header]
-            val = row[idx] if idx < len(row) else None
-            return str(val).strip() if val is not None else ""
+    get_val = make_row_getter(mapping, header_idx)
 
-        teacher_name = get_val("teacher_name")
-        subject_name = get_val("subject")
-        class_name = get_val("class_name")
-        ppw_str = get_val("periods_per_week")
-        is_double_str = get_val("is_double")
+    for row in data_rows:
+        teacher_name = get_val(row, "teacher_name")
+        subject_name = get_val(row, "subject")
+        class_name = get_val(row, "class_name")
+        ppw_str = get_val(row, "periods_per_week")
+        is_double_str = get_val(row, "is_double")
+        room_name = get_val(row, "room_name")
+        special_room_name = get_val(row, "special_room")
+        lab_periods_str = get_val(row, "lab_periods")
 
         if not teacher_name or not subject_name or not class_name:
             continue
@@ -446,6 +642,16 @@ def import_multi_sheet(
                 grade = base if "ป" in class_name else base + 6
             classes_map[class_name] = {"id": cid, "name": class_name, "grade_level": grade}
 
+        # Deduplicate special rooms (facilities)
+        facility_name = special_room_name or room_name
+        if facility_name and facility_name not in special_rooms_map:
+            srid = f"SR_{len(special_rooms_map) + 1}"
+            special_rooms_map[facility_name] = {
+                "id": srid,
+                "name": facility_name,
+                "room_type": "lab",
+            }
+
         try:
             ppw = int(re.search(r"\d+", ppw_str).group()) if ppw_str else 1
         except (AttributeError, ValueError):
@@ -453,20 +659,64 @@ def import_multi_sheet(
 
         is_double = is_double_str.lower() in ("true", "1", "yes", "คู่", "double", "x")
 
-        lb_counter += 1
+        # Parse lab_periods (optional)
+        lab_periods = safe_extract_int(lab_periods_str, default=0)
+
         class_id = classes_map[class_name]["id"]
-        lesson_blocks.append({
-            "id": f"LB{lb_counter}",
-            "subject_id": subjects_map[subject_name]["id"],
-            "teacher_id": teachers_map[teacher_name]["id"],
-            "class_id": class_id,
-            "room_id": f"R_{class_id}",
-            "periods_per_week": ppw,
-            "is_double_period": is_double,
-            "is_fixed": False,
-            "fixed_day": None,
-            "fixed_period": None,
-        })
+        sid = subjects_map[subject_name]["id"]
+        tid = teachers_map[teacher_name]["id"]
+
+        # Auto-split if lab_periods specified and < total periods
+        has_lab = lab_periods > 0 and facility_name and lab_periods < ppw
+
+        if has_lab:
+            normal_periods = ppw - lab_periods
+            lab_room_id = special_rooms_map[facility_name]["id"]
+
+            lb_counter += 1
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": f"R_{class_id}",
+                "periods_per_week": normal_periods,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+            })
+
+            lb_counter += 1
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": lab_room_id,
+                "periods_per_week": lab_periods,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+                "special_room_name": facility_name,
+            })
+        else:
+            lb_counter += 1
+            room_id = special_rooms_map[facility_name]["id"] if facility_name else f"R_{class_id}"
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": room_id,
+                "periods_per_week": ppw,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+                "special_room_name": facility_name or None,
+            })
 
     # ── Sheet 2: Teacher_Constraints (optional) ──────────────────────────
     ws_constraints = _find_sheet(wb, _SHEET_ALIASES["teacher_constraints"])
@@ -505,17 +755,11 @@ def import_multi_sheet(
 
             max_str = c_get_val("max_periods_per_week")
             if max_str:
-                try:
-                    teacher["max_periods_per_week"] = int(re.search(r"\d+", max_str).group())
-                except (AttributeError, ValueError):
-                    pass
+                teacher["max_periods_per_week"] = safe_extract_int(max_str, default=30)
 
             min_str = c_get_val("min_periods_per_week")
             if min_str:
-                try:
-                    teacher["min_periods_per_week"] = int(re.search(r"\d+", min_str).group())
-                except (AttributeError, ValueError):
-                    pass
+                teacher["min_periods_per_week"] = safe_extract_int(min_str, default=0)
 
             unavail = c_get_val("unavailable_slots")
             if unavail:
@@ -570,14 +814,8 @@ def import_multi_sheet(
             class_ids_raw = f_get_val("class_ids")
             slot_type_raw = f_get_val("slot_type")
 
-            try:
-                day = int(re.search(r"\d+", day_str).group()) if day_str else 1
-            except (AttributeError, ValueError):
-                day = 1
-            try:
-                period = int(re.search(r"\d+", period_str).group()) if period_str else 1
-            except (AttributeError, ValueError):
-                period = 1
+            day = _parse_day(day_str, default=1)
+            period = safe_extract_int(period_str, default=1)
 
             slot_type = "activity"
             if slot_type_raw:
@@ -611,32 +849,43 @@ def import_multi_sheet(
         {"id": f"R_{c['id']}", "name": f"ห้อง {c['name']}", "room_type": "classroom"}
         for c in classes_map.values()
     ]
+    # Add special rooms to the rooms list (so solver sees them)
+    special_rooms_list = list(special_rooms_map.values())
+    rooms.extend(special_rooms_list)
+
+    deduped_blocks, merged_info = _dedup_lesson_blocks(lesson_blocks)
 
     return {
         "teachers": list(teachers_map.values()),
         "subjects": list(subjects_map.values()),
         "classes": list(classes_map.values()),
         "rooms": rooms,
-        "lesson_blocks": lesson_blocks,
+        "special_rooms": special_rooms_list,
+        "lesson_blocks": deduped_blocks,
         "fixed_slots": fixed_slots,
+        "warnings": (
+            [{"type": "merged_duplicates", "merged": merged_info}]
+            if merged_info else []
+        ),
         "summary": {
             "teachers": len(teachers_map),
             "subjects": len(subjects_map),
             "classes": len(classes_map),
-            "lesson_blocks": len(lesson_blocks),
+            "lesson_blocks": len(deduped_blocks),
             "fixed_slots": len(fixed_slots),
+            "special_rooms": len(special_rooms_list),
         },
     }
 
 
 # ── Minimum Template: Generation & Import ───────────────────────────────────
 
-MIN_TEMPLATE_HEADERS = ["ชื่อครู", "วิชา", "ห้องเรียน", "คาบ/สัปดาห์", "คาบคู่ (ใช่/ไม่ใช่)"]
+MIN_TEMPLATE_HEADERS = ["ชื่อครู", "วิชา", "ห้องเรียน", "คาบ/สัปดาห์", "คาบคู่ (ใช่/ไม่ใช่)", "ห้องปฏิบัติการ", "คาบแล็บ"]
 
 MIN_TEMPLATE_EXAMPLES = [
-    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/1", "5", "ไม่ใช่"],
-    ["อ.สมหญิง รักเรียน", "ภาษาไทย", "ป.1/1", "5", "ไม่ใช่"],
-    ["อ.วิชัย สอนเก่ง", "วิทยาศาสตร์", "ป.1/2", "4", "ใช่"],
+    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/1", "5", "ไม่ใช่", "", ""],
+    ["อ.สมหญิง รักเรียน", "ภาษาไทย", "ป.1/1", "5", "ไม่ใช่", "", ""],
+    ["อ.วิชัย สอนเก่ง", "วิทยาศาสตร์", "ป.1/2", "5", "ไม่ใช่", "ห้องวิทยาศาสตร์", "2"],
 ]
 
 
@@ -700,7 +949,7 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
 
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
-        return {"teachers": [], "subjects": [], "classes": [], "rooms": [], "lesson_blocks": [], "summary": {}}
+        return {"teachers": [], "subjects": [], "classes": [], "rooms": [], "special_rooms": [], "lesson_blocks": [], "summary": {}}
 
     headers = [str(c).strip() if c is not None else "" for c in rows[0]]
     header_idx = {h: i for i, h in enumerate(headers)}
@@ -711,10 +960,13 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
     class_col = _find_header_idx(header_idx, KNOWN_LABELS["class_name"])
     ppw_col = _find_header_idx(header_idx, KNOWN_LABELS["periods_per_week"])
     double_col = _find_header_idx(header_idx, KNOWN_LABELS["is_double"])
+    special_room_col = _find_header_idx(header_idx, KNOWN_LABELS["special_room"])
+    lab_periods_col = _find_header_idx(header_idx, KNOWN_LABELS["lab_periods"])
 
     teachers_map: dict[str, dict] = {}
     subjects_map: dict[str, dict] = {}
     classes_map: dict[str, dict] = {}
+    special_rooms_map: dict[str, dict] = {}
     lesson_blocks: list[dict] = []
     lb_counter = 0
     teacher_only_count = 0
@@ -734,6 +986,8 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
         class_name = get_val(class_col)
         ppw_str = get_val(ppw_col)
         is_double_str = get_val(double_col)
+        special_room_name = get_val(special_room_col)
+        lab_periods_str = get_val(lab_periods_col)
 
         if not teacher_name:
             continue
@@ -764,6 +1018,15 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
             grade = _extract_grade_level(class_name)
             classes_map[class_name] = {"id": cid, "name": class_name, "grade_level": grade}
 
+        # Deduplicate special rooms (facilities)
+        if special_room_name and special_room_name not in special_rooms_map:
+            srid = f"SR_{len(special_rooms_map) + 1}"
+            special_rooms_map[special_room_name] = {
+                "id": srid,
+                "name": special_room_name,
+                "room_type": "lab",
+            }
+
         try:
             ppw = int(re.search(r"\d+", ppw_str).group()) if ppw_str else 1
         except (AttributeError, ValueError):
@@ -771,38 +1034,96 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
 
         is_double = is_double_str.lower() in ("true", "1", "yes", "คู่", "double", "x", "ใช่")
 
-        lb_counter += 1
+        # Parse lab_periods (optional)
+        lab_periods = safe_extract_int(lab_periods_str, default=0)
+
         class_id = classes_map[class_name]["id"]
-        lesson_blocks.append({
-            "id": f"LB{lb_counter}",
-            "subject_id": subjects_map[subject_name]["id"],
-            "teacher_id": teachers_map[teacher_name]["id"],
-            "class_id": class_id,
-            "room_id": f"R_{class_id}",
-            "periods_per_week": ppw,
-            "is_double_period": is_double,
-            "is_fixed": False,
-            "fixed_day": None,
-            "fixed_period": None,
-        })
+        sid = subjects_map[subject_name]["id"]
+        tid = teachers_map[teacher_name]["id"]
+
+        # Determine if we should auto-split into normal + lab blocks
+        has_lab = lab_periods > 0 and special_room_name and lab_periods < ppw
+
+        if has_lab:
+            # Auto-split: Block A (normal classroom) + Block B (lab)
+            normal_periods = ppw - lab_periods
+            lab_room_id = special_rooms_map[special_room_name]["id"]
+
+            lb_counter += 1
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": f"R_{class_id}",
+                "periods_per_week": normal_periods,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+            })
+
+            lb_counter += 1
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": lab_room_id,
+                "periods_per_week": lab_periods,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+                "special_room_name": special_room_name,
+            })
+        else:
+            # No split: single block (use lab room if specified, else classroom)
+            lb_counter += 1
+            room_id = special_rooms_map[special_room_name]["id"] if special_room_name else f"R_{class_id}"
+            lesson_blocks.append({
+                "id": f"LB{lb_counter}",
+                "subject_id": sid,
+                "teacher_id": tid,
+                "class_id": class_id,
+                "room_id": room_id,
+                "periods_per_week": ppw,
+                "is_double_period": is_double,
+                "is_fixed": False,
+                "fixed_day": None,
+                "fixed_period": None,
+                "special_room_name": special_room_name or None,
+            })
 
     rooms = [
         {"id": f"R_{c['id']}", "name": f"ห้อง {c['name']}", "room_type": "classroom"}
         for c in classes_map.values()
     ]
+    special_rooms_list = list(special_rooms_map.values())
+    rooms.extend(special_rooms_list)
+
+    deduped_blocks, merged_info = _dedup_lesson_blocks(lesson_blocks)
 
     return {
         "teachers": list(teachers_map.values()),
         "subjects": list(subjects_map.values()),
         "classes": list(classes_map.values()),
         "rooms": rooms,
-        "lesson_blocks": lesson_blocks,
+        "special_rooms": special_rooms_list,
+        "lesson_blocks": deduped_blocks,
+        "fixed_slots": [],
+        "warnings": (
+            [{"type": "merged_duplicates", "merged": merged_info}]
+            if merged_info else []
+        ),
         "summary": {
             "teachers": len(teachers_map),
             "subjects": len(subjects_map),
             "classes": len(classes_map),
-            "lesson_blocks": len(lesson_blocks),
+            "lesson_blocks": len(deduped_blocks),
             "teacher_only": teacher_only_count,
+            "special_rooms": len(special_rooms_list),
+            "fixed_slots": 0,
         },
     }
 
@@ -830,12 +1151,12 @@ def _find_header_idx(header_idx: dict[str, int], labels: list[str]) -> int | Non
 
 # ── Full Multi-Sheet Template Generation ─────────────────────────────────────
 
-FULL_COURSE_HEADERS = ["ชื่อครู", "วิชา", "ห้องเรียน", "คาบ/สัปดาห์", "คาบคู่ (ใช่/ไม่ใช่)"]
+FULL_COURSE_HEADERS = ["ชื่อครู", "วิชา", "ห้องเรียน", "คาบ/สัปดาห์", "คาบคู่ (ใช่/ไม่ใช่)", "ห้องปฏิบัติการ", "คาบแล็บ"]
 FULL_COURSE_EXAMPLES = [
-    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/1", "5", "ไม่ใช่"],
-    ["อ.สมหญิง รักเรียน", "ภาษาไทย", "ป.1/1", "5", "ไม่ใช่"],
-    ["อ.วิชัย สอนเก่ง", "วิทยาศาสตร์", "ป.1/2", "4", "ใช่"],
-    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/2", "5", "ไม่ใช่"],
+    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/1", "5", "ไม่ใช่", "", ""],
+    ["อ.สมหญิง รักเรียน", "ภาษาไทย", "ป.1/1", "5", "ไม่ใช่", "", ""],
+    ["อ.วิชัย สอนเก่ง", "วิทยาศาสตร์", "ป.1/2", "5", "ไม่ใช่", "ห้องวิทยาศาสตร์", "2"],
+    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/2", "5", "ไม่ใช่", "", ""],
 ]
 
 FULL_CONSTRAINT_HEADERS = ["ชื่อครู", "ภาระงานสูงสุด", "ภาระงานขั้นต่ำ", "ห้ามสอน", "บทบาทพิเศษ"]

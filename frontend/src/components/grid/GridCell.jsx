@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Coffee } from 'lucide-react'
 import { getSubjectColor } from '../../utils/subjectColors.js'
 
 // Class-based colors for teacher mode (different classes get different colors)
@@ -33,6 +34,7 @@ export default function GridCell({
   classColorMap,
   colorMode = 'subject',
   isLunch,
+  isBreak,          // ☕ short break (inserted BREAK with decimal period_no) — not draggable
   isFixed,          // 🔒 locked fixed slot (assembly/homeroom/etc.) — not draggable
   isPreAssigned,    // 📌 user manually placed — not draggable by solver
   fixedSlotName,    // name to display for fixed slots (e.g. "โฮมรูม")
@@ -40,6 +42,7 @@ export default function GridCell({
   dragTargetInfo,   // { valid, reason } from TimetableGrid validation
   isDraggable,
   conflicts = [],
+  roomName,         // special room name (if slot uses a special room)
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -60,6 +63,21 @@ export default function GridCell({
         onContextMenu={onContextMenu}
       >
         <span className="text-sm font-semibold text-gray-400">พักเที่ยง</span>
+      </div>
+    )
+  }
+
+  // ── Short break cell (inserted BREAK, e.g. period_no 3.5) ─────────
+  // Same height as a regular cell, but the column is narrower (controlled
+  // by grid-template-columns in TimetableGrid) so it reads as a "divider".
+  if (isBreak) {
+    return (
+      <div
+        className="bg-gray-50 border border-gray-200 rounded-lg p-0.5 min-h-[80px] flex items-center justify-center"
+        onContextMenu={onContextMenu}
+        title="พักสั้น"
+      >
+        <Coffee className="w-3 h-3 text-gray-400" />
       </div>
     )
   }
@@ -205,12 +223,22 @@ export default function GridCell({
         {subject?.name || slot.subject_id}
         {hasConflict && <span className="ml-1 text-red-500">⚠</span>}
       </div>
-      <div className="text-xs sm:text-sm font-semibold text-slate-600 truncate mt-0.5">
-        {teacher?.name || slot.teacher_id}
+      <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
+        <span className="text-xs sm:text-sm font-semibold text-slate-600 truncate">
+          {teacher?.name || slot.teacher_id}
+        </span>
+        <span className="text-xs sm:text-sm text-slate-500 truncate ml-auto shrink-0">
+          {classGroup?.name || slot.class_id}
+        </span>
       </div>
-      <div className="text-xs sm:text-sm text-slate-500 truncate">
-        {classGroup?.name || slot.class_id}
-      </div>
+      {/* 🔬 Special room badge (if slot uses a special room, not default classroom) */}
+      {roomName && (
+        <div className="mt-0.5">
+          <span className="inline-block text-[10px] text-indigo-700 bg-indigo-50 px-1 py-0.5 rounded font-medium border border-indigo-200">
+            🔬 {roomName}
+          </span>
+        </div>
+      )}
 
       {/* ❌ Remove button (top-right) — visible on hover */}
       {onRemoveSlot && (
@@ -256,6 +284,9 @@ export default function GridCell({
           <div>{subject?.name || slot.subject_id}</div>
           <div className="text-gray-300">{teacher?.name || slot.teacher_id}</div>
           <div className="text-gray-300">{classGroup?.name || slot.class_id}</div>
+          {roomName && (
+            <div className="text-indigo-300 mt-0.5">🔬 {roomName}</div>
+          )}
           {isPreAssigned && (
             <div className="text-amber-300 mt-1">📌 วางด้วยมือ</div>
           )}

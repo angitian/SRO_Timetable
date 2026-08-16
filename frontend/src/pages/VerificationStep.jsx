@@ -2,11 +2,15 @@ import { useMemo, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, CheckCircle, AlertTriangle,
   Users, Layers, ClipboardCheck, Info,
-  Search, SearchX,
+  Search, FlaskConical,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
 import { getSubjectColor } from '../utils/subjectColors.js'
+import TeacherSummaryTable from '../components/verification/TeacherSummaryTable.jsx'
+import ClassroomDensityTable from '../components/verification/ClassroomDensityTable.jsx'
+import FacilityUsageSummary from '../components/verification/FacilityUsageSummary.jsx'
+import FacilityTimetable from '../components/verification/FacilityTimetable.jsx'
 
 export default function VerificationStep() {
   const { fixtureData, error, errorResponse, setStep } = useApp()
@@ -16,14 +20,19 @@ export default function VerificationStep() {
   const classes = fixtureData?.classes || []
   const lessonBlocks = fixtureData?.lesson_blocks || []
   const scheduleBlocks = fixtureData?.schedule_blocks || []
+  const specialRooms = fixtureData?.special_rooms || []
+  const result = fixtureData?.result || null
+  const resultSlots = result?.slots || []
 
   const subjectMap = useMemo(() => new Map(subjects.map((s) => [s.id, s])), [subjects])
+  const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers])
   const classMap = useMemo(() => new Map(classes.map((c) => [c.id, c])), [classes])
   const classBlockMap = useMemo(() => buildClassBlockMap(scheduleBlocks), [scheduleBlocks])
   const blockMap = useMemo(() => new Map(scheduleBlocks.map((b) => [b.id, b])), [scheduleBlocks])
 
   const [activeTab, setActiveTab] = useState('teachers')
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedFacilityId, setSelectedFacilityId] = useState('')
 
   // Teacher Summary
   const teacherSummary = useMemo(() => {
@@ -129,6 +138,59 @@ export default function VerificationStep() {
     if (!q) return classroomDensity
     return classroomDensity.filter((c) => c.class.name.toLowerCase().includes(q))
   }, [classroomDensity, searchQuery])
+
+  // ── Facility (special room) usage summary ──
+  const facilityUsage = useMemo(() => {
+    if (specialRooms.length === 0) return []
+    const usage = {}
+    for (const r of specialRooms) {
+      usage[r.id] = {
+        room: r,
+        subjects: {},
+        classes: new Set(),
+        total: 0,
+      }
+    }
+    for (const lb of lessonBlocks) {
+      if (!lb.room_id || !lb.room_id.startsWith('SR_')) continue
+      const entry = usage[lb.room_id]
+      if (!entry) continue
+      const subjName = subjectMap.get(lb.subject_id)?.name || lb.subject_id
+      const className = classMap.get(lb.class_id)?.name || lb.class_id
+      const key = `${subjName} → ${className}`
+      entry.subjects[key] = (entry.subjects[key] || 0) + lb.periods_per_week
+      entry.classes.add(lb.class_id)
+      entry.total += lb.periods_per_week
+    }
+    // Capacity = days × periods_per_day (use first schedule block as reference)
+    const refBlock = scheduleBlocks[0]
+    const studyPeriods = refBlock?.periods?.filter((p) => p.type === 'STUDY').length || 0
+    const daysPerWeek = refBlock?.days_per_week || 5
+    const capacity = studyPeriods * daysPerWeek
+    return Object.values(usage).map((entry) => ({
+      ...entry,
+      subjectList: Object.entries(entry.subjects).map(([k, periods]) => ({ subject: k, periods })),
+      classCount: entry.classes.size,
+      capacity,
+      isOver: capacity > 0 && entry.total > capacity,
+    }))
+  }, [specialRooms, lessonBlocks, subjectMap, classMap, scheduleBlocks])
+
+  // ── Facility timetable (from result slots, if available) ──
+  const facilityTimetable = useMemo(() => {
+    if (!selectedFacilityId || resultSlots.length === 0) return []
+    const dayNames = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัส', 'ศุกร์']
+    return resultSlots
+      .filter((s) => s.room_id === selectedFacilityId)
+      .map((s) => ({
+        ...s,
+        dayName: dayNames[(s.day || 1) - 1] || `วัน${s.day}`,
+        subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
+        className: classMap.get(s.class_id)?.name || s.class_id,
+        teacherName: teacherMap.get(s.teacher_id)?.name || s.teacher_id,
+      }))
+      .sort((a, b) => (a.day || 0) - (b.day || 0) || (a.period || 0) - (b.period || 0))
+  }, [selectedFacilityId, resultSlots, subjectMap, classMap, teacherMap])
 
   // Build readable diagnostics from the backend's 422 payload (if any).
   const diagnostics = errorResponse?.diagnostics || null
@@ -248,6 +310,19 @@ export default function VerificationStep() {
               <Layers className="w-4 h-4" />
               ตรวจสอบตามห้องเรียน ({classes.length})
             </button>
+            {specialRooms.length > 0 && (
+              <button
+                onClick={() => { setActiveTab('facilities'); setSearchQuery('') }}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all
+                  ${activeTab === 'facilities'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+              >
+                <FlaskConical className="w-4 h-4" />
+                ห้องปฏิบัติการ ({specialRooms.length})
+              </button>
+            )}
           </div>
           <div className="relative sm:ml-auto sm:w-64">
             <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -264,149 +339,41 @@ export default function VerificationStep() {
         {/* Tab Content */}
         <div className="transition-opacity duration-200">
           {activeTab === 'teachers' && (
-            <div>
-              {filteredTeachers.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
-                  <SearchX className="w-8 h-8 mx-auto mb-2" />
-                  ไม่พบข้อมูลที่ค้นหา
-                </div>
-              ) : (
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left text-xs font-bold text-gray-600">ครู</th>
-                      <th className="px-3 py-2 text-left text-xs font-bold text-gray-600">วิชา → ห้อง</th>
-                      <th className="px-3 py-2 text-center text-xs font-bold text-gray-600 whitespace-nowrap">รวมคาบ / เพดาน</th>
-                      <th className="px-3 py-2 text-center text-xs font-bold text-gray-600">สถานะ</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {filteredTeachers.map((entry) => {
-                      const max = entry.teacher.max_periods_per_week
-                      const pct = max > 0 ? (entry.total / max) * 100 : 0
-                      return (
-                        <tr key={entry.teacher.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 font-medium text-gray-900 align-top whitespace-nowrap">
-                            {entry.teacher.name}
-                            {entry.isCrossBlock && (
-                              <span className="ml-1 badge bg-purple-100 text-purple-700 text-[10px]">ข้ามบล็อก</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 text-gray-600">
-                            <div className="flex flex-wrap gap-1">
-                              {entry.subjectRooms.map((sr, i) => (
-                                <span
-                                  key={`${sr.subject}-${sr.class}-${i}`}
-                                  className={`inline-flex items-center gap-1 rounded-full pl-2 pr-1 py-0.5 text-xs border whitespace-nowrap ${subjectColorClass(sr.subject)}`}
-                                >
-                                  {sr.subject}
-                                  <span className="inline-flex items-center rounded-full px-1.5 py-0 text-[10px] font-semibold bg-black/10">
-                                    {sr.class}
-                                  </span>
-                                  • {sr.periods}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-center align-top">
-                            <div className="font-bold whitespace-nowrap">{entry.total} / {max}</div>
-                            <div className="mt-1 w-24 h-2 bg-gray-200 rounded-full overflow-hidden mx-auto">
-                              <div
-                                className={`h-full rounded-full ${progressColor(pct)}`}
-                                style={{ width: `${Math.min(100, pct)}%` }}
-                              />
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-center align-top">
-                            {entry.isOver ? (
-                              <span className="badge bg-red-100 text-red-700 text-xs">เกินเพดาน ⚠️</span>
-                            ) : (
-                              <span className="badge bg-green-100 text-green-700 text-xs">ปกติ</span>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
+            <TeacherSummaryTable
+              teachers={filteredTeachers}
+              progressColor={progressColor}
+              subjectColorClass={subjectColorClass}
+            />
           )}
 
           {activeTab === 'classrooms' && (
-            <div>
-              {filteredClassrooms.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
-                  <SearchX className="w-8 h-8 mx-auto mb-2" />
-                  ไม่พบข้อมูลที่ค้นหา
-                </div>
-              ) : (
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left text-xs font-bold text-gray-600">ห้อง</th>
-                      <th className="px-3 py-2 text-left text-xs font-bold text-gray-600">รายวิชา</th>
-                      <th className="px-3 py-2 text-center text-xs font-bold text-gray-600 whitespace-nowrap">คาบเรียน/สัปดาห์</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {filteredClassrooms.map((entry) => {
-                      const blockId = classBlockMap[entry.class.id]
-                      const maxPeriods = blockId ? blockMaxPeriods[blockId] || 0 : 0
-                      const pct = maxPeriods > 0 ? (entry.total / maxPeriods) * 100 : 0
-                      const diff = maxPeriods - entry.total
-                      const overflow = entry.total - maxPeriods
-                      return (
-                        <tr key={entry.class.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 font-medium text-gray-900 align-top whitespace-nowrap">{entry.class.name}</td>
-                          <td className="px-3 py-2 text-gray-600">
-                            <div className="flex flex-wrap gap-1">
-                              {entry.subjectList.map((s) => (
-                                <span
-                                  key={s.subject}
-                                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs border whitespace-nowrap ${subjectColorClass(s.subject)}`}
-                                >
-                                  {s.subject} {s.periods}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-center align-top">
-                            {maxPeriods > 0 ? (
-                              <>
-                                <div className="font-bold whitespace-nowrap">{entry.total} / {maxPeriods}</div>
-                                <div className="mt-1 w-24 h-2 bg-gray-200 rounded-full overflow-hidden mx-auto">
-                                  <div
-                                    className={`h-full rounded-full ${progressColor(pct)}`}
-                                    style={{ width: `${Math.min(100, pct)}%` }}
-                                  />
-                                </div>
-                                <div className="mt-1.5">
-                                  {entry.total === maxPeriods ? (
-                                    <span className="badge bg-green-100 text-green-700 text-xs">ครบถ้วน</span>
-                                  ) : entry.total > maxPeriods ? (
-                                    <span className="badge bg-red-100 text-red-700 text-xs">เกิน {overflow} คาบ</span>
-                                  ) : (
-                                    <span className="badge bg-blue-100 text-blue-700 text-xs whitespace-nowrap">
-                                      {entry.total}/{maxPeriods} (ขาด {diff})
-                                    </span>
-                                  )}
-                                </div>
-                              </>
-                            ) : (
-                              <span className="text-gray-400">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
+            <ClassroomDensityTable
+              classrooms={filteredClassrooms}
+              classBlockMap={classBlockMap}
+              blockMaxPeriods={blockMaxPeriods}
+              progressColor={progressColor}
+              subjectColorClass={subjectColorClass}
+            />
           )}
         </div>
       </div>
+
+      {/* Facilities tab content */}
+      {activeTab === 'facilities' && (
+        <div className="space-y-4">
+          {/* Section A: Usage Summary */}
+          <FacilityUsageSummary facilityUsage={facilityUsage} />
+
+          {/* Section B: Room Timetable (if result exists) */}
+          <FacilityTimetable
+            specialRooms={specialRooms}
+            selectedFacilityId={selectedFacilityId}
+            onSelectFacility={setSelectedFacilityId}
+            facilityTimetable={facilityTimetable}
+            hasResult={resultSlots.length > 0}
+          />
+        </div>
+      )}
 
       {/* Error display */}
       {error && (

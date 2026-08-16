@@ -1,10 +1,10 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, Fragment } from 'react'
 import {
   Plus, Trash2, ArrowRight, ArrowLeft, Clock, Layers, BookOpen, Coffee,
-  UtensilsCrossed, X, Check, ChevronDown, ZoomIn, ZoomOut, Edit2, CalendarHeart, Star,
+  UtensilsCrossed, X, Check, ChevronDown, ZoomIn, ZoomOut, Edit2, CalendarHeart, Star, Calendar,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
-import { generatePeriods, createDefaultBlock, buildClassBlockMap } from '../utils/periods.js'
+import { generatePeriods, createDefaultBlock, buildClassBlockMap, insertBreakPeriod } from '../utils/periods.js'
 import { getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
 
 const PERIOD_TYPE_CONFIG = {
@@ -44,7 +44,7 @@ function recalculateTimes(periods, startTime, periodDuration, breakDuration, lun
 }
 
 export default function ScheduleBlocksStep() {
-  const { fixtureData, updateFixtureData, setStep } = useApp()
+  const { fixtureData, updateFixtureData, setIsDirty, setStep } = useApp()
   const [fontSize, setFontSize] = useState(1) // 0=sm, 1=md, 2=lg
   const [activeBlockId, setActiveBlockId] = useState(null)
   const fontScale = [0.85, 1, 1.25][fontSize]
@@ -66,8 +66,10 @@ export default function ScheduleBlocksStep() {
 
   function addBlock() {
     const newId = `block_${Date.now()}`
+    const periodsPerDay = fixtureData?.schedule_config?.periods_per_day || 8
     const newBlock = createDefaultBlock(newId, `ตารางเรียน ${scheduleBlocks.length + 1}`, {
       lunchPeriodNos: [4],
+      totalPeriods: periodsPerDay,
     })
     updateFixtureData({ schedule_blocks: [...scheduleBlocks, newBlock] })
     setActiveBlockId(newId)
@@ -209,6 +211,7 @@ export default function ScheduleBlocksStep() {
               fontSize={fontSize}
               onUpdate={(updates) => updateBlock(activeBlock.id, updates)}
               onRemove={() => removeBlock(activeBlock.id)}
+              onInsertBreak={() => setIsDirty(false)}
             />
           )}
         </>
@@ -263,7 +266,7 @@ export default function ScheduleBlocksStep() {
 
 // ── Block Card ──────────────────────────────────────────────────────────────
 
-function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontSize, onUpdate, onRemove }) {
+function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontSize, onUpdate, onRemove, onInsertBreak }) {
   const [showAddMenuForDay, setShowAddMenuForDay] = useState(null)
 
   // Cell min-width and icon size scale with fontSize, but text size is inherited from wrapper
@@ -371,6 +374,18 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
     setPeriodsForDay(d, [...periods, newPeriod])
   }
 
+  // Insert a short BREAK between two periods using a decimal period_no
+  // (e.g. between 3 and 4 → 3.5) so existing STUDY/LUNCH period_no values
+  // are preserved → placements/slots stay valid → no need to re-schedule.
+  function insertBreak(d, afterPeriodNo) {
+    const periods = getPeriodsForDay(d)
+    const merged = insertBreakPeriod(periods, afterPeriodNo)
+    setPeriodsForDay(d, merged)
+    // Suppress the "regenerate" banner: inserting a BREAK does not shift
+    // any existing STUDY period_no, so prior placements remain valid.
+    onInsertBreak?.()
+  }
+
   function removePeriod(d, periodNo) {
     const periods = getPeriodsForDay(d)
     if (periods.length <= 1) return
@@ -405,7 +420,6 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
   }
 
   function handleConfigChange(updates) {
-    onUpdate(updates)
     const newBlock = { ...block, ...updates }
     for (const d of days) {
       const periods = usePerDay
@@ -456,7 +470,10 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
       {/* Config inputs */}
       <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
         <div>
-          <label className="font-medium text-gray-600 mb-1 block">เวลาเริ่มคาบแรก</label>
+          <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
+            <Clock className="w-3.5 h-3.5 text-gray-400" />
+            เวลาเริ่มคาบแรก
+          </label>
           <input
             type="time"
             value={block.start_time}
@@ -465,7 +482,10 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
           />
         </div>
         <div>
-          <label className="font-medium text-gray-600 mb-1 block">คาบเรียน (คาบ)</label>
+          <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
+            <BookOpen className="w-3.5 h-3.5 text-blue-600" />
+            คาบเรียน (คาบ)
+          </label>
           <input
             type="number" min="1" max="15"
             value={(() => {
@@ -480,7 +500,10 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
           />
         </div>
         <div>
-          <label className="font-medium text-gray-600 mb-1 block">ความยาวคาบ (นาที)</label>
+          <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
+            <Clock className="w-3.5 h-3.5 text-gray-400" />
+            ความยาวคาบ (นาที)
+          </label>
           <input
             type="number" min="10" max="120"
             value={block.period_duration_mins}
@@ -489,7 +512,10 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
           />
         </div>
         <div>
-          <label className="font-medium text-gray-600 mb-1 block">พักเที่ยง (นาที)</label>
+          <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
+            <UtensilsCrossed className="w-3.5 h-3.5 text-orange-600" />
+            พักเที่ยง (นาที)
+          </label>
           <input
             type="number" min="10" max="120"
             value={block.lunch_duration_mins || 50}
@@ -498,7 +524,10 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
           />
         </div>
         <div>
-          <label className="font-medium text-gray-600 mb-1 block">พักสั้น (นาที)</label>
+          <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
+            <Coffee className="w-3.5 h-3.5 text-gray-600" />
+            พักสั้น (นาที)
+          </label>
           <input
             type="number" min="5" max="60"
             value={block.break_duration_mins}
@@ -507,7 +536,10 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
           />
         </div>
         <div>
-          <label className="font-medium text-gray-600 mb-1 block">จำนวนวัน/สัปดาห์</label>
+          <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
+            <Calendar className="w-3.5 h-3.5 text-gray-400" />
+            จำนวนวัน/สัปดาห์
+          </label>
           <select
             value={block.days_per_week}
             onChange={(e) => onUpdate({ days_per_week: parseInt(e.target.value) })}
@@ -544,11 +576,17 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
             return (
               <div className="flex items-stretch gap-1.5 mb-1">
                 <div className={`${dayW} shrink-0`} />
-                {refPeriods.map((p) => (
-                  <div key={p.period_no} className={`flex-1 ${cellMinW} text-center text-gray-500 font-medium py-1`}>
-                    {p.start_time} - {p.end_time}
-                  </div>
-                ))}
+                {refPeriods.map((p) => {
+                  const isBr = p.type === 'BREAK'
+                  const flexClass = isBr ? 'flex-[0.18]' : 'flex-1'
+                  const minWClass = isBr ? 'min-w-[28px]' : cellMinW
+                  const label = isBr ? 'พัก' : `${p.start_time} - ${p.end_time}`
+                  return (
+                    <div key={p.period_no} className={`${flexClass} ${minWClass} text-center text-gray-500 font-medium py-1`}>
+                      {label}
+                    </div>
+                  )
+                })}
                 <div className={`${addW} shrink-0`} />
               </div>
             )
@@ -562,11 +600,17 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
                 {!block.apply_to_all_days && (
                   <div className="flex items-stretch gap-1.5 mb-0.5">
                     <div className={`${dayW} shrink-0`} />
-                    {dayPeriods.map((p) => (
-                      <div key={p.period_no} className={`flex-1 ${cellMinW} text-center text-gray-500 font-medium py-1`}>
-                        {p.start_time} - {p.end_time}
-                      </div>
-                    ))}
+                    {dayPeriods.map((p) => {
+                      const isBr = p.type === 'BREAK'
+                      const flexClass = isBr ? 'flex-[0.18]' : 'flex-1'
+                      const minWClass = isBr ? 'min-w-[28px]' : cellMinW
+                      const label = isBr ? 'พัก' : `${p.start_time} - ${p.end_time}`
+                      return (
+                        <div key={p.period_no} className={`${flexClass} ${minWClass} text-center text-gray-500 font-medium py-1`}>
+                          {label}
+                        </div>
+                      )
+                    })}
                     <div className={`${addW} shrink-0`} />
                   </div>
                 )}
@@ -579,35 +623,58 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
                     </div>
                   </div>
 
-                  {/* Period cells — horizontal row */}
-                  {dayPeriods.map((p) => {
+                  {/* Period cells — horizontal row, with thin "insert break" divider between cells */}
+                  {dayPeriods.map((p, idx) => {
                     const config = PERIOD_TYPE_CONFIG[p.type] || PERIOD_TYPE_CONFIG.STUDY
                     const Icon = config.icon
+                    const showInsertBefore = idx > 0
+                    const isBreakCell = p.type === 'BREAK'
+                    const cellFlex = isBreakCell ? 'flex-[0.18]' : 'flex-1'
+                    const cellPadding = isBreakCell ? 'p-0.5' : 'px-1.5 py-1.5'
                     return (
-                      <div
-                        key={p.period_no}
-                        className={`relative flex-1 ${cellMinW} px-1.5 py-1.5 rounded-lg font-medium border-2 transition-all ${config.color}`}
-                        title={`${p.start_time} - ${p.end_time}`}
-                      >
-                        <button
-                          onClick={() => togglePeriodType(d, p.period_no)}
-                          className="flex flex-col items-center w-full"
-                        >
-                          <div className="flex items-center gap-1">
-                            <Icon className={iconSz} />
-                            <span className="font-bold">{p.period_no}</span>
-                          </div>
-                        </button>
-                        {dayPeriods.length > 1 && (
+                      <Fragment key={p.period_no}>
+                        {showInsertBefore && (
                           <button
-                            onClick={() => removePeriod(d, p.period_no)}
-                            className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
-                            title="ลบคาบนี้"
+                            onClick={() => insertBreak(d, dayPeriods[idx - 1].period_no)}
+                            className="shrink-0 w-2 sm:w-3 self-stretch flex items-center justify-center text-gray-300 hover:text-blue-600 transition-colors group"
+                            title="แทรกพักสั้นระหว่างคาบ"
                           >
-                            <X className="w-3 h-3" />
+                            <span className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center">
+                              <Coffee className={fontSize === 0 ? 'w-2 h-2' : 'w-2.5 h-2.5'} />
+                              <Plus className={fontSize === 0 ? 'w-1.5 h-1.5 -mt-0.5' : 'w-2 h-2 -mt-1'} />
+                            </span>
                           </button>
                         )}
-                      </div>
+                        <div
+                          className={`relative ${cellFlex} ${isBreakCell ? 'min-w-[28px]' : cellMinW} ${cellPadding} rounded-lg font-medium border-2 transition-all ${config.color}`}
+                          title={`${p.start_time} - ${p.end_time}`}
+                        >
+                          <button
+                            onClick={() => togglePeriodType(d, p.period_no)}
+                            className="flex flex-col items-center w-full"
+                          >
+                            <div className="flex items-center gap-1">
+                              {isBreakCell ? (
+                                <Coffee className={fontSize === 0 ? 'w-2.5 h-2.5' : fontSize === 1 ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
+                              ) : (
+                                <>
+                                  <Icon className={iconSz} />
+                                  <span className="font-bold">{p.period_no}</span>
+                                </>
+                              )}
+                            </div>
+                          </button>
+                          {dayPeriods.length > 1 && (
+                            <button
+                              onClick={() => removePeriod(d, p.period_no)}
+                              className={`absolute -top-1 -right-1 ${isBreakCell ? 'w-3.5 h-3.5' : 'w-5 h-5'} bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors`}
+                              title="ลบคาบนี้"
+                            >
+                              <X className={isBreakCell ? 'w-2 h-2' : 'w-3 h-3'} />
+                            </button>
+                          )}
+                        </div>
+                      </Fragment>
                     )
                   })}
 

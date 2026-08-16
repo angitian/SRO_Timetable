@@ -24,6 +24,7 @@ class FixedSlotType(str, Enum):
     HOMEROOM = "homeroom"
     SCOUT = "scout"
     ROTC = "rotc"
+    ACTIVITY = "activity"
     OTHER = "other"
 
 
@@ -214,7 +215,9 @@ class ScheduleTemplate(BaseModel):
 
 
 class SchedulePeriod(BaseModel):
-    period_no: int = Field(ge=1, le=12)
+    # period_no supports decimals (e.g. 3.5) for inserted short breaks
+    # that don't shift existing STUDY/LUNCH period numbers.
+    period_no: float = Field(ge=0.5, le=12)
     start_time: str = Field(description="HH:MM format")
     end_time: str = Field(description="HH:MM format")
     type: PeriodType = Field(default=PeriodType.STUDY)
@@ -329,11 +332,23 @@ class DiagnosticsReport(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
     def has_blocking_issues(self) -> bool:
+        # `over_max` (teacher's lesson load exceeds max_periods_per_week) is
+        # treated as a NON-blocking warning: the solver enforces max as a soft
+        # constraint and will still place the teacher's lessons, surfacing a
+        # warning via TeacherLoadSummary.load_status == "over". Other overload
+        # reasons (over_available, under_min) remain blocking because they
+        # indicate a physically impossible situation.
+        blocking_teacher_overloads = [
+            t for t in self.teacher_overloads if t.reason != "over_max"
+        ]
+        # class_capacity_issues: a class has more lesson periods than available
+        # slots. The solver treats period_count as a soft constraint (<= with
+        # penalty), so it will place as many periods as possible and surface
+        # a warning. Non-blocking so the user still gets a partial timetable.
         return bool(
-            self.teacher_overloads
+            blocking_teacher_overloads
             or self.room_overloads
             or self.fixed_slot_conflicts
-            or self.class_capacity_issues
         )
 
 

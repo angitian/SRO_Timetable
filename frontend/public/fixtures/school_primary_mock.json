@@ -1,1916 +1,2555 @@
 {
   "teachers": [
     {
-      "id": "T01",
+      "id": "T1",
       "name": "ครูสมหญิง",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
-      "id": "T02",
+      "id": "T2",
       "name": "ครูมานี",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
-      "id": "T03",
+      "id": "T3",
       "name": "ครูประยูร",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
-      "id": "T04",
+      "id": "T4",
       "name": "ครูวิภา",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
-      "id": "T05",
+      "id": "T5",
       "name": "ครูสมชาย",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
-      "id": "T06",
+      "id": "T6",
       "name": "ครูมาลี",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
-      "id": "T07",
+      "id": "T7",
       "name": "ครูนิดา",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
-      "id": "T08",
+      "id": "T8",
       "name": "ครูอนุชา",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
-      "id": "T09",
+      "id": "T9",
       "name": "ครูพิศมัย",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T10",
       "name": "ครูจันทรา",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T11",
       "name": "ครูสมศักดิ์",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T12",
       "name": "ครูอำนาจ",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T13",
       "name": "ครูนพดล",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T14",
-      "name": "ครูเจมส์ (Native)",
+      "name": "ครูวิชัย",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T15",
-      "name": "ครูแอน (English)",
+      "name": "ครูอรุณ",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T16",
-      "name": "ครูหยุน (Chinese)",
+      "name": "ครูศรีสุดา",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T17",
-      "name": "ครูกิตติ (PE)",
+      "name": "ครูอนันต์",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T18",
-      "name": "ครูสมพร (PE)",
-      "max_periods_per_week": 22,
-      "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
-    },
-    {
-      "id": "T19",
-      "name": "ครูนภา (Art)",
-      "max_periods_per_week": 22,
-      "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
-    },
-    {
-      "id": "T20",
-      "name": "ครูเกษม (Music)",
-      "max_periods_per_week": 22,
-      "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
-    },
-    {
-      "id": "T21",
-      "name": "ครูรุ่งนภา (Work)",
-      "max_periods_per_week": 22,
-      "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
-    },
-    {
-      "id": "T22",
-      "name": "ครูอนันต์ (ICT)",
-      "max_periods_per_week": 22,
-      "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
-    },
-    {
-      "id": "T23",
       "name": "ครูศรีสุดา (ICT)",
       "max_periods_per_week": 22,
       "min_periods_per_week": 0,
-      "unavailable_slots": [],
-      "admin_role": "none",
-      "admin_free_slots": []
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
+    },
+    {
+      "id": "T19",
+      "name": "ครูนภา",
+      "max_periods_per_week": 22,
+      "min_periods_per_week": 0,
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
+    },
+    {
+      "id": "T20",
+      "name": "ครูเกษม",
+      "max_periods_per_week": 22,
+      "min_periods_per_week": 0,
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
+    },
+    {
+      "id": "T21",
+      "name": "ครูรุ่งนภา",
+      "max_periods_per_week": 22,
+      "min_periods_per_week": 0,
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
+    },
+    {
+      "id": "T22",
+      "name": "ครูกิตติ",
+      "max_periods_per_week": 22,
+      "min_periods_per_week": 0,
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
+    },
+    {
+      "id": "T23",
+      "name": "ครูสมพร",
+      "max_periods_per_week": 22,
+      "min_periods_per_week": 0,
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     },
     {
       "id": "T24",
-      "name": "ครูประเสริฐ (Finance)",
-      "max_periods_per_week": 18,
+      "name": "ครูรุ่งเพชร",
+      "max_periods_per_week": 22,
       "min_periods_per_week": 0,
       "unavailable_slots": [
-        "4-5",
-        "4-6",
-        "5-5",
-        "5-6"
+        "—"
       ],
-      "admin_role": "finance",
-      "admin_free_slots": [
-        "4-5",
-        "4-6",
-        "5-5",
-        "5-6"
-      ]
+      "admin_role": "none"
     },
     {
       "id": "T25",
-      "name": "ครูบุญรอด (Discipline)",
-      "max_periods_per_week": 16,
+      "name": "ครูแอน",
+      "max_periods_per_week": 24,
       "min_periods_per_week": 0,
       "unavailable_slots": [
-        "1-1",
-        "1-6",
-        "2-1",
-        "2-6",
-        "3-1",
-        "3-6",
-        "4-1",
-        "4-6",
-        "5-1",
-        "5-6"
+        "—"
       ],
-      "admin_role": "discipline",
-      "admin_free_slots": [
-        "1-1",
-        "1-6",
-        "2-1",
-        "2-6",
-        "3-1",
-        "3-6",
-        "4-1",
-        "4-6",
-        "5-1",
-        "5-6"
-      ]
+      "admin_role": "none"
+    },
+    {
+      "id": "T26",
+      "name": "ครูเจมส์",
+      "max_periods_per_week": 24,
+      "min_periods_per_week": 0,
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
+    },
+    {
+      "id": "T27",
+      "name": "ครูสุดา (Co)",
+      "max_periods_per_week": 22,
+      "min_periods_per_week": 0,
+      "unavailable_slots": [
+        "—"
+      ],
+      "admin_role": "none"
     }
   ],
   "rooms": [
     {
-      "id": "R_P11",
+      "id": "R_C1",
       "name": "ห้อง ป.1/1",
       "room_type": "classroom"
     },
     {
-      "id": "R_P12",
+      "id": "R_C2",
       "name": "ห้อง ป.1/2",
       "room_type": "classroom"
     },
     {
-      "id": "R_P21",
+      "id": "R_C3",
       "name": "ห้อง ป.2/1",
       "room_type": "classroom"
     },
     {
-      "id": "R_P22",
+      "id": "R_C4",
       "name": "ห้อง ป.2/2",
       "room_type": "classroom"
     },
     {
-      "id": "R_P31",
+      "id": "R_C5",
       "name": "ห้อง ป.3/1",
       "room_type": "classroom"
     },
     {
-      "id": "R_P32",
+      "id": "R_C6",
       "name": "ห้อง ป.3/2",
       "room_type": "classroom"
     },
     {
-      "id": "R_P41",
+      "id": "R_C7",
       "name": "ห้อง ป.4/1",
       "room_type": "classroom"
     },
     {
-      "id": "R_P42",
+      "id": "R_C8",
       "name": "ห้อง ป.4/2",
       "room_type": "classroom"
     },
     {
-      "id": "R_P51",
+      "id": "R_C9",
       "name": "ห้อง ป.5/1",
       "room_type": "classroom"
     },
     {
-      "id": "R_P52",
+      "id": "R_C10",
       "name": "ห้อง ป.5/2",
       "room_type": "classroom"
     },
     {
-      "id": "R_P61",
+      "id": "R_C11",
       "name": "ห้อง ป.6/1",
       "room_type": "classroom"
     },
     {
-      "id": "R_P62",
+      "id": "R_C12",
       "name": "ห้อง ป.6/2",
       "room_type": "classroom"
     },
     {
-      "id": "COMPUTER_LAB",
-      "name": "ห้องคอมพิวเตอร์",
-      "room_type": "computer_lab"
-    },
-    {
-      "id": "SCIENCE_LAB",
+      "id": "SR_1",
       "name": "ห้องปฏิบัติการวิทย์",
-      "room_type": "science_lab"
+      "room_type": "lab"
     },
     {
-      "id": "GYM_FIELD",
+      "id": "SR_2",
+      "name": "ห้องคอมพิวเตอร์",
+      "room_type": "lab"
+    },
+    {
+      "id": "SR_3",
+      "name": "ห้องศิลปะ",
+      "room_type": "lab"
+    },
+    {
+      "id": "SR_4",
+      "name": "ห้องดนตรี",
+      "room_type": "lab"
+    },
+    {
+      "id": "SR_5",
       "name": "สนามพละ",
-      "room_type": "gym"
+      "room_type": "lab"
+    },
+    {
+      "id": "SR_6",
+      "name": "ห้องยุววัย",
+      "room_type": "lab"
+    },
+    {
+      "id": "SR_7",
+      "name": "ห้องภาษา",
+      "room_type": "lab"
     }
   ],
   "subjects": [
     {
-      "id": "MA",
-      "name": "คณิตศาสตร์",
-      "category": "core",
-      "is_heavy": true
-    },
-    {
-      "id": "TH",
+      "id": "S1",
       "name": "ภาษาไทย",
       "category": "core",
-      "is_heavy": true
-    },
-    {
-      "id": "SC",
-      "name": "วิทยาศาสตร์และเทคโนโลยี",
-      "category": "lab",
       "is_heavy": false
     },
     {
-      "id": "EN",
-      "name": "ภาษาอังกฤษ",
+      "id": "S2",
+      "name": "คณิตศาสตร์",
       "category": "core",
       "is_heavy": false
     },
     {
-      "id": "SO",
+      "id": "S3",
       "name": "สังคมศึกษา",
       "category": "core",
       "is_heavy": false
     },
     {
-      "id": "HI",
+      "id": "S4",
       "name": "ประวัติศาสตร์",
       "category": "core",
       "is_heavy": false
     },
     {
-      "id": "PE",
-      "name": "สุขศึกษาและพลศึกษา",
-      "category": "pe",
-      "is_heavy": false
-    },
-    {
-      "id": "AR",
-      "name": "ศิลปะ ดนตรี นาฏศิลป์",
-      "category": "art",
-      "is_heavy": false
-    },
-    {
-      "id": "WE",
-      "name": "การงานอาชีพ",
-      "category": "art",
-      "is_heavy": false
-    },
-    {
-      "id": "EN_CO",
-      "name": "ภาษาอังกฤษ (Co-Teaching)",
+      "id": "S5",
+      "name": "วิทยาศาสตร์",
       "category": "core",
       "is_heavy": false
     },
     {
-      "id": "ICT",
+      "id": "S6",
+      "name": "วิทยาศาสตร์ (Lab)",
+      "category": "core",
+      "is_heavy": false
+    },
+    {
+      "id": "S7",
       "name": "คอมพิวเตอร์",
-      "category": "lab",
+      "category": "core",
+      "is_heavy": false
+    },
+    {
+      "id": "S8",
+      "name": "ศิลปะ",
+      "category": "core",
+      "is_heavy": false
+    },
+    {
+      "id": "S9",
+      "name": "ดนตรี",
+      "category": "core",
+      "is_heavy": false
+    },
+    {
+      "id": "S10",
+      "name": "พลศึกษา",
+      "category": "core",
+      "is_heavy": false
+    },
+    {
+      "id": "S11",
+      "name": "การงานอาชีพ",
+      "category": "core",
+      "is_heavy": false
+    },
+    {
+      "id": "S12",
+      "name": "ภาษาอังกฤษ",
+      "category": "core",
+      "is_heavy": false
+    },
+    {
+      "id": "S13",
+      "name": "ภาษาอังกฤษ (Lab)",
+      "category": "core",
+      "is_heavy": false
+    },
+    {
+      "id": "S14",
+      "name": "ภาษาอังกฤษ (Co-Teaching)",
+      "category": "core",
       "is_heavy": false
     }
   ],
   "classes": [
     {
-      "id": "P11",
+      "id": "C1",
       "name": "ป.1/1",
       "grade_level": 1
     },
     {
-      "id": "P12",
+      "id": "C2",
       "name": "ป.1/2",
       "grade_level": 1
     },
     {
-      "id": "P21",
+      "id": "C3",
       "name": "ป.2/1",
       "grade_level": 2
     },
     {
-      "id": "P22",
+      "id": "C4",
       "name": "ป.2/2",
       "grade_level": 2
     },
     {
-      "id": "P31",
+      "id": "C5",
       "name": "ป.3/1",
       "grade_level": 3
     },
     {
-      "id": "P32",
+      "id": "C6",
       "name": "ป.3/2",
       "grade_level": 3
     },
     {
-      "id": "P41",
+      "id": "C7",
       "name": "ป.4/1",
       "grade_level": 4
     },
     {
-      "id": "P42",
+      "id": "C8",
       "name": "ป.4/2",
       "grade_level": 4
     },
     {
-      "id": "P51",
+      "id": "C9",
       "name": "ป.5/1",
       "grade_level": 5
     },
     {
-      "id": "P52",
+      "id": "C10",
       "name": "ป.5/2",
       "grade_level": 5
     },
     {
-      "id": "P61",
+      "id": "C11",
       "name": "ป.6/1",
       "grade_level": 6
     },
     {
-      "id": "P62",
+      "id": "C12",
       "name": "ป.6/2",
       "grade_level": 6
     }
   ],
   "lesson_blocks": [
     {
-      "id": "LB001",
-      "subject_id": "TH",
-      "teacher_id": "T01",
-      "class_id": "P11",
-      "room_id": "R_P11",
+      "id": "LB1",
+      "subject_id": "S1",
+      "teacher_id": "T1",
+      "class_id": "C1",
+      "room_id": "R_C1",
       "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB002",
-      "subject_id": "MA",
-      "teacher_id": "T01",
-      "class_id": "P11",
-      "room_id": "R_P11",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB003",
-      "subject_id": "SO",
-      "teacher_id": "T01",
-      "class_id": "P11",
-      "room_id": "R_P11",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB004",
-      "subject_id": "HI",
-      "teacher_id": "T01",
-      "class_id": "P11",
-      "room_id": "R_P11",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB005",
-      "subject_id": "TH",
-      "teacher_id": "T02",
-      "class_id": "P12",
-      "room_id": "R_P12",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB006",
-      "subject_id": "MA",
-      "teacher_id": "T02",
-      "class_id": "P12",
-      "room_id": "R_P12",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB007",
-      "subject_id": "SO",
-      "teacher_id": "T02",
-      "class_id": "P12",
-      "room_id": "R_P12",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB008",
-      "subject_id": "HI",
-      "teacher_id": "T02",
-      "class_id": "P12",
-      "room_id": "R_P12",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB009",
-      "subject_id": "TH",
-      "teacher_id": "T03",
-      "class_id": "P21",
-      "room_id": "R_P21",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB010",
-      "subject_id": "MA",
-      "teacher_id": "T03",
-      "class_id": "P21",
-      "room_id": "R_P21",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB011",
-      "subject_id": "SO",
-      "teacher_id": "T03",
-      "class_id": "P21",
-      "room_id": "R_P21",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB012",
-      "subject_id": "HI",
-      "teacher_id": "T03",
-      "class_id": "P21",
-      "room_id": "R_P21",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB013",
-      "subject_id": "TH",
-      "teacher_id": "T04",
-      "class_id": "P22",
-      "room_id": "R_P22",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB014",
-      "subject_id": "MA",
-      "teacher_id": "T04",
-      "class_id": "P22",
-      "room_id": "R_P22",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB015",
-      "subject_id": "SO",
-      "teacher_id": "T04",
-      "class_id": "P22",
-      "room_id": "R_P22",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB016",
-      "subject_id": "HI",
-      "teacher_id": "T04",
-      "class_id": "P22",
-      "room_id": "R_P22",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB017",
-      "subject_id": "TH",
-      "teacher_id": "T05",
-      "class_id": "P31",
-      "room_id": "R_P31",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB018",
-      "subject_id": "MA",
-      "teacher_id": "T05",
-      "class_id": "P31",
-      "room_id": "R_P31",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB019",
-      "subject_id": "SO",
-      "teacher_id": "T05",
-      "class_id": "P31",
-      "room_id": "R_P31",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB020",
-      "subject_id": "HI",
-      "teacher_id": "T05",
-      "class_id": "P31",
-      "room_id": "R_P31",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB021",
-      "subject_id": "TH",
-      "teacher_id": "T06",
-      "class_id": "P32",
-      "room_id": "R_P32",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB022",
-      "subject_id": "MA",
-      "teacher_id": "T06",
-      "class_id": "P32",
-      "room_id": "R_P32",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB023",
-      "subject_id": "SO",
-      "teacher_id": "T06",
-      "class_id": "P32",
-      "room_id": "R_P32",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB024",
-      "subject_id": "HI",
-      "teacher_id": "T06",
-      "class_id": "P32",
-      "room_id": "R_P32",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB025",
-      "subject_id": "MA",
-      "teacher_id": "T07",
-      "class_id": "P41",
-      "room_id": "R_P41",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB026",
-      "subject_id": "MA",
-      "teacher_id": "T07",
-      "class_id": "P42",
-      "room_id": "R_P42",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB027",
-      "subject_id": "SC",
-      "teacher_id": "T07",
-      "class_id": "P41",
-      "room_id": "SCIENCE_LAB",
-      "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB028",
-      "subject_id": "SC",
-      "teacher_id": "T07",
-      "class_id": "P42",
-      "room_id": "SCIENCE_LAB",
+      "id": "LB2",
+      "subject_id": "S2",
+      "teacher_id": "T1",
+      "class_id": "C1",
+      "room_id": "R_C1",
+      "periods_per_week": 5,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB3",
+      "subject_id": "S3",
+      "teacher_id": "T1",
+      "class_id": "C1",
+      "room_id": "R_C1",
       "periods_per_week": 2,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB4",
+      "subject_id": "S4",
+      "teacher_id": "T1",
+      "class_id": "C1",
+      "room_id": "R_C1",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB5",
+      "subject_id": "S1",
+      "teacher_id": "T2",
+      "class_id": "C2",
+      "room_id": "R_C2",
+      "periods_per_week": 5,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB029",
-      "subject_id": "MA",
-      "teacher_id": "T08",
-      "class_id": "P51",
-      "room_id": "R_P51",
+      "id": "LB6",
+      "subject_id": "S2",
+      "teacher_id": "T2",
+      "class_id": "C2",
+      "room_id": "R_C2",
       "periods_per_week": 5,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB030",
-      "subject_id": "MA",
-      "teacher_id": "T08",
-      "class_id": "P52",
-      "room_id": "R_P52",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB031",
-      "subject_id": "SC",
-      "teacher_id": "T08",
-      "class_id": "P51",
-      "room_id": "SCIENCE_LAB",
+      "id": "LB7",
+      "subject_id": "S3",
+      "teacher_id": "T2",
+      "class_id": "C2",
+      "room_id": "R_C2",
       "periods_per_week": 2,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB8",
+      "subject_id": "S4",
+      "teacher_id": "T2",
+      "class_id": "C2",
+      "room_id": "R_C2",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB9",
+      "subject_id": "S1",
+      "teacher_id": "T3",
+      "class_id": "C3",
+      "room_id": "R_C3",
+      "periods_per_week": 5,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB032",
-      "subject_id": "SC",
-      "teacher_id": "T08",
-      "class_id": "P52",
-      "room_id": "SCIENCE_LAB",
+      "id": "LB10",
+      "subject_id": "S2",
+      "teacher_id": "T3",
+      "class_id": "C3",
+      "room_id": "R_C3",
+      "periods_per_week": 5,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB11",
+      "subject_id": "S3",
+      "teacher_id": "T3",
+      "class_id": "C3",
+      "room_id": "R_C3",
       "periods_per_week": 2,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB12",
+      "subject_id": "S4",
+      "teacher_id": "T3",
+      "class_id": "C3",
+      "room_id": "R_C3",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB13",
+      "subject_id": "S1",
+      "teacher_id": "T4",
+      "class_id": "C4",
+      "room_id": "R_C4",
+      "periods_per_week": 5,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB033",
-      "subject_id": "MA",
-      "teacher_id": "T09",
-      "class_id": "P61",
-      "room_id": "R_P61",
+      "id": "LB14",
+      "subject_id": "S2",
+      "teacher_id": "T4",
+      "class_id": "C4",
+      "room_id": "R_C4",
       "periods_per_week": 5,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB034",
-      "subject_id": "MA",
-      "teacher_id": "T09",
-      "class_id": "P62",
-      "room_id": "R_P62",
-      "periods_per_week": 5,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB035",
-      "subject_id": "SC",
-      "teacher_id": "T09",
-      "class_id": "P61",
-      "room_id": "SCIENCE_LAB",
+      "id": "LB15",
+      "subject_id": "S3",
+      "teacher_id": "T4",
+      "class_id": "C4",
+      "room_id": "R_C4",
       "periods_per_week": 2,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB16",
+      "subject_id": "S4",
+      "teacher_id": "T4",
+      "class_id": "C4",
+      "room_id": "R_C4",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB17",
+      "subject_id": "S1",
+      "teacher_id": "T5",
+      "class_id": "C5",
+      "room_id": "R_C5",
+      "periods_per_week": 5,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB036",
-      "subject_id": "SC",
-      "teacher_id": "T09",
-      "class_id": "P62",
-      "room_id": "SCIENCE_LAB",
+      "id": "LB18",
+      "subject_id": "S2",
+      "teacher_id": "T5",
+      "class_id": "C5",
+      "room_id": "R_C5",
+      "periods_per_week": 5,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB19",
+      "subject_id": "S3",
+      "teacher_id": "T5",
+      "class_id": "C5",
+      "room_id": "R_C5",
       "periods_per_week": 2,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB20",
+      "subject_id": "S4",
+      "teacher_id": "T5",
+      "class_id": "C5",
+      "room_id": "R_C5",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB21",
+      "subject_id": "S1",
+      "teacher_id": "T6",
+      "class_id": "C6",
+      "room_id": "R_C6",
+      "periods_per_week": 5,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB037",
-      "subject_id": "TH",
-      "teacher_id": "T11",
-      "class_id": "P41",
-      "room_id": "R_P41",
+      "id": "LB22",
+      "subject_id": "S2",
+      "teacher_id": "T6",
+      "class_id": "C6",
+      "room_id": "R_C6",
       "periods_per_week": 5,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB038",
-      "subject_id": "TH",
-      "teacher_id": "T11",
-      "class_id": "P42",
-      "room_id": "R_P42",
+      "id": "LB23",
+      "subject_id": "S3",
+      "teacher_id": "T6",
+      "class_id": "C6",
+      "room_id": "R_C6",
+      "periods_per_week": 2,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB24",
+      "subject_id": "S4",
+      "teacher_id": "T6",
+      "class_id": "C6",
+      "room_id": "R_C6",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB25",
+      "subject_id": "S2",
+      "teacher_id": "T7",
+      "class_id": "C7",
+      "room_id": "R_C7",
+      "periods_per_week": 5,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB26",
+      "subject_id": "S2",
+      "teacher_id": "T7",
+      "class_id": "C8",
+      "room_id": "R_C8",
+      "periods_per_week": 5,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB27",
+      "subject_id": "S2",
+      "teacher_id": "T8",
+      "class_id": "C9",
+      "room_id": "R_C9",
+      "periods_per_week": 5,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB28",
+      "subject_id": "S2",
+      "teacher_id": "T8",
+      "class_id": "C10",
+      "room_id": "R_C10",
+      "periods_per_week": 5,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB29",
+      "subject_id": "S2",
+      "teacher_id": "T9",
+      "class_id": "C11",
+      "room_id": "R_C11",
+      "periods_per_week": 5,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB30",
+      "subject_id": "S2",
+      "teacher_id": "T9",
+      "class_id": "C12",
+      "room_id": "R_C12",
+      "periods_per_week": 5,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB31",
+      "subject_id": "S1",
+      "teacher_id": "T10",
+      "class_id": "C7",
+      "room_id": "R_C7",
       "periods_per_week": 5,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB039",
-      "subject_id": "SO",
-      "teacher_id": "T11",
-      "class_id": "P41",
-      "room_id": "R_P41",
+      "id": "LB32",
+      "subject_id": "S3",
+      "teacher_id": "T10",
+      "class_id": "C7",
+      "room_id": "R_C7",
       "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB040",
-      "subject_id": "SO",
-      "teacher_id": "T11",
-      "class_id": "P42",
-      "room_id": "R_P42",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB041",
-      "subject_id": "HI",
-      "teacher_id": "T11",
-      "class_id": "P41",
-      "room_id": "R_P41",
+      "id": "LB33",
+      "subject_id": "S4",
+      "teacher_id": "T10",
+      "class_id": "C7",
+      "room_id": "R_C7",
       "periods_per_week": 1,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB042",
-      "subject_id": "HI",
-      "teacher_id": "T11",
-      "class_id": "P42",
-      "room_id": "R_P42",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB043",
-      "subject_id": "TH",
-      "teacher_id": "T12",
-      "class_id": "P51",
-      "room_id": "R_P51",
+      "id": "LB34",
+      "subject_id": "S1",
+      "teacher_id": "T10",
+      "class_id": "C8",
+      "room_id": "R_C8",
       "periods_per_week": 5,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB044",
-      "subject_id": "TH",
-      "teacher_id": "T12",
-      "class_id": "P52",
-      "room_id": "R_P52",
+      "id": "LB35",
+      "subject_id": "S3",
+      "teacher_id": "T10",
+      "class_id": "C8",
+      "room_id": "R_C8",
+      "periods_per_week": 2,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB36",
+      "subject_id": "S4",
+      "teacher_id": "T10",
+      "class_id": "C8",
+      "room_id": "R_C8",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB37",
+      "subject_id": "S1",
+      "teacher_id": "T11",
+      "class_id": "C9",
+      "room_id": "R_C9",
       "periods_per_week": 5,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB045",
-      "subject_id": "SO",
-      "teacher_id": "T12",
-      "class_id": "P51",
-      "room_id": "R_P51",
+      "id": "LB38",
+      "subject_id": "S3",
+      "teacher_id": "T11",
+      "class_id": "C9",
+      "room_id": "R_C9",
       "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB046",
-      "subject_id": "SO",
-      "teacher_id": "T12",
-      "class_id": "P52",
-      "room_id": "R_P52",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB047",
-      "subject_id": "HI",
-      "teacher_id": "T12",
-      "class_id": "P51",
-      "room_id": "R_P51",
+      "id": "LB39",
+      "subject_id": "S4",
+      "teacher_id": "T11",
+      "class_id": "C9",
+      "room_id": "R_C9",
       "periods_per_week": 1,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB048",
-      "subject_id": "HI",
-      "teacher_id": "T12",
-      "class_id": "P52",
-      "room_id": "R_P52",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB049",
-      "subject_id": "TH",
-      "teacher_id": "T13",
-      "class_id": "P61",
-      "room_id": "R_P61",
+      "id": "LB40",
+      "subject_id": "S1",
+      "teacher_id": "T11",
+      "class_id": "C10",
+      "room_id": "R_C10",
       "periods_per_week": 5,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB050",
-      "subject_id": "TH",
-      "teacher_id": "T13",
-      "class_id": "P62",
-      "room_id": "R_P62",
+      "id": "LB41",
+      "subject_id": "S3",
+      "teacher_id": "T11",
+      "class_id": "C10",
+      "room_id": "R_C10",
+      "periods_per_week": 2,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB42",
+      "subject_id": "S4",
+      "teacher_id": "T11",
+      "class_id": "C10",
+      "room_id": "R_C10",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB43",
+      "subject_id": "S1",
+      "teacher_id": "T12",
+      "class_id": "C11",
+      "room_id": "R_C11",
       "periods_per_week": 5,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB051",
-      "subject_id": "SO",
-      "teacher_id": "T13",
-      "class_id": "P61",
-      "room_id": "R_P61",
+      "id": "LB44",
+      "subject_id": "S3",
+      "teacher_id": "T12",
+      "class_id": "C11",
+      "room_id": "R_C11",
       "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB052",
-      "subject_id": "SO",
-      "teacher_id": "T13",
-      "class_id": "P62",
-      "room_id": "R_P62",
+      "id": "LB45",
+      "subject_id": "S4",
+      "teacher_id": "T12",
+      "class_id": "C11",
+      "room_id": "R_C11",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB46",
+      "subject_id": "S1",
+      "teacher_id": "T12",
+      "class_id": "C12",
+      "room_id": "R_C12",
+      "periods_per_week": 5,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB47",
+      "subject_id": "S3",
+      "teacher_id": "T12",
+      "class_id": "C12",
+      "room_id": "R_C12",
       "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB053",
-      "subject_id": "HI",
-      "teacher_id": "T13",
-      "class_id": "P61",
-      "room_id": "R_P61",
+      "id": "LB48",
+      "subject_id": "S4",
+      "teacher_id": "T12",
+      "class_id": "C12",
+      "room_id": "R_C12",
       "periods_per_week": 1,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB054",
-      "subject_id": "HI",
+      "id": "LB49",
+      "subject_id": "S5",
       "teacher_id": "T13",
-      "class_id": "P62",
-      "room_id": "R_P62",
-      "periods_per_week": 1,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB055",
-      "subject_id": "EN",
-      "teacher_id": "T15",
-      "class_id": "P11",
-      "room_id": "R_P11",
+      "class_id": "C7",
+      "room_id": "R_C7",
       "periods_per_week": 3,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB056",
-      "subject_id": "EN",
-      "teacher_id": "T15",
-      "class_id": "P12",
-      "room_id": "R_P12",
+      "id": "LB50",
+      "subject_id": "S6",
+      "teacher_id": "T13",
+      "class_id": "C7",
+      "room_id": "SR_1",
+      "periods_per_week": 2,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
+    },
+    {
+      "id": "LB51",
+      "subject_id": "S5",
+      "teacher_id": "T13",
+      "class_id": "C8",
+      "room_id": "R_C8",
       "periods_per_week": 3,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB057",
-      "subject_id": "EN",
-      "teacher_id": "T15",
-      "class_id": "P21",
-      "room_id": "R_P21",
-      "periods_per_week": 3,
-      "is_double_period": false,
+      "id": "LB52",
+      "subject_id": "S6",
+      "teacher_id": "T13",
+      "class_id": "C8",
+      "room_id": "SR_1",
+      "periods_per_week": 2,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
     },
     {
-      "id": "LB058",
-      "subject_id": "EN",
-      "teacher_id": "T15",
-      "class_id": "P22",
-      "room_id": "R_P22",
-      "periods_per_week": 3,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB059",
-      "subject_id": "EN",
-      "teacher_id": "T15",
-      "class_id": "P31",
-      "room_id": "R_P31",
-      "periods_per_week": 3,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB060",
-      "subject_id": "EN",
-      "teacher_id": "T15",
-      "class_id": "P32",
-      "room_id": "R_P32",
-      "periods_per_week": 3,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB061",
-      "subject_id": "EN",
+      "id": "LB53",
+      "subject_id": "S5",
       "teacher_id": "T14",
-      "class_id": "P51",
-      "room_id": "R_P51",
+      "class_id": "C9",
+      "room_id": "R_C9",
       "periods_per_week": 3,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB062",
-      "subject_id": "EN",
+      "id": "LB54",
+      "subject_id": "S6",
       "teacher_id": "T14",
-      "class_id": "P52",
-      "room_id": "R_P52",
-      "periods_per_week": 3,
-      "is_double_period": false,
+      "class_id": "C9",
+      "room_id": "SR_1",
+      "periods_per_week": 2,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
     },
     {
-      "id": "LB063",
-      "subject_id": "EN",
+      "id": "LB55",
+      "subject_id": "S5",
       "teacher_id": "T14",
-      "class_id": "P61",
-      "room_id": "R_P61",
+      "class_id": "C10",
+      "room_id": "R_C10",
       "periods_per_week": 3,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB064",
-      "subject_id": "EN",
+      "id": "LB56",
+      "subject_id": "S6",
       "teacher_id": "T14",
-      "class_id": "P62",
-      "room_id": "R_P62",
+      "class_id": "C10",
+      "room_id": "SR_1",
+      "periods_per_week": 2,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
+    },
+    {
+      "id": "LB57",
+      "subject_id": "S5",
+      "teacher_id": "T15",
+      "class_id": "C11",
+      "room_id": "R_C11",
       "periods_per_week": 3,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": null
     },
     {
-      "id": "LB065",
-      "subject_id": "EN",
+      "id": "LB58",
+      "subject_id": "S6",
+      "teacher_id": "T15",
+      "class_id": "C11",
+      "room_id": "SR_1",
+      "periods_per_week": 2,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
+    },
+    {
+      "id": "LB59",
+      "subject_id": "S5",
+      "teacher_id": "T15",
+      "class_id": "C12",
+      "room_id": "R_C12",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB60",
+      "subject_id": "S6",
+      "teacher_id": "T15",
+      "class_id": "C12",
+      "room_id": "SR_1",
+      "periods_per_week": 2,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
+    },
+    {
+      "id": "LB61",
+      "subject_id": "S5",
       "teacher_id": "T16",
-      "class_id": "P41",
-      "room_id": "R_P41",
-      "periods_per_week": 3,
-      "is_double_period": false,
+      "class_id": "C1",
+      "room_id": "SR_1",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
     },
     {
-      "id": "LB066",
-      "subject_id": "EN",
+      "id": "LB62",
+      "subject_id": "S5",
       "teacher_id": "T16",
-      "class_id": "P42",
-      "room_id": "R_P42",
-      "periods_per_week": 3,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB067",
-      "subject_id": "EN_CO",
-      "teacher_id": "T14",
-      "class_id": "P41",
-      "room_id": "R_P41",
+      "class_id": "C2",
+      "room_id": "SR_1",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
     },
     {
-      "id": "LB068",
-      "subject_id": "EN_CO",
-      "teacher_id": "T14",
-      "class_id": "P42",
-      "room_id": "R_P42",
+      "id": "LB63",
+      "subject_id": "S5",
+      "teacher_id": "T16",
+      "class_id": "C3",
+      "room_id": "SR_1",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
     },
     {
-      "id": "LB069",
-      "subject_id": "EN_CO",
-      "teacher_id": "T14",
-      "class_id": "P51",
-      "room_id": "R_P51",
+      "id": "LB64",
+      "subject_id": "S5",
+      "teacher_id": "T16",
+      "class_id": "C4",
+      "room_id": "SR_1",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
     },
     {
-      "id": "LB070",
-      "subject_id": "EN_CO",
-      "teacher_id": "T14",
-      "class_id": "P52",
-      "room_id": "R_P52",
+      "id": "LB65",
+      "subject_id": "S5",
+      "teacher_id": "T16",
+      "class_id": "C5",
+      "room_id": "SR_1",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
     },
     {
-      "id": "LB071",
-      "subject_id": "EN_CO",
-      "teacher_id": "T14",
-      "class_id": "P61",
-      "room_id": "R_P61",
+      "id": "LB66",
+      "subject_id": "S5",
+      "teacher_id": "T16",
+      "class_id": "C6",
+      "room_id": "SR_1",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องปฏิบัติการวิทย์"
     },
     {
-      "id": "LB072",
-      "subject_id": "EN_CO",
-      "teacher_id": "T14",
-      "class_id": "P62",
-      "room_id": "R_P62",
+      "id": "LB67",
+      "subject_id": "S7",
+      "teacher_id": "T17",
+      "class_id": "C1",
+      "room_id": "SR_2",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB073",
-      "subject_id": "PE",
+      "id": "LB68",
+      "subject_id": "S7",
       "teacher_id": "T17",
-      "class_id": "P11",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C2",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB074",
-      "subject_id": "PE",
+      "id": "LB69",
+      "subject_id": "S7",
       "teacher_id": "T17",
-      "class_id": "P12",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C3",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB075",
-      "subject_id": "PE",
+      "id": "LB70",
+      "subject_id": "S7",
       "teacher_id": "T17",
-      "class_id": "P21",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C4",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB076",
-      "subject_id": "PE",
+      "id": "LB71",
+      "subject_id": "S7",
       "teacher_id": "T17",
-      "class_id": "P22",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C5",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB077",
-      "subject_id": "PE",
+      "id": "LB72",
+      "subject_id": "S7",
       "teacher_id": "T17",
-      "class_id": "P31",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C6",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB078",
-      "subject_id": "PE",
-      "teacher_id": "T17",
-      "class_id": "P32",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
-      "is_fixed": false,
-      "fixed_day": null,
-      "fixed_period": null
-    },
-    {
-      "id": "LB079",
-      "subject_id": "PE",
+      "id": "LB73",
+      "subject_id": "S7",
       "teacher_id": "T18",
-      "class_id": "P41",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C7",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB080",
-      "subject_id": "PE",
+      "id": "LB74",
+      "subject_id": "S7",
       "teacher_id": "T18",
-      "class_id": "P42",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C8",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB081",
-      "subject_id": "PE",
+      "id": "LB75",
+      "subject_id": "S7",
       "teacher_id": "T18",
-      "class_id": "P51",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C9",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB082",
-      "subject_id": "PE",
+      "id": "LB76",
+      "subject_id": "S7",
       "teacher_id": "T18",
-      "class_id": "P52",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C10",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB083",
-      "subject_id": "PE",
+      "id": "LB77",
+      "subject_id": "S7",
       "teacher_id": "T18",
-      "class_id": "P61",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C11",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB084",
-      "subject_id": "PE",
+      "id": "LB78",
+      "subject_id": "S7",
       "teacher_id": "T18",
-      "class_id": "P62",
-      "room_id": "GYM_FIELD",
-      "periods_per_week": 2,
-      "is_double_period": false,
+      "class_id": "C12",
+      "room_id": "SR_2",
+      "periods_per_week": 1,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องคอมพิวเตอร์"
     },
     {
-      "id": "LB085",
-      "subject_id": "AR",
+      "id": "LB79",
+      "subject_id": "S8",
       "teacher_id": "T19",
-      "class_id": "P11",
-      "room_id": "R_P11",
+      "class_id": "C1",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB086",
-      "subject_id": "AR",
+      "id": "LB80",
+      "subject_id": "S8",
       "teacher_id": "T19",
-      "class_id": "P12",
-      "room_id": "R_P12",
+      "class_id": "C2",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB087",
-      "subject_id": "AR",
+      "id": "LB81",
+      "subject_id": "S8",
       "teacher_id": "T19",
-      "class_id": "P21",
-      "room_id": "R_P21",
+      "class_id": "C3",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB088",
-      "subject_id": "AR",
+      "id": "LB82",
+      "subject_id": "S8",
       "teacher_id": "T19",
-      "class_id": "P22",
-      "room_id": "R_P22",
+      "class_id": "C4",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB089",
-      "subject_id": "AR",
+      "id": "LB83",
+      "subject_id": "S8",
       "teacher_id": "T19",
-      "class_id": "P31",
-      "room_id": "R_P31",
+      "class_id": "C5",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB090",
-      "subject_id": "AR",
+      "id": "LB84",
+      "subject_id": "S8",
       "teacher_id": "T19",
-      "class_id": "P32",
-      "room_id": "R_P32",
+      "class_id": "C6",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB091",
-      "subject_id": "AR",
+      "id": "LB85",
+      "subject_id": "S8",
       "teacher_id": "T20",
-      "class_id": "P41",
-      "room_id": "R_P41",
+      "class_id": "C7",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB092",
-      "subject_id": "AR",
+      "id": "LB86",
+      "subject_id": "S8",
       "teacher_id": "T20",
-      "class_id": "P42",
-      "room_id": "R_P42",
+      "class_id": "C8",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB093",
-      "subject_id": "AR",
+      "id": "LB87",
+      "subject_id": "S8",
       "teacher_id": "T20",
-      "class_id": "P51",
-      "room_id": "R_P51",
+      "class_id": "C9",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB094",
-      "subject_id": "AR",
+      "id": "LB88",
+      "subject_id": "S8",
       "teacher_id": "T20",
-      "class_id": "P52",
-      "room_id": "R_P52",
+      "class_id": "C10",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB095",
-      "subject_id": "AR",
+      "id": "LB89",
+      "subject_id": "S8",
       "teacher_id": "T20",
-      "class_id": "P61",
-      "room_id": "R_P61",
+      "class_id": "C11",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB096",
-      "subject_id": "AR",
+      "id": "LB90",
+      "subject_id": "S8",
       "teacher_id": "T20",
-      "class_id": "P62",
-      "room_id": "R_P62",
+      "class_id": "C12",
+      "room_id": "SR_3",
       "periods_per_week": 2,
       "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องศิลปะ"
     },
     {
-      "id": "LB097",
-      "subject_id": "WE",
+      "id": "LB91",
+      "subject_id": "S9",
       "teacher_id": "T21",
-      "class_id": "P11",
-      "room_id": "R_P11",
+      "class_id": "C1",
+      "room_id": "SR_4",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
     },
     {
-      "id": "LB098",
-      "subject_id": "WE",
+      "id": "LB92",
+      "subject_id": "S9",
       "teacher_id": "T21",
-      "class_id": "P12",
-      "room_id": "R_P12",
+      "class_id": "C2",
+      "room_id": "SR_4",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
     },
     {
-      "id": "LB099",
-      "subject_id": "WE",
+      "id": "LB93",
+      "subject_id": "S9",
       "teacher_id": "T21",
-      "class_id": "P21",
-      "room_id": "R_P21",
+      "class_id": "C3",
+      "room_id": "SR_4",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
+    },
+    {
+      "id": "LB94",
+      "subject_id": "S9",
+      "teacher_id": "T21",
+      "class_id": "C4",
+      "room_id": "SR_4",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
+    },
+    {
+      "id": "LB95",
+      "subject_id": "S9",
+      "teacher_id": "T21",
+      "class_id": "C5",
+      "room_id": "SR_4",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
+    },
+    {
+      "id": "LB96",
+      "subject_id": "S9",
+      "teacher_id": "T21",
+      "class_id": "C6",
+      "room_id": "SR_4",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
+    },
+    {
+      "id": "LB97",
+      "subject_id": "S9",
+      "teacher_id": "T21",
+      "class_id": "C7",
+      "room_id": "SR_4",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
+    },
+    {
+      "id": "LB98",
+      "subject_id": "S9",
+      "teacher_id": "T21",
+      "class_id": "C8",
+      "room_id": "SR_4",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
+    },
+    {
+      "id": "LB99",
+      "subject_id": "S9",
+      "teacher_id": "T21",
+      "class_id": "C9",
+      "room_id": "SR_4",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
     },
     {
       "id": "LB100",
-      "subject_id": "WE",
+      "subject_id": "S9",
       "teacher_id": "T21",
-      "class_id": "P22",
-      "room_id": "R_P22",
+      "class_id": "C10",
+      "room_id": "SR_4",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
     },
     {
       "id": "LB101",
-      "subject_id": "WE",
+      "subject_id": "S9",
       "teacher_id": "T21",
-      "class_id": "P31",
-      "room_id": "R_P31",
+      "class_id": "C11",
+      "room_id": "SR_4",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
     },
     {
       "id": "LB102",
-      "subject_id": "WE",
+      "subject_id": "S9",
       "teacher_id": "T21",
-      "class_id": "P32",
-      "room_id": "R_P32",
+      "class_id": "C12",
+      "room_id": "SR_4",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องดนตรี"
     },
     {
       "id": "LB103",
-      "subject_id": "WE",
-      "teacher_id": "T21",
-      "class_id": "P41",
-      "room_id": "R_P41",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T22",
+      "class_id": "C1",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB104",
-      "subject_id": "WE",
-      "teacher_id": "T21",
-      "class_id": "P42",
-      "room_id": "R_P42",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T22",
+      "class_id": "C2",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB105",
-      "subject_id": "WE",
-      "teacher_id": "T21",
-      "class_id": "P51",
-      "room_id": "R_P51",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T22",
+      "class_id": "C3",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB106",
-      "subject_id": "WE",
-      "teacher_id": "T21",
-      "class_id": "P52",
-      "room_id": "R_P52",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T22",
+      "class_id": "C4",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB107",
-      "subject_id": "WE",
-      "teacher_id": "T21",
-      "class_id": "P61",
-      "room_id": "R_P61",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T22",
+      "class_id": "C5",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB108",
-      "subject_id": "WE",
-      "teacher_id": "T21",
-      "class_id": "P62",
-      "room_id": "R_P62",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T22",
+      "class_id": "C6",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB109",
-      "subject_id": "ICT",
-      "teacher_id": "T22",
-      "class_id": "P11",
-      "room_id": "COMPUTER_LAB",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T23",
+      "class_id": "C7",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB110",
-      "subject_id": "ICT",
-      "teacher_id": "T22",
-      "class_id": "P12",
-      "room_id": "COMPUTER_LAB",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T23",
+      "class_id": "C8",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB111",
-      "subject_id": "ICT",
-      "teacher_id": "T22",
-      "class_id": "P21",
-      "room_id": "COMPUTER_LAB",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T23",
+      "class_id": "C9",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB112",
-      "subject_id": "ICT",
-      "teacher_id": "T22",
-      "class_id": "P22",
-      "room_id": "COMPUTER_LAB",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T23",
+      "class_id": "C10",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB113",
-      "subject_id": "ICT",
-      "teacher_id": "T22",
-      "class_id": "P31",
-      "room_id": "COMPUTER_LAB",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T23",
+      "class_id": "C11",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB114",
-      "subject_id": "ICT",
-      "teacher_id": "T22",
-      "class_id": "P32",
-      "room_id": "COMPUTER_LAB",
-      "periods_per_week": 1,
+      "subject_id": "S10",
+      "teacher_id": "T23",
+      "class_id": "C12",
+      "room_id": "SR_5",
+      "periods_per_week": 2,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "สนามพละ"
     },
     {
       "id": "LB115",
-      "subject_id": "ICT",
-      "teacher_id": "T23",
-      "class_id": "P41",
-      "room_id": "COMPUTER_LAB",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C1",
+      "room_id": "SR_6",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
     },
     {
       "id": "LB116",
-      "subject_id": "ICT",
-      "teacher_id": "T23",
-      "class_id": "P42",
-      "room_id": "COMPUTER_LAB",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C2",
+      "room_id": "SR_6",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
     },
     {
       "id": "LB117",
-      "subject_id": "ICT",
-      "teacher_id": "T23",
-      "class_id": "P51",
-      "room_id": "COMPUTER_LAB",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C3",
+      "room_id": "SR_6",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
     },
     {
       "id": "LB118",
-      "subject_id": "ICT",
-      "teacher_id": "T23",
-      "class_id": "P52",
-      "room_id": "COMPUTER_LAB",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C4",
+      "room_id": "SR_6",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
     },
     {
       "id": "LB119",
-      "subject_id": "ICT",
-      "teacher_id": "T23",
-      "class_id": "P61",
-      "room_id": "COMPUTER_LAB",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C5",
+      "room_id": "SR_6",
       "periods_per_week": 1,
-      "is_double_period": false,
+      "is_double_period": true,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
     },
     {
       "id": "LB120",
-      "subject_id": "ICT",
-      "teacher_id": "T23",
-      "class_id": "P62",
-      "room_id": "COMPUTER_LAB",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C6",
+      "room_id": "SR_6",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
+    },
+    {
+      "id": "LB121",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C7",
+      "room_id": "SR_6",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
+    },
+    {
+      "id": "LB122",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C8",
+      "room_id": "SR_6",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
+    },
+    {
+      "id": "LB123",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C9",
+      "room_id": "SR_6",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
+    },
+    {
+      "id": "LB124",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C10",
+      "room_id": "SR_6",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
+    },
+    {
+      "id": "LB125",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C11",
+      "room_id": "SR_6",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
+    },
+    {
+      "id": "LB126",
+      "subject_id": "S11",
+      "teacher_id": "T24",
+      "class_id": "C12",
+      "room_id": "SR_6",
+      "periods_per_week": 1,
+      "is_double_period": true,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องยุววัย"
+    },
+    {
+      "id": "LB127",
+      "subject_id": "S12",
+      "teacher_id": "T25",
+      "class_id": "C1",
+      "room_id": "R_C1",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB128",
+      "subject_id": "S13",
+      "teacher_id": "T25",
+      "class_id": "C1",
+      "room_id": "SR_7",
       "periods_per_week": 1,
       "is_double_period": false,
       "is_fixed": false,
       "fixed_day": null,
-      "fixed_period": null
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB129",
+      "subject_id": "S12",
+      "teacher_id": "T25",
+      "class_id": "C2",
+      "room_id": "R_C2",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB130",
+      "subject_id": "S13",
+      "teacher_id": "T25",
+      "class_id": "C2",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB131",
+      "subject_id": "S12",
+      "teacher_id": "T25",
+      "class_id": "C3",
+      "room_id": "R_C3",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB132",
+      "subject_id": "S13",
+      "teacher_id": "T25",
+      "class_id": "C3",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB133",
+      "subject_id": "S12",
+      "teacher_id": "T25",
+      "class_id": "C4",
+      "room_id": "R_C4",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB134",
+      "subject_id": "S13",
+      "teacher_id": "T25",
+      "class_id": "C4",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB135",
+      "subject_id": "S12",
+      "teacher_id": "T25",
+      "class_id": "C5",
+      "room_id": "R_C5",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB136",
+      "subject_id": "S13",
+      "teacher_id": "T25",
+      "class_id": "C5",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB137",
+      "subject_id": "S12",
+      "teacher_id": "T25",
+      "class_id": "C6",
+      "room_id": "R_C6",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB138",
+      "subject_id": "S13",
+      "teacher_id": "T25",
+      "class_id": "C6",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB139",
+      "subject_id": "S12",
+      "teacher_id": "T26",
+      "class_id": "C7",
+      "room_id": "R_C7",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB140",
+      "subject_id": "S13",
+      "teacher_id": "T26",
+      "class_id": "C7",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB141",
+      "subject_id": "S12",
+      "teacher_id": "T26",
+      "class_id": "C8",
+      "room_id": "R_C8",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB142",
+      "subject_id": "S13",
+      "teacher_id": "T26",
+      "class_id": "C8",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB143",
+      "subject_id": "S12",
+      "teacher_id": "T26",
+      "class_id": "C9",
+      "room_id": "R_C9",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB144",
+      "subject_id": "S13",
+      "teacher_id": "T26",
+      "class_id": "C9",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB145",
+      "subject_id": "S12",
+      "teacher_id": "T26",
+      "class_id": "C10",
+      "room_id": "R_C10",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB146",
+      "subject_id": "S13",
+      "teacher_id": "T26",
+      "class_id": "C10",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB147",
+      "subject_id": "S12",
+      "teacher_id": "T26",
+      "class_id": "C11",
+      "room_id": "R_C11",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB148",
+      "subject_id": "S13",
+      "teacher_id": "T26",
+      "class_id": "C11",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB149",
+      "subject_id": "S12",
+      "teacher_id": "T26",
+      "class_id": "C12",
+      "room_id": "R_C12",
+      "periods_per_week": 3,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB150",
+      "subject_id": "S13",
+      "teacher_id": "T26",
+      "class_id": "C12",
+      "room_id": "SR_7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": "ห้องภาษา"
+    },
+    {
+      "id": "LB151",
+      "subject_id": "S14",
+      "teacher_id": "T27",
+      "class_id": "C7",
+      "room_id": "R_C7",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB152",
+      "subject_id": "S14",
+      "teacher_id": "T27",
+      "class_id": "C8",
+      "room_id": "R_C8",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB153",
+      "subject_id": "S14",
+      "teacher_id": "T27",
+      "class_id": "C9",
+      "room_id": "R_C9",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB154",
+      "subject_id": "S14",
+      "teacher_id": "T27",
+      "class_id": "C10",
+      "room_id": "R_C10",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB155",
+      "subject_id": "S14",
+      "teacher_id": "T27",
+      "class_id": "C11",
+      "room_id": "R_C11",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
+    },
+    {
+      "id": "LB156",
+      "subject_id": "S14",
+      "teacher_id": "T27",
+      "class_id": "C12",
+      "room_id": "R_C12",
+      "periods_per_week": 1,
+      "is_double_period": false,
+      "is_fixed": false,
+      "fixed_day": null,
+      "fixed_period": null,
+      "special_room_name": null
     }
   ],
   "fixed_slots": [
     {
       "id": "FS1",
-      "name": "โฮมรูม",
+      "name": "โฮมรูม (Home Room)",
       "slot_type": "homeroom",
       "day": 1,
       "period": 1,
@@ -1918,6 +2557,14 @@
     },
     {
       "id": "FS2",
+      "name": "รวมชั้น (Assembly)",
+      "slot_type": "assembly",
+      "day": 1,
+      "period": 2,
+      "class_ids": []
+    },
+    {
+      "id": "FS3",
       "name": "ลูกเสือ-เนตรนารี",
       "slot_type": "scout",
       "day": 3,
@@ -1925,25 +2572,43 @@
       "class_ids": []
     },
     {
-      "id": "FS3",
-      "name": "ชุมนุม",
+      "id": "FS4",
+      "name": "ชุมนุม (Club)",
       "slot_type": "club",
       "day": 5,
       "period": 6,
       "class_ids": []
+    },
+    {
+      "id": "FS5",
+      "name": "กิจกรรมพัฒนาผู้เรียน",
+      "slot_type": "activity",
+      "day": 5,
+      "period": 5,
+      "class_ids": [
+        "C11"
+      ]
+    },
+    {
+      "id": "FS6",
+      "name": "กิจกรรมพัฒนาผู้เรียน",
+      "slot_type": "activity",
+      "day": 5,
+      "period": 5,
+      "class_ids": [
+        "C12"
+      ]
     }
   ],
   "schedule_config": {
     "days_per_week": 5,
-    "periods_per_day": 7,
+    "periods_per_day": 8,
     "lunch_periods": [
       4
     ],
-    "assembly_slots": [
-      "1-1"
-    ],
+    "assembly_slots": [],
     "max_consecutive_teaching": 4,
     "pe_hot_periods": []
   },
-  "solver_time_limit_seconds": 5.0
+  "solver_time_limit_seconds": 10.0
 }

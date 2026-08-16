@@ -6,9 +6,16 @@ import ScheduleBlocksStep from './pages/ScheduleBlocksStep.jsx'
 import TeacherWorkloadStep from './pages/TeacherWorkloadStep.jsx'
 import VerificationStep from './pages/VerificationStep.jsx'
 import TimetableView from './pages/TimetableView.jsx'
+import PrintStudio from './pages/PrintStudio.jsx'
+import PublicViewerPage from './pages/PublicViewerPage.jsx'
 
 function AppContent() {
   const { activeStep } = useApp()
+
+  // Public viewer route: /view?d=<base64> — standalone, no AppContext needed
+  if (window.location.pathname === '/view') {
+    return <PublicViewerPage />
+  }
 
   return (
     <Layout>
@@ -18,6 +25,7 @@ function AppContent() {
       {activeStep === 3 && <TeacherWorkloadStep />}
       {activeStep === 4 && <VerificationStep />}
       {activeStep === 5 && <TimetableView />}
+      {activeStep === 6 && <PrintStudio />}
     </Layout>
   )
 }

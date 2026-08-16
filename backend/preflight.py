@@ -25,13 +25,19 @@ from models import (
     TeacherOverload,
     TimetableRequest,
 )
+from utils import (
+    time_to_minutes as _time_to_minutes,
+    get_periods_for_block_on_day,
+    filter_study_periods,
+    filter_lunch_periods,
+    is_in_lunch_window,
+)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-def _time_to_minutes(hhmm: str) -> int:
-    parts = hhmm.split(":")
-    return int(parts[0]) * 60 + int(parts[1])
+# Re-export for backward compatibility with any code that imports from preflight
+_time_to_minutes = _time_to_minutes
 
 
 def _build_class_to_block(request: TimetableRequest) -> dict[str, str]:
@@ -61,38 +67,25 @@ def _valid_periods_for_day(
     blk: ScheduleBlock, day: int
 ) -> list[int]:
     """Return STUDY period numbers for a given day in a block (per-day aware)."""
-    if not blk.apply_to_all_days and blk.periods_by_day:
-        day_periods = blk.periods_by_day.get(str(day), blk.periods)
-    else:
-        day_periods = blk.periods
-    return [p.period_no for p in day_periods if p.type == PeriodType.STUDY]
+    return filter_study_periods(get_periods_for_block_on_day(blk, day))
 
 
 def _lunch_periods_for_day(
     blk: ScheduleBlock, day: int
 ) -> list[int]:
-    if not blk.apply_to_all_days and blk.periods_by_day:
-        day_periods = blk.periods_by_day.get(str(day), blk.periods)
-    else:
-        day_periods = blk.periods
-    return [p.period_no for p in day_periods if p.type == PeriodType.LUNCH]
+    return filter_lunch_periods(get_periods_for_block_on_day(blk, day))
 
 
 def _lunch_periods_in_window(blk: ScheduleBlock, day: int) -> list[int]:
     """Lunch periods that fall in the 11:00-13:30 window (matches solver)."""
-    LUNCH_START = 11 * 60
-    LUNCH_END = 13 * 60 + 30
-    if not blk.apply_to_all_days and blk.periods_by_day:
-        day_periods = blk.periods_by_day.get(str(day), blk.periods)
-    else:
-        day_periods = blk.periods
+    day_periods = get_periods_for_block_on_day(blk, day)
     out: list[int] = []
     for p in day_periods:
         if p.type != PeriodType.LUNCH:
             continue
         s = _time_to_minutes(p.start_time)
         e = _time_to_minutes(p.end_time)
-        if s >= LUNCH_START and e <= LUNCH_END:
+        if is_in_lunch_window(s, e):
             out.append(p.period_no)
     return out
 
@@ -226,10 +219,35 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
     class_to_block = _build_class_to_block(request)
     assembly_set, fixed_slots_per_class = _build_assembly_and_class_blocks(request)
 
-    # ── 1. Class capacity ────────────────────────────────────────────────
-    # For each class: sum(periods_per_week) of its lesson blocks must be
-    # <= (study periods per day * days_per_week) - fixed activity slots
-    # affecting that class.
+    _check_class_capacity(
+        request, report, class_by_id, class_to_block, block_by_id,
+        fixed_slots_per_class, assembly_set,
+    )
+    _check_teacher_overloads(
+        request, report, class_to_block, block_by_id,
+        assembly_set, fixed_slots_per_class,
+    )
+    _check_room_overloads(
+        request, report, room_by_id, assembly_set,
+    )
+    _check_fixed_slot_conflicts(
+        request, report, teacher_by_id, class_to_block, block_by_id,
+        assembly_set, fixed_slots_per_class,
+    )
+
+    return report
+
+
+def _check_class_capacity(
+    request: TimetableRequest,
+    report: DiagnosticsReport,
+    class_by_id: dict,
+    class_to_block: dict[str, str],
+    block_by_id: dict,
+    fixed_slots_per_class: dict[str, set],
+    assembly_set: set,
+) -> None:
+    """Check 1: each class's total needed periods <= available study slots."""
     class_needed: dict[str, int] = {}
     for lb in request.lesson_blocks:
         class_needed[lb.class_id] = class_needed.get(lb.class_id, 0) + lb.periods_per_week
@@ -242,23 +260,18 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
         if bid and block_by_id.get(bid):
             blk = block_by_id[bid]
             days = blk.days_per_week
-            # Use day 1 as representative for study period count when
-            # apply_to_all_days; otherwise sum across days
             if blk.apply_to_all_days:
                 study_per_day = len(_valid_periods_for_day(blk, 1))
                 study_total = study_per_day * days
             else:
                 study_total = sum(len(_valid_periods_for_day(blk, d)) for d in range(1, days + 1))
         else:
-            # Legacy
             days = request.schedule_config.days_per_week
             lunch_set = set(request.schedule_config.lunch_periods)
             study_per_day = len([p for p in range(1, request.schedule_config.periods_per_day + 1) if p not in lunch_set])
             study_total = study_per_day * days
 
-        # Subtract fixed activity slots affecting this class
         cls_fixed = len(fixed_slots_per_class.get(cid, set()))
-        # Assembly affects every class
         assembly_count = len(assembly_set)
         available = study_total - cls_fixed - assembly_count
         if needed > available:
@@ -272,7 +285,16 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
                 )
             )
 
-    # ── 2. Teacher overloads ─────────────────────────────────────────────
+
+def _check_teacher_overloads(
+    request: TimetableRequest,
+    report: DiagnosticsReport,
+    class_to_block: dict[str, str],
+    block_by_id: dict,
+    assembly_set: set,
+    fixed_slots_per_class: dict[str, set],
+) -> None:
+    """Check 2: each teacher's needed periods within [min, max] and available slots."""
     teacher_needed: dict[str, int] = {}
     for lb in request.lesson_blocks:
         teacher_needed[lb.teacher_id] = teacher_needed.get(lb.teacher_id, 0) + lb.periods_per_week
@@ -304,7 +326,14 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
                 )
             )
 
-    # ── 3. Room overloads ────────────────────────────────────────────────
+
+def _check_room_overloads(
+    request: TimetableRequest,
+    report: DiagnosticsReport,
+    room_by_id: dict,
+    assembly_set: set,
+) -> None:
+    """Check 3: each room's needed periods <= available study slots."""
     room_needed: dict[str, int] = {}
     for lb in request.lesson_blocks:
         if lb.room_id:
@@ -312,8 +341,6 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
 
     for rid, needed in room_needed.items():
         room = room_by_id.get(rid)
-        # Available slots for a room = study periods * days (room is shared
-        # across all classes that use it; same H3 logic as solver).
         if request.schedule_blocks:
             blk = request.schedule_blocks[0]
             days = blk.days_per_week
@@ -330,7 +357,6 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
             lunch_set = set(request.schedule_config.lunch_periods)
             study_per_day = len([p for p in range(1, request.schedule_config.periods_per_day + 1) if p not in lunch_set])
             available = study_per_day * days
-        # Subtract assembly (room can't be used during assembly)
         available -= len(assembly_set)
         if needed > available:
             report.room_overloads.append(
@@ -342,7 +368,17 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
                 )
             )
 
-    # ── 4. Fixed (pre-assigned) lesson block conflicts ───────────────────
+
+def _check_fixed_slot_conflicts(
+    request: TimetableRequest,
+    report: DiagnosticsReport,
+    teacher_by_id: dict,
+    class_to_block: dict[str, str],
+    block_by_id: dict,
+    assembly_set: set,
+    fixed_slots_per_class: dict[str, set],
+) -> None:
+    """Check 4: pre-assigned (fixed) lesson blocks don't conflict with constraints."""
     for lb in request.lesson_blocks:
         if not lb.is_fixed:
             continue
@@ -356,10 +392,7 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
             if key in teacher.unavailable_slots or key in teacher.admin_free_slots:
                 report.fixed_slot_conflicts.append(
                     FixedSlotConflict(
-                        lesson_block_id=lb.id,
-                        day=d,
-                        period=p,
-                        reason="teacher_unavailable",
+                        lesson_block_id=lb.id, day=d, period=p, reason="teacher_unavailable",
                     )
                 )
                 continue
@@ -419,5 +452,3 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
                     )
                 )
                 continue
-
-    return report

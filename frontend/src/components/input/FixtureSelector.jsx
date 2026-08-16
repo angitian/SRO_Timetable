@@ -22,8 +22,8 @@ const FIXTURES = [
   {
     id: 'primary_mock',
     label: 'ประถม สพฐ.',
-    desc: '12 ห้อง · 25 ครู · 10 วิชา',
-    detail: '123 Lesson Blocks · 3 Fixed Slots',
+    desc: '12 ห้อง · 27 ครู · 14 วิชา',
+    detail: '156 Lesson Blocks · 6 Fixed Slots',
   },
 ]
 

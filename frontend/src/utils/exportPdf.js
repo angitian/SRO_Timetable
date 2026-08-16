@@ -29,7 +29,7 @@ export function exportMultiPagePDF(pages, docTitle = 'ตารางสอน')
       return
     }
 
-    const pagesHTML = pages.map((p) => p.html).join('\n')
+    const pagesHTML = pages.map((p) => `<div class="pdf-page">${p.html}</div>`).join('\n')
 
     const html = `<!DOCTYPE html>
 <html lang="th">
@@ -52,27 +52,30 @@ export function exportMultiPagePDF(pages, docTitle = 'ตารางสอน')
       padding-bottom: 8px;
       border-bottom: 2px solid #e5e7eb;
     }
-    .grid-page {
+    .pdf-page {
       page-break-after: always;
       break-after: page;
-      margin-bottom: 16px;
+      break-inside: avoid;
+      margin-bottom: 8px;
     }
-    .grid-page:last-child {
+    .pdf-page:last-child {
       page-break-after: auto;
       break-after: auto;
     }
+    .grid-page { break-inside: avoid; }
     /* Print page setup — A4 landscape */
     @page {
       size: A4 landscape;
-      margin: 10mm;
+      margin: 8mm;
     }
     @media print {
-      body { margin: 0; padding: 8px; }
+      body { margin: 0; padding: 0; }
       h1 { display: none; }
+      .pdf-page { margin-bottom: 0; }
     }
     @media screen {
       body { background: #f9fafb; }
-      .grid-page {
+      .pdf-page {
         background: #fff;
         padding: 16px;
         margin-bottom: 24px;

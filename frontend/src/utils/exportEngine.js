@@ -19,6 +19,95 @@ import { exportMultiPNG } from './exportImage.js'
 import { exportMultiExcel } from './exportExcel.js'
 
 const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
+export { DAY_LABELS }
+
+// ── Shared grid building helpers (DRY: used by class/teacher/facility grids) ──
+
+const GRID_CELL_STYLE = `border:1px solid #d1d5db;border-radius:4px;padding:3px 5px;min-height:42px;font-size:11px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;`
+
+/**
+ * Build the periodColsTemplate string from periodList + breakSet.
+ */
+function buildPeriodColsTemplate(periodList, breakSet) {
+  return periodList.map((p) => breakSet.has(p) ? '0.2fr' : '1fr').join(' ')
+}
+
+/**
+ * Build header cell HTML for a period (lunch/break/normal with optional time).
+ */
+function buildHeaderCellHTML(p, { lunchSet, breakSet, periodTimeMap, showPeriodTimes }) {
+  const isLunch = lunchSet.has(p)
+  const isBreak = breakSet.has(p)
+  const timeStr = showPeriodTimes && periodTimeMap[p] && !isLunch && !isBreak
+    ? `<div style="font-size:10px;font-weight:400;color:#6b7280;margin-top:1px;">${periodTimeMap[p]}</div>`
+    : ''
+  const label = isLunch ? 'พัก' : isBreak ? 'พัก' : p
+  const bg = isLunch ? '#f3f4f6' : isBreak ? '#f9fafb' : '#fff'
+  const color = isLunch ? '#9ca3af' : isBreak ? '#9ca3af' : '#374151'
+  return `<div style="${GRID_CELL_STYLE}background:${bg};text-align:center;font-weight:700;color:${color};min-height:28px;justify-content:center;">${label}${timeStr}</div>`
+}
+
+/**
+ * Build the full header row HTML (corner cell + period cells).
+ */
+function buildHeaderRowHTML(ctx) {
+  const headerCells = ctx.periodList.map((p) => buildHeaderCellHTML(p, ctx)).join('')
+  return `<div style="display:grid;grid-template-columns:80px ${ctx.periodColsTemplate};gap:2px;margin-bottom:2px;">
+    <div style="${GRID_CELL_STYLE}background:#f9fafb;text-align:center;font-weight:700;color:#9ca3af;justify-content:center;min-height:26px;">วัน \\ คาบ</div>
+    ${headerCells}
+  </div>`
+}
+
+/**
+ * Build a lunch or break cell HTML. Returns null if the period is neither.
+ */
+function buildLunchBreakCellHTML(p, { lunchSet, breakSet }) {
+  if (lunchSet.has(p)) {
+    return `<div style="${GRID_CELL_STYLE}background:#f3f4f6;color:#9ca3af;text-align:center;justify-content:center;">พักเที่ยง</div>`
+  }
+  if (breakSet.has(p)) {
+    return `<div style="${GRID_CELL_STYLE}background:#f9fafb;color:#9ca3af;text-align:center;justify-content:center;font-size:10px;">พัก</div>`
+  }
+  return null
+}
+
+/**
+ * Build a day row wrapper HTML with the day label cell.
+ */
+function buildDayRowHTML(day, cellsHTML, periodColsTemplate) {
+  return `<div style="display:grid;grid-template-columns:80px ${periodColsTemplate};gap:2px;margin-bottom:2px;">
+    <div style="${GRID_CELL_STYLE}background:#f3f4f6;text-align:center;font-weight:700;color:#4b5563;justify-content:center;min-height:42px;">${DAY_LABELS[day] || `วัน${day}`}</div>
+    ${cellsHTML}
+  </div>`
+}
+
+/**
+ * Build an empty cell HTML.
+ */
+function buildEmptyCellHTML() {
+  return `<div style="${GRID_CELL_STYLE}background:#fff;"></div>`
+}
+
+// ── Export branding config ───────────────────────────────────────────────
+// Footer text shown at the bottom of every PDF/PNG page.
+// Edit this string to customize the branding shown on exported timetables.
+const EXPORT_CONFIG = {
+  footerText: 'ระบบจัดตารางสอนอัตโนมัติ',
+}
+
+/**
+ * Build the branding footer HTML appended to every exported grid page.
+ * Returns an empty string when footerText is empty/undefined.
+ */
+function buildBrandingFooter() {
+  const text = (EXPORT_CONFIG.footerText || '').trim()
+  if (!text) return ''
+  return `<div style="margin-top:10px;padding-top:6px;border-top:1px solid #e5e7eb;
+    text-align:center;font-size:10px;color:#9ca3af;line-height:1.4;">
+    ${text}
+  </div>`
+}
+export { buildBrandingFooter }
 
 // ── Class color palette (mirrors GridCell.jsx CLASS_COLORS) ──────────────
 const CLASS_COLOR_HEX = [
@@ -35,6 +124,7 @@ const CLASS_COLOR_HEX = [
   { bg: '#ecfccb', border: '#a3e635', text: '#365314' },
   { bg: '#ede9fe', border: '#a78bfa', text: '#4c1d95' },
 ]
+export { CLASS_COLOR_HEX }
 
 // ── Subject color palette (mirrors subjectColors.js) ─────────────────────
 const SUBJECT_COLOR_FALLBACK = { bg: '#e0f2fe', border: '#7dd3fc', text: '#075985' }
@@ -107,24 +197,15 @@ function resolveTeacherCell({ day, period, teacherId, slotMap, fixedMap, subject
  * @returns { string } HTML with inline styles, ready for print/capture.
  */
 export function buildClassGridHTML(cls, ctx) {
-  const { lunchSet, dayList, periodList } = ctx
-  const cellStyle = `border:1px solid #d1d5db;border-radius:6px;padding:6px 8px;min-height:62px;font-size:12px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;`
+  const periodColsTemplate = buildPeriodColsTemplate(ctx.periodList, ctx.breakSet)
+  const gridCtx = { ...ctx, periodColsTemplate }
 
-  const headerCells = periodList
-    .map((p) => {
-      const isLunch = lunchSet.has(p)
-      return `<div style="${cellStyle}background:${isLunch ? '#f3f4f6' : '#fff'};text-align:center;font-weight:700;color:${isLunch ? '#9ca3af' : '#374151'};min-height:36px;justify-content:center;">${isLunch ? 'พัก' : p}</div>`
-    })
-    .join('')
-
-  const rows = dayList
+  const rows = ctx.dayList
     .map((d) => {
-      const cells = periodList
+      const cells = ctx.periodList
         .map((p) => {
-          const isLunch = lunchSet.has(p)
-          if (isLunch) {
-            return `<div style="${cellStyle}background:#f3f4f6;color:#9ca3af;text-align:center;justify-content:center;">พักเที่ยง</div>`
-          }
+          const lunchBreak = buildLunchBreakCellHTML(p, ctx)
+          if (lunchBreak) return lunchBreak
           const cell = resolveClassCell({
             day: d, period: p, classId: cls.id,
             slotMap: ctx.slotMap, fixedMap: ctx.fixedMap,
@@ -133,31 +214,25 @@ export function buildClassGridHTML(cls, ctx) {
             lessonBlockMap: ctx.lessonBlockMap, userPlacements: ctx.userPlacements,
           })
           if (cell.kind === 'fixed') {
-            return `<div style="${cellStyle}background:#fef9c3;border-color:#facc15;color:#713f12;text-align:center;justify-content:center;">🔒 ${cell.fixedName}</div>`
+            return `<div style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
           }
           if (cell.kind === 'lesson') {
             const pinIcon = cell.isPreAssigned ? '📌 ' : ''
-            return `<div style="${cellStyle}background:#fff;">
-              <div style="font-weight:700;color:#1f2937;font-size:12px;line-height:1.3;">${pinIcon}${cell.subjectName || ''}</div>
-              <div style="color:#6b7280;font-size:10px;margin-top:2px;">${cell.teacherName || ''}</div>
+            return `<div style="${GRID_CELL_STYLE}background:#fff;align-items:center;text-align:center;">
+              <div style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${pinIcon}${cell.subjectName || ''}</div>
+              <div style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${cell.teacherName || ''}</div>
             </div>`
           }
-          return `<div style="${cellStyle}background:#fff;"></div>`
+          return buildEmptyCellHTML()
         })
         .join('')
-      return `<div style="display:grid;grid-template-columns:90px repeat(${periodList.length}, 1fr);gap:4px;margin-bottom:4px;">
-        <div style="${cellStyle}background:#f3f4f6;text-align:center;font-weight:700;color:#4b5563;justify-content:center;min-height:62px;">${DAY_LABELS[d] || `วัน${d}`}</div>
-        ${cells}
-      </div>`
+      return buildDayRowHTML(d, cells, periodColsTemplate)
     })
     .join('')
 
-  return `<div class="grid-page" style="page-break-after:always;">
-    <h2 style="font-size:16px;font-weight:700;color:#1f2937;margin:0 0 8px 0;text-align:center;">ตารางสอน ${cls.name}</h2>
-    <div style="display:grid;grid-template-columns:90px repeat(${periodList.length}, 1fr);gap:4px;margin-bottom:4px;">
-      <div style="${cellStyle}background:#f9fafb;text-align:center;font-weight:700;color:#9ca3af;justify-content:center;min-height:36px;">วัน \\ คาบ</div>
-      ${headerCells}
-    </div>
+  return `<div class="grid-page" style="break-inside:avoid;">
+    <h2 style="font-size:14px;font-weight:700;color:#1f2937;margin:0 0 6px 0;text-align:center;">ตารางสอน ${cls.name}</h2>
+    ${buildHeaderRowHTML(gridCtx)}
     ${rows}
   </div>`
 }
@@ -166,87 +241,91 @@ export function buildClassGridHTML(cls, ctx) {
  * Build a self-contained HTML string for a single teacher timetable grid.
  */
 export function buildTeacherGridHTML(teacher, ctx) {
-  const { lunchSet, dayList, periodList } = ctx
-  const cellStyle = `border:1px solid #d1d5db;border-radius:6px;padding:6px 8px;min-height:62px;font-size:12px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;`
+  const periodColsTemplate = buildPeriodColsTemplate(ctx.periodList, ctx.breakSet)
+  const gridCtx = { ...ctx, periodColsTemplate }
 
-  // Compute teacher's classes for color mapping
-  const teacherClassIds = new Set()
-  for (const s of ctx.allSlots) {
-    if (s.teacher_id === teacher.id) teacherClassIds.add(s.class_id)
-  }
-  for (const [lbId, placements] of Object.entries(ctx.userPlacements)) {
-    const lb = ctx.lessonBlockMap.get(lbId)
-    if (lb && lb.teacher_id === teacher.id) {
-      teacherClassIds.add(lb.class_id)
-    }
-  }
-  const teacherClasses = ctx.classes.filter((c) => teacherClassIds.has(c.id))
-  const classColorMap = {}
-  teacherClasses.forEach((c, i) => { classColorMap[c.id] = i })
-
-  const headerCells = periodList
-    .map((p) => {
-      const isLunch = lunchSet.has(p)
-      return `<div style="${cellStyle}background:${isLunch ? '#f3f4f6' : '#fff'};text-align:center;font-weight:700;color:${isLunch ? '#9ca3af' : '#374151'};min-height:36px;justify-content:center;">${isLunch ? 'พัก' : p}</div>`
-    })
-    .join('')
-
-  const rows = dayList
+  const rows = ctx.dayList
     .map((d) => {
-      const cells = periodList
+      const cells = ctx.periodList
         .map((p) => {
-          const isLunch = lunchSet.has(p)
-          if (isLunch) {
-            return `<div style="${cellStyle}background:#f3f4f6;color:#9ca3af;text-align:center;justify-content:center;">พักเที่ยง</div>`
-          }
+          const lunchBreak = buildLunchBreakCellHTML(p, ctx)
+          if (lunchBreak) return lunchBreak
           const cell = resolveTeacherCell({
             day: d, period: p, teacherId: teacher.id,
             slotMap: ctx.slotMap, fixedMap: ctx.fixedMap,
             subjectMap: ctx.subjectMap, classMap: ctx.classMap,
           })
           if (cell.kind === 'fixed') {
-            return `<div style="${cellStyle}background:#fef9c3;border-color:#facc15;color:#713f12;text-align:center;justify-content:center;">🔒 ${cell.fixedName}</div>`
+            return `<div style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
           }
           if (cell.kind === 'lessons') {
             const items = cell.slots.map((s) => {
-              const colorIdx = classColorMap[s.classId] ?? 0
-              const color = CLASS_COLOR_HEX[colorIdx % CLASS_COLOR_HEX.length]
-              return `<div style="margin-bottom:2px;padding:2px 4px;border-radius:3px;background:${color.bg};border-left:3px solid ${color.border};">
-                <span style="font-weight:700;color:${color.text};font-size:11px;">${s.className}</span>
-                <span style="color:${color.text};font-size:10px;margin-left:4px;">${s.subjectName}</span>
+              return `<div style="text-align:center;padding:1px 0;">
+                <div style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${s.className}</div>
+                <div style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${s.subjectName}</div>
               </div>`
             }).join('')
-            return `<div style="${cellStyle}background:#fff;padding:4px;">${items}</div>`
+            return `<div style="${GRID_CELL_STYLE}background:#fff;align-items:center;justify-content:center;padding:3px 2px;">${items}</div>`
           }
-          return `<div style="${cellStyle}background:#fff;"></div>`
+          return buildEmptyCellHTML()
         })
         .join('')
-      return `<div style="display:grid;grid-template-columns:90px repeat(${periodList.length}, 1fr);gap:4px;margin-bottom:4px;">
-        <div style="${cellStyle}background:#f3f4f6;text-align:center;font-weight:700;color:#4b5563;justify-content:center;min-height:62px;">${DAY_LABELS[d] || `วัน${d}`}</div>
-        ${cells}
-      </div>`
+      return buildDayRowHTML(d, cells, periodColsTemplate)
     })
     .join('')
 
-  // Legend
-  const legendItems = teacherClasses
-    .map((c) => {
-      const colorIdx = classColorMap[c.id] ?? 0
-      const color = CLASS_COLOR_HEX[colorIdx % CLASS_COLOR_HEX.length]
-      return `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:11px;color:#4b5563;">
-        <span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${color.bg};border:1px solid ${color.border};"></span>
-        ${c.name}
-      </span>`
+  return `<div class="grid-page" style="break-inside:avoid;">
+    <h2 style="font-size:14px;font-weight:700;color:#1f2937;margin:0 0 4px 0;text-align:center;">ตารางสอน ${teacher.name} (ครูผู้สอน)</h2>
+    ${buildHeaderRowHTML(gridCtx)}
+    ${rows}
+  </div>`
+}
+
+/**
+ * Build a self-contained HTML string for a single facility (special room) timetable grid.
+ * Shows which class + teacher + subject uses the room at each day/period.
+ */
+export function buildFacilityGridHTML(room, ctx) {
+  const { allSlots, subjectMap, teacherMap, classMap } = ctx
+  const periodColsTemplate = buildPeriodColsTemplate(ctx.periodList, ctx.breakSet)
+  const gridCtx = { ...ctx, periodColsTemplate }
+
+  // Filter slots that use this special room
+  const roomSlots = (allSlots || []).filter((s) => s.room_id === room.id)
+  // Build lookup: { "day-period": slot }
+  const roomSlotMap = new Map()
+  for (const s of roomSlots) {
+    roomSlotMap.set(`${s.day}-${s.period}`, s)
+  }
+
+  const rows = ctx.dayList
+    .map((d) => {
+      const cells = ctx.periodList
+        .map((p) => {
+          const lunchBreak = buildLunchBreakCellHTML(p, ctx)
+          if (lunchBreak) return lunchBreak
+          const s = roomSlotMap.get(`${d}-${p}`)
+          if (s) {
+            const subjName = subjectMap.get(s.subject_id)?.name || s.subject_id
+            const teacherName = teacherMap.get(s.teacher_id)?.name || s.teacher_id
+            const className = classMap.get(s.class_id)?.name || s.class_id
+            return `<div style="${GRID_CELL_STYLE}background:#eef2ff;align-items:center;text-align:center;">
+              <div style="font-weight:700;color:#3730a3;font-size:12px;line-height:1.15;">${className}</div>
+              <div style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${subjName}</div>
+              <div style="font-weight:400;color:#6b7280;font-size:10px;margin-top:0.5px;">${teacherName}</div>
+            </div>`
+          }
+          return buildEmptyCellHTML()
+        })
+        .join('')
+      return buildDayRowHTML(d, cells, periodColsTemplate)
     })
     .join('')
 
-  return `<div class="grid-page" style="page-break-after:always;">
-    <h2 style="font-size:16px;font-weight:700;color:#1f2937;margin:0 0 4px 0;text-align:center;">ตารางสอน ${teacher.name} (ครูผู้สอน)</h2>
-    ${legendItems ? `<div style="text-align:center;margin-bottom:8px;">${legendItems}</div>` : ''}
-    <div style="display:grid;grid-template-columns:90px repeat(${periodList.length}, 1fr);gap:4px;margin-bottom:4px;">
-      <div style="${cellStyle}background:#f9fafb;text-align:center;font-weight:700;color:#9ca3af;justify-content:center;min-height:36px;">วัน \\ คาบ</div>
-      ${headerCells}
-    </div>
+  const roomTypeLabel = room.room_type ? ` (${room.room_type})` : ''
+  return `<div class="grid-page" style="break-inside:avoid;">
+    <h2 style="font-size:14px;font-weight:700;color:#1f2937;margin:0 0 4px 0;text-align:center;">🔬 ตารางใช้ห้อง ${room.name}${roomTypeLabel}</h2>
+    ${buildHeaderRowHTML(gridCtx)}
     ${rows}
   </div>`
 }
@@ -255,14 +334,15 @@ export function buildTeacherGridHTML(teacher, ctx) {
  * Build the shared context object used by both class and teacher grid builders.
  */
 export function buildExportContext(data) {
-  const { slots, classes, subjects, teachers, gridConfig, userPlacements, lessonBlocks, fixedSlots } = data
-  const { periodsPerDay = 7, lunchPeriods = [], daysPerWeek = 5 } = gridConfig
+  const { slots, classes, subjects, teachers, gridConfig, userPlacements, lessonBlocks, fixedSlots, periodTimeMap, showPeriodTimes } = data
+  const { periodsPerDay = 7, lunchPeriods = [], breakPeriods = [], daysPerWeek = 5 } = gridConfig
 
   const subjectMap = new Map((subjects || []).map((s) => [s.id, s]))
   const teacherMap = new Map((teachers || []).map((t) => [t.id, t]))
   const classMap = new Map((classes || []).map((c) => [c.id, c]))
   const lessonBlockMap = new Map((lessonBlocks || []).map((lb) => [lb.id, lb]))
   const lunchSet = new Set(lunchPeriods)
+  const breakSet = new Set(breakPeriods)
 
   const fixedMap = new Map()
   for (const fs of (fixedSlots || [])) {
@@ -287,7 +367,11 @@ export function buildExportContext(data) {
   }
 
   const dayList = Array.from({ length: daysPerWeek }, (_, i) => i + 1)
-  const periodList = Array.from({ length: periodsPerDay }, (_, i) => i + 1)
+  // Use explicit periodList from gridConfig (supports decimals for inserted
+  // short breaks); fall back to integer range 1..periodsPerDay.
+  const periodList = (gridConfig?.periodList && gridConfig.periodList.length > 0)
+    ? gridConfig.periodList
+    : Array.from({ length: periodsPerDay }, (_, i) => i + 1)
 
   return {
     allSlots: slots || [],
@@ -299,8 +383,10 @@ export function buildExportContext(data) {
     lessonBlocks: lessonBlocks || [],
     fixedSlots: fixedSlots || [],
     subjectMap, teacherMap, classMap, lessonBlockMap,
-    lunchSet, fixedMap, slotMap, userPlacementMap,
+    lunchSet, breakSet, fixedMap, slotMap, userPlacementMap,
     dayList, periodList,
+    periodTimeMap: periodTimeMap || {},
+    showPeriodTimes: showPeriodTimes !== false,
   }
 }
 
@@ -311,6 +397,7 @@ export function buildExportContext(data) {
 export function buildAllGridHTMLs(scope, data) {
   const ctx = buildExportContext(data)
   const pages = []
+  const footer = buildBrandingFooter()
 
   if (scope.classes) {
     for (const cls of ctx.classes) {
@@ -318,7 +405,7 @@ export function buildAllGridHTMLs(scope, data) {
         label: cls.name,
         kind: 'class',
         id: cls.id,
-        html: buildClassGridHTML(cls, ctx),
+        html: buildClassGridHTML(cls, ctx) + footer,
       })
     }
   }
@@ -329,7 +416,7 @@ export function buildAllGridHTMLs(scope, data) {
         label: teacher.name,
         kind: 'teacher',
         id: teacher.id,
-        html: buildTeacherGridHTML(teacher, ctx),
+        html: buildTeacherGridHTML(teacher, ctx) + footer,
       })
     }
   }

@@ -1,8 +1,10 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import GridCell, { getClassColors } from './GridCell.jsx'
+import GridHeader from './GridHeader.jsx'
 import GridLegend from './GridLegend.jsx'
 import { DAY_LABELS } from './GridLegend.jsx'
 import CellContextMenu from './CellContextMenu.jsx'
+import CellRoomEditModal from './CellRoomEditModal.jsx'
 
 export default function TimetableGrid({
   slots = [],
@@ -11,7 +13,12 @@ export default function TimetableGrid({
   classes,
   days,
   periodsPerDay,
+  // Optional explicit period list (supports decimal period_no for inserted
+  // short breaks, e.g. [1, 2, 3, 3.5, 4, 5]). Falls back to 1..periodsPerDay.
+  periodList: periodListProp,
   lunchPeriods,
+  // BREAK period numbers (decimals like 3.5) — rendered as narrow cells.
+  breakPeriods = [],
   fixedSlots,
   filterClass,
   filterTeacher,
@@ -51,6 +58,11 @@ export default function TimetableGrid({
   onUnpinByTeacher,   // (teacherId) => void
   onClearByClass,     // (classId) => void
   onClearByTeacher,   // (teacherId) => void
+  // ── Special rooms ──
+  specialRooms = [],
+  onChangeSlotRoom,   // (lessonBlockId, newRoomId) => void
+  // ── Tab navigation (for facility tab) ──
+  onTabChange,
 }) {
   const [dragSource, setDragSource] = useState(null) // { day, period, classId, lessonBlockId }
   const [dragTarget, setDragTarget] = useState(null)
@@ -58,17 +70,37 @@ export default function TimetableGrid({
   const [showForceConfirm, setShowForceConfirm] = useState(false)
   const [localSlots, setLocalSlots] = useState(slots)
   const [contextMenu, setContextMenu] = useState(null) // { x, y, cellType, slot, day, period, classId }
+  const [roomEditSlot, setRoomEditSlot] = useState(null) // slot being room-edited
 
   // Update localSlots when props change (but not during active drag)
-  if (slots !== localSlots && !dragSource) {
-    setLocalSlots(slots)
-  }
+  useEffect(() => {
+    if (!dragSource) {
+      setLocalSlots(slots)
+    }
+  }, [slots, dragSource])
 
   const subjectMap = new Map(subjects.map((s) => [s.id, s]))
   const teacherMap = new Map(teachers.map((t) => [t.id, t]))
   const classMap = new Map(classes.map((c) => [c.id, c]))
   const lessonBlockMap = new Map(lessonBlocks.map((lb) => [lb.id, lb]))
   const lunchSet = new Set(lunchPeriods)
+
+  // Build special room name lookup: { id → name } for displaying room badges
+  const specialRoomMap = useMemo(() => {
+    const map = new Map()
+    for (const r of specialRooms) {
+      map.set(r.id, r.name)
+    }
+    return map
+  }, [specialRooms])
+
+  // Helper: get special room name for a slot (returns null if default classroom)
+  function getSpecialRoomName(slot) {
+    if (!slot?.room_id) return null
+    // Default classroom rooms start with R_ and match R_{classId}
+    if (slot.room_id.startsWith('R_') && slot.room_id === `R_${slot.class_id}`) return null
+    return specialRoomMap.get(slot.room_id) || null
+  }
 
   // Build fixed slot lookup: { "day-period": FixedSlot }
   const fixedSlotMap = new Map()
@@ -181,7 +213,18 @@ export default function TimetableGrid({
   }
 
   const dayList = Array.from({ length: days }, (_, i) => i + 1)
-  const periodList = Array.from({ length: periodsPerDay }, (_, i) => i + 1)
+  const breakSet = new Set(breakPeriods)
+  // Use explicit periodList prop (supports decimals) when provided;
+  // otherwise fall back to integer range 1..periodsPerDay.
+  const periodList = periodListProp && periodListProp.length > 0
+    ? periodListProp
+    : Array.from({ length: periodsPerDay }, (_, i) => i + 1)
+  // Build grid-template-columns: BREAK columns are narrower (~0.2fr) than
+  // regular columns (1fr) to visually emphasize they are short breaks.
+  // minmax(0, ...) prevents grid blowout from long cell content.
+  const periodColsTemplate = periodList
+    .map((p) => (breakSet.has(p) ? 'minmax(0, 0.2fr)' : 'minmax(0, 1fr)'))
+    .join(' ')
 
   // Determine the active class for single-class mode
   const activeClass = useMemo(() => {
@@ -211,6 +254,8 @@ export default function TimetableGrid({
   function validateCell(lb, d, p, classId) {
     // 1. Lunch period
     if (lunchSet.has(p)) return { valid: false, reason: 'คาบพักเที่ยง' }
+    // 1b. Short break (inserted BREAK with decimal period_no)
+    if (breakSet.has(p)) return { valid: false, reason: 'คาบพักสั้น' }
     // 2. Fixed slot
     if (fixedSlotMap.has(`${d}-${p}`)) {
       const fs = fixedSlotMap.get(`${d}-${p}`)
@@ -273,7 +318,7 @@ export default function TimetableGrid({
     }
     // Internal grid drag
     e.dataTransfer.dropEffect = 'move'
-    if (lunchSet.has(p) || fixedSlotMap.has(`${d}-${p}`)) return
+    if (lunchSet.has(p) || breakSet.has(p) || fixedSlotMap.has(`${d}-${p}`)) return
     setDragTarget({ day: d, period: p, classId, valid: true, reason: null })
   }
 
@@ -290,7 +335,7 @@ export default function TimetableGrid({
       }
       return
     }
-    if (lunchSet.has(p) || fixedSlotMap.has(`${d}-${p}`)) return
+    if (lunchSet.has(p) || breakSet.has(p) || fixedSlotMap.has(`${d}-${p}`)) return
 
     // Find the slot being dragged
     const sourceSlots = slotMap.get(`${dragSource.day}-${dragSource.period}`) || []
@@ -363,41 +408,31 @@ export default function TimetableGrid({
       <div key={classGroup?.id || 'all'} className="space-y-2">
         <div className="overflow-x-auto">
           <div className="min-w-full">
-            {/* Header: วัน | คาบ1 | คาบ2 | ... — full-width cells using minmax(0,1fr) */}
-            <div
-              className="grid gap-2.5 mb-2"
-              style={{ gridTemplateColumns: `100px repeat(${periodList.length}, minmax(0, 1fr))` }}
-            >
-              <div className="text-xs font-bold text-gray-400 flex items-center justify-center">
-                วัน \ คาบ
-              </div>
-              {periodList.map((p) => (
-                <div
-                  key={p}
-                  className={`text-center text-base font-bold py-2 rounded
-                    ${lunchSet.has(p) ? 'bg-gray-200 text-gray-400' : 'text-gray-700'}`}
-                >
-                  {p}
-                </div>
-              ))}
-            </div>
+            {/* Header: วัน | คาบ1 | คาบ2 | ... */}
+            <GridHeader
+              periodList={periodList}
+              periodColsTemplate={periodColsTemplate}
+              lunchSet={lunchSet}
+              breakSet={breakSet}
+            />
 
             {/* Day rows */}
             {dayList.map((d) => (
               <div
                 key={d}
                 className="grid gap-2.5 mb-2"
-                style={{ gridTemplateColumns: `100px repeat(${periodList.length}, minmax(0, 1fr))` }}
+                style={{ gridTemplateColumns: `100px ${periodColsTemplate}` }}
               >
                 <div className="flex items-center justify-center text-sm sm:text-base font-bold text-gray-600 bg-gray-100 rounded">
                   {DAY_LABELS[d] || `วัน${d}`}
                 </div>
                 {periodList.map((p) => {
                   const isLunch = lunchSet.has(p)
+                  const isBreak = breakSet.has(p)
                   const fixedSlot = fixedSlotMap.get(`${d}-${p}`)
                   const isFixed = !!fixedSlot
                   const userPlacement = userPlacementMap.get(`${d}-${p}-${classId}`)
-                  const matchedSlots = isFixed || isLunch ? [] : getFilteredSlots(d, p, classId)
+                  const matchedSlots = isFixed || isLunch || isBreak ? [] : getFilteredSlots(d, p, classId)
                   const slot = matchedSlots[0] || null
                   const isTarget = dragTarget?.day === d && dragTarget?.period === p && dragTarget?.classId === classId
                   const targetInfo = isTarget ? dragTarget : null
@@ -438,6 +473,7 @@ export default function TimetableGrid({
                       key={`${d}-${p}`}
                       slot={displaySlot}
                       isLunch={isLunch}
+                      isBreak={isBreak}
                       isFixed={isFixed}
                       fixedSlotName={fixedSlot?.name}
                       isPreAssigned={isPreAssigned}
@@ -462,6 +498,7 @@ export default function TimetableGrid({
                       subject={displaySubject}
                       teacher={displayTeacher}
                       classGroup={displayClass}
+                      roomName={getSpecialRoomName(displaySlot)}
                       onRemoveSlot={displaySlot && !isFixed ? () => onRemoveSlot?.(displaySlot.lesson_block_id, isPreAssigned, d, p) : undefined}
                       onTogglePin={displaySlot && !isFixed ? () => onTogglePin?.(displaySlot.lesson_block_id, d, p, isPreAssigned) : undefined}
                     />
@@ -481,40 +518,30 @@ export default function TimetableGrid({
       <div className="space-y-2">
         <div className="overflow-x-auto">
           <div className="min-w-full">
-            {/* Header — full-width cells using minmax(0,1fr) */}
-            <div
-              className="grid gap-2.5 mb-2"
-              style={{ gridTemplateColumns: `100px repeat(${periodList.length}, minmax(0, 1fr))` }}
-            >
-              <div className="text-xs font-bold text-gray-400 flex items-center justify-center">
-                วัน \ คาบ
-              </div>
-              {periodList.map((p) => (
-                <div
-                  key={p}
-                  className={`text-center text-base font-bold py-2 rounded
-                    ${lunchSet.has(p) ? 'bg-gray-200 text-gray-400' : 'text-gray-700'}`}
-                >
-                  {p}
-                </div>
-              ))}
-            </div>
+            {/* Header */}
+            <GridHeader
+              periodList={periodList}
+              periodColsTemplate={periodColsTemplate}
+              lunchSet={lunchSet}
+              breakSet={breakSet}
+            />
 
             {/* Day rows */}
             {dayList.map((d) => (
               <div
                 key={d}
                 className="grid gap-2.5 mb-2"
-                style={{ gridTemplateColumns: `100px repeat(${periodList.length}, minmax(0, 1fr))` }}
+                style={{ gridTemplateColumns: `100px ${periodColsTemplate}` }}
               >
                 <div className="flex items-center justify-center text-sm sm:text-base font-bold text-gray-600 bg-gray-100 rounded">
                   {DAY_LABELS[d] || `วัน${d}`}
                 </div>
                 {periodList.map((p) => {
                   const isLunch = lunchSet.has(p)
+                  const isBreak = breakSet.has(p)
                   const fixedSlot = fixedSlotMap.get(`${d}-${p}`)
                   const isFixed = !!fixedSlot
-                  const teacherSlots = isFixed || isLunch ? [] : getTeacherSlots(d, p)
+                  const teacherSlots = isFixed || isLunch || isBreak ? [] : getTeacherSlots(d, p)
                   const isTarget = dragTarget?.day === d && dragTarget?.period === p
                   const targetInfo = isTarget ? dragTarget : null
                   return (
@@ -523,6 +550,7 @@ export default function TimetableGrid({
                       slot={null}
                       slots={teacherSlots}
                       isLunch={isLunch}
+                      isBreak={isBreak}
                       isFixed={isFixed}
                       fixedSlotName={fixedSlot?.name}
                       isDragTarget={isTarget}
@@ -557,7 +585,7 @@ export default function TimetableGrid({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-4">
       {/* Header: active name badge + view-mode segmented toggle */}
       <div className="flex items-center gap-3 mb-1">
         {isTeacherMode ? (
@@ -593,6 +621,12 @@ export default function TimetableGrid({
             }`}
           >
             👤 ดูตามครูผู้สอน
+          </button>
+          <button
+            onClick={() => onTabChange?.('facilities')}
+            className="px-3 py-1 rounded-md text-xs font-semibold transition-all text-gray-500 hover:text-gray-700"
+          >
+            🔬 ห้องปฏิบัติการ
           </button>
         </div>
 
@@ -701,7 +735,22 @@ export default function TimetableGrid({
         onRemovePlacement={onRemovePlacement}
         onLockSlot={onLockSlot}
         onUnlockSlot={onUnlockSlot}
+        onChangeRoom={onChangeSlotRoom ? (slot) => {
+          setContextMenu(null)
+          setRoomEditSlot(slot)
+        } : undefined}
       />
+
+      {/* Room edit modal (change special room on-the-fly) */}
+      {roomEditSlot && (
+        <CellRoomEditModal
+          slot={roomEditSlot}
+          specialRooms={specialRooms}
+          allSlots={localSlots}
+          onClose={() => setRoomEditSlot(null)}
+          onChange={onChangeSlotRoom}
+        />
+      )}
     </div>
   )
 }

@@ -1,5 +1,7 @@
-import { Rocket, Loader2, Calendar, Check, Layers, Users, ClipboardCheck, Upload } from 'lucide-react'
+import { Rocket, Loader2, Calendar, Check, Layers, Users, ClipboardCheck, Upload, Printer, BookOpen, Facebook } from 'lucide-react'
+import { useState } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
+import UserManualModal from '../manual/UserManualModal.jsx'
 
 const STEPS = [
   { id: 1, label: 'นำเข้าข้อมูล', icon: Upload },
@@ -7,31 +9,56 @@ const STEPS = [
   { id: 3, label: 'ภาระงานครู', icon: Users },
   { id: 4, label: 'ตรวจสอบ', icon: ClipboardCheck },
   { id: 5, label: 'ตารางสอน', icon: Calendar },
+  { id: 6, label: 'พิมพ์ / ส่งออก', icon: Printer },
 ]
 
 export default function Header() {
   const { activeStep, setStep, isGenerating, result, isDirty } = useApp()
+  const [showManual, setShowManual] = useState(false)
 
-  // Hide stepper on landing page (step 0)
+  // Hide stepper on landing page (step 0) — manual + social links in navbar
   if (activeStep === 0) {
     return (
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-14">
-            <div className="flex items-center gap-2 shrink-0">
-              <Calendar className="w-6 h-6 text-blue-600" />
-              <span className="font-bold text-lg text-gray-900 hidden sm:inline">
-                SRO Timetable
-              </span>
-              <span className="badge bg-blue-100 text-blue-700 ml-1">POC</span>
+      <>
+        <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between h-14">
+              <div className="flex items-center gap-2 shrink-0">
+                <Calendar className="w-6 h-6 text-blue-600" />
+                <span className="font-bold text-lg text-gray-900 hidden sm:inline">
+                  SRO Timetable
+                </span>
+                <span className="badge bg-blue-100 text-blue-700 ml-1">POC</span>
+              </div>
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                <a
+                  href="https://www.facebook.com/kruplatform/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-9 h-9 rounded-lg flex items-center justify-center text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                  title="Facebook"
+                  aria-label="Facebook"
+                >
+                  <Facebook className="w-4.5 h-4.5" />
+                </a>
+                <button
+                  onClick={() => setShowManual(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-blue-300 hover:text-blue-700 transition-all"
+                >
+                  <BookOpen className="w-4 h-4" />
+                  <span className="hidden sm:inline">คู่มือการใช้งาน</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
+        {showManual && <UserManualModal onClose={() => setShowManual(false)} />}
+      </>
     )
   }
 
   return (
+    <>
     <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
@@ -50,7 +77,7 @@ export default function Header() {
               const Icon = step.icon
               const isActive = activeStep === step.id
               const isPast = activeStep > step.id
-              const isDisabled = step.id === 5 && !result
+              const isDisabled = (step.id === 5 || step.id === 6) && !result
               const canClick = !isDisabled
 
               return (
@@ -88,7 +115,7 @@ export default function Header() {
             })}
           </nav>
 
-          {/* Right: Dirty indicator only (Run button moved to Verification page) */}
+          {/* Right: Dirty indicator + Manual button */}
           <div className="flex items-center gap-2 shrink-0">
             {isDirty && (
               <span className="hidden sm:flex items-center gap-1 text-xs text-amber-600 font-medium" title="มีการเปลี่ยนแปลงข้อมูล กรุณากดจัดตารางใหม่">
@@ -96,9 +123,19 @@ export default function Header() {
                 ข้อมูลเปลี่ยนแล้ว
               </span>
             )}
+            <button
+              onClick={() => setShowManual(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100 hover:text-blue-700 transition-colors"
+              title="คู่มือการใช้งาน"
+            >
+              <BookOpen className="w-4 h-4" />
+              <span className="hidden lg:inline">คู่มือ</span>
+            </button>
           </div>
         </div>
       </div>
     </header>
+    {showManual && <UserManualModal onClose={() => setShowManual(false)} />}
+    </>
   )
 }

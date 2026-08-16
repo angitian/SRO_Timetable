@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Trash2, Lock, Unlock, Move, Plus } from 'lucide-react'
+import { Trash2, Lock, Unlock, Move, Plus, FlaskConical } from 'lucide-react'
 
 /**
  * Right-click context menu for grid cells.
@@ -11,6 +11,7 @@ import { Trash2, Lock, Unlock, Move, Plus } from 'lucide-react'
  *   onRemovePlacement — (lessonBlockId, day, period) => void
  *   onLockSlot        — (day, period) => void
  *   onUnlockSlot      — (day, period) => void
+ *   onChangeRoom      — (slot) => void  — opens room edit modal
  */
 export default function CellContextMenu({
   menu,
@@ -19,6 +20,7 @@ export default function CellContextMenu({
   onRemovePlacement,
   onLockSlot,
   onUnlockSlot,
+  onChangeRoom,
 }) {
   const menuRef = useRef(null)
 
@@ -68,6 +70,14 @@ export default function CellContextMenu({
       disabled: true, // hint — actual move is via drag
       onClick: null,
     })
+    if (onChangeRoom) {
+      items.push({
+        icon: FlaskConical,
+        label: 'เปลี่ยนห้องพิเศษ',
+        desc: 'สลับหรือเปลี่ยนห้องปฏิบัติการ',
+        onClick: () => handleAction(onChangeRoom, slot),
+      })
+    }
     items.push({
       icon: Trash2,
       label: 'ลบคาบนี้',
@@ -90,6 +100,14 @@ export default function CellContextMenu({
       disabled: true,
       onClick: null,
     })
+    if (onChangeRoom) {
+      items.push({
+        icon: FlaskConical,
+        label: 'เปลี่ยนห้องพิเศษ',
+        desc: 'สลับหรือเปลี่ยนห้องปฏิบัติการ',
+        onClick: () => handleAction(onChangeRoom, slot),
+      })
+    }
     items.push({
       icon: Trash2,
       label: 'ลบการล็อกนี้',

@@ -6,20 +6,10 @@ import GenerateButton from '../components/input/GenerateButton.jsx'
 import SolverMetrics from '../components/metrics/SolverMetrics.jsx'
 
 export default function HomePage() {
-  const { fixtureData, result, setView } = useApp()
+  const { fixtureData, result, setStep } = useApp()
 
   return (
     <div className="space-y-6">
-      {/* Hero */}
-      <div className="text-center py-6">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          🏫 SRO Free Timetable
-        </h1>
-        <p className="text-gray-600">
-          สร้างตารางสอนอัตโนมัติด้วย Constraint Optimization (OR-Tools CP-SAT)
-        </p>
-      </div>
-
       {/* Step 1: Select fixture */}
       <div className="card">
         <div className="flex items-center gap-2 mb-4">
@@ -59,14 +49,14 @@ export default function HomePage() {
           <SolverMetrics metrics={result.metrics} />
           <div className="flex gap-3 justify-center">
             <button
-              onClick={() => setView('timetable')}
+              onClick={() => setStep(5)}
               className="btn-primary flex items-center gap-2"
             >
               <FileText className="w-4 h-4" />
               ดูตารางสอน
             </button>
             <button
-              onClick={() => setView('teachers')}
+              onClick={() => setStep(5)}
               className="btn-secondary flex items-center gap-2"
             >
               <CheckCircle className="w-4 h-4" />

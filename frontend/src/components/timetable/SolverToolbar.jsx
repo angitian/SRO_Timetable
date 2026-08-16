@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
   Rocket,
   Target,
@@ -19,13 +19,11 @@ import {
   Gauge,
   Calendar,
   Users,
-  FileText,
-  Image as ImageIcon,
-  Table,
+  FlaskConical,
+  Sparkles,
 } from 'lucide-react'
 import { SOLVER_PRESETS, getPreset } from '../../utils/scoreCalculator.js'
 import { formatSnapshotDate, generateLabel } from '../../utils/versionManager.js'
-import { runExport } from '../../utils/exportEngine.js'
 
 /**
  * Solver status config for the compact badge.
@@ -199,6 +197,51 @@ function PresetOption({ preset, timeHint, isActive, onClick }) {
  *   onExportSnapshot      — (id?) => void
  *   onImportSnapshot      — (file) => Promise<{ ok, error? }>
  */
+
+// Build the confirmation modal message for a pending batch action.
+// Replaces the previous 8-level nested ternary with a flat lookup.
+function buildConfirmMessage(action, selectedTeacherId, selectedClassId, teachers, classes) {
+  if (!action) return ''
+  // Actions that don't need a teacher/class selection
+  const SIMPLE_MESSAGES = {
+    manual: 'ยืนยันการล้างเฉพาะวิชาที่วางด้วยมือ',
+    solver: 'ยืนยันการล้างเฉพาะวิชาที่ระบบจัดอัตโนมัติ',
+    all: 'ยืนยันการล้างทั้งหมดกลับเป็นตารางเปล่า',
+  }
+  if (SIMPLE_MESSAGES[action]) return SIMPLE_MESSAGES[action]
+
+  // Actions that target a teacher
+  const TEACHER_ACTIONS = {
+    teacher: 'ยืนยันการล้างวิชาทั้งหมดของ',
+    pinTeacher: 'ยืนยันการปักหมุดผล AI ของ',
+    unpinTeacher: 'ยืนยันการปลดล็อกหมุดของ',
+  }
+  if (TEACHER_ACTIONS[action]) {
+    if (!selectedTeacherId) return 'กรุณาเลือกครูผู้สอน'
+    const name = teachers.find((t) => t.id === selectedTeacherId)?.name
+    return `${TEACHER_ACTIONS[action]} ${name}`
+  }
+
+  // Actions that target a class
+  const CLASS_ACTIONS = {
+    class: 'ยืนยันการล้างวิชาทั้งหมดของ',
+    pinClass: 'ยืนยันการปักหมุดผล AI ของ',
+    unpinClass: 'ยืนยันการปลดล็อกหมุดของ',
+  }
+  if (CLASS_ACTIONS[action]) {
+    if (!selectedClassId) return 'กรุณาเลือกห้องเรียน'
+    const name = classes.find((c) => c.id === selectedClassId)?.name
+    return `${CLASS_ACTIONS[action]} ${name}`
+  }
+
+  return ''
+}
+
+// Actions that require a teacher or class selection before the confirm button is enabled.
+const ACTIONS_REQUIRING_SELECTION = new Set([
+  'teacher', 'class', 'pinTeacher', 'pinClass', 'unpinTeacher', 'unpinClass',
+])
+
 export default function SolverToolbar({
   solverPreset = 'balanced',
   onPresetChange,
@@ -216,6 +259,10 @@ export default function SolverToolbar({
   onClearByClass,
   onPinAllSolver,
   onUnpinAll,
+  onPinByTeacher,
+  onPinByClass,
+  onUnpinByTeacher,
+  onUnpinByClass,
   teachers = [],
   classes = [],
   hasResult = false,
@@ -233,16 +280,16 @@ export default function SolverToolbar({
   onDeleteSnapshot,
   onExportSnapshot,
   onImportSnapshot,
-  // ── Tab + Export props ──
+  // ── Tab + Print Studio props ──
   activeTab = 'timetable',
   onTabChange,
-  exportData = null,
+  onNavigatePrintStudio,
 }) {
   const [presetDropdownOpen, setPresetDropdownOpen] = useState(false)
   const [metricsPopoverOpen, setMetricsPopoverOpen] = useState(false)
   const [clearDropdownOpen, setClearDropdownOpen] = useState(false)
   const [pinDropdownOpen, setPinDropdownOpen] = useState(false)
-  const [pendingAction, setPendingAction] = useState(null) // 'manual'|'solver'|'all'|'teacher'|'class'
+  const [pendingAction, setPendingAction] = useState(null) // 'manual'|'solver'|'all'|'teacher'|'class'|'pinTeacher'|'pinClass'|'unpinTeacher'|'unpinClass'
   const [showConfirm, setShowConfirm] = useState(false)
   const [selectedTeacherId, setSelectedTeacherId] = useState(null)
   const [selectedClassId, setSelectedClassId] = useState(null)
@@ -251,70 +298,22 @@ export default function SolverToolbar({
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [saveLabel, setSaveLabel] = useState('')
   const [toast, setToast] = useState(null)
-  // ── Export state ──
-  const [exportFormat, setExportFormat] = useState('pdf') // 'pdf' | 'png' | 'xlsx'
-  const [exportScope, setExportScope] = useState({ classes: true, teachers: false })
-  const [exporting, setExporting] = useState(false)
-  const [exportProgress, setExportProgress] = useState('')
   const fileInputRef = useRef(null)
-
-  // Sync export scope defaults with active tab
-  useEffect(() => {
-    if (activeTab === 'teachers') {
-      setExportScope({ classes: false, teachers: true })
-    } else {
-      setExportScope({ classes: true, teachers: false })
-    }
-  }, [activeTab])
 
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg })
     setTimeout(() => setToast(null), 3000)
   }, [])
 
-  // ── Unified export handler ───────────────────────────────────────
-  async function handleDownload() {
-    if (!exportData) {
-      showToast('err', 'ไม่มีข้อมูลที่จะส่งออก')
-      return
-    }
-    if (!exportScope.classes && !exportScope.teachers) {
-      showToast('err', 'กรุณาเลือกอย่างน้อย 1 ขอบเขต')
-      return
-    }
-    setExporting(true)
-    try {
-      const result = await runExport({
-        format: exportFormat,
-        scope: exportScope,
-        data: exportData,
-        onProgress: (msg) => setExportProgress(msg),
-      })
-      if (result.ok) {
-        const fmtLabel = exportFormat === 'pdf' ? 'PDF' : exportFormat === 'png' ? 'PNG' : 'Excel'
-        showToast('ok', `ส่งออก ${fmtLabel} สำเร็จ${result.count ? ` (${result.count} ตาราง)` : ''}`)
-      } else {
-        showToast('err', result.error || 'ส่งออกไม่สำเร็จ')
-      }
-    } catch (e) {
-      if (e?.name === 'AbortError') {
-        // User cancelled folder picker — silent
-      } else {
-        showToast('err', 'ส่งออกไม่สำเร็จ: ' + e.message)
-      }
-    }
-    setExporting(false)
-    setExportProgress('')
-  }
-
   const currentPreset = getPreset(solverPreset)
 
   function openConfirm(action) {
     setPendingAction(action)
-    if (action === 'teacher') setSelectedTeacherId(null)
-    if (action === 'class') setSelectedClassId(null)
+    if (action === 'teacher' || action === 'pinTeacher' || action === 'unpinTeacher') setSelectedTeacherId(null)
+    if (action === 'class' || action === 'pinClass' || action === 'unpinClass') setSelectedClassId(null)
     setShowConfirm(true)
     setClearDropdownOpen(false)
+    setPinDropdownOpen(false)
   }
 
   function handleConfirm() {
@@ -323,6 +322,10 @@ export default function SolverToolbar({
     else if (pendingAction === 'all') onClearAll?.()
     else if (pendingAction === 'teacher') onClearByTeacher?.(selectedTeacherId)
     else if (pendingAction === 'class') onClearByClass?.(selectedClassId)
+    else if (pendingAction === 'pinTeacher') onPinByTeacher?.(selectedTeacherId)
+    else if (pendingAction === 'pinClass') onPinByClass?.(selectedClassId)
+    else if (pendingAction === 'unpinTeacher') onUnpinByTeacher?.(selectedTeacherId)
+    else if (pendingAction === 'unpinClass') onUnpinByClass?.(selectedClassId)
     setShowConfirm(false)
     setPendingAction(null)
     setSelectedTeacherId(null)
@@ -341,21 +344,14 @@ export default function SolverToolbar({
     onPresetChange?.(presetId)
   }
 
-  const confirmMessage =
-    pendingAction === 'manual' ? 'ยืนยันการล้างเฉพาะวิชาที่วางด้วยมือ'
-    : pendingAction === 'solver' ? 'ยืนยันการล้างเฉพาะวิชาที่ระบบจัดอัตโนมัติ'
-    : pendingAction === 'all' ? 'ยืนยันการล้างทั้งหมดกลับเป็นตารางเปล่า'
-    : pendingAction === 'teacher' && selectedTeacherId
-      ? `ยืนยันการล้างวิชาทั้งหมดของ ${teachers.find((t) => t.id === selectedTeacherId)?.name}`
-      : pendingAction === 'teacher' ? 'กรุณาเลือกครูผู้สอน'
-      : pendingAction === 'class' && selectedClassId
-        ? `ยืนยันการล้างวิชาทั้งหมดของ ${classes.find((c) => c.id === selectedClassId)?.name}`
-        : pendingAction === 'class' ? 'กรุณาเลือกห้องเรียน'
-        : ''
+  const confirmMessage = buildConfirmMessage(
+    pendingAction, selectedTeacherId, selectedClassId, teachers, classes,
+  )
 
   const confirmDisabled =
-    (pendingAction === 'teacher' && !selectedTeacherId) ||
-    (pendingAction === 'class' && !selectedClassId)
+    ACTIONS_REQUIRING_SELECTION.has(pendingAction) &&
+    ((!selectedTeacherId && ['teacher', 'pinTeacher', 'unpinTeacher'].includes(pendingAction)) ||
+     (!selectedClassId && ['class', 'pinClass', 'unpinClass'].includes(pendingAction)))
 
   // Build time hint for each preset option in the dropdown
   function presetTimeHint(preset) {
@@ -751,6 +747,34 @@ export default function SolverToolbar({
                         disabled={!hasPlacements}
                         onClick={() => { onUnpinAll?.(); setPinDropdownOpen(false) }}
                       />
+                      <ClearOption
+                        icon="👤"
+                        title="ปักหมุดตามครู..."
+                        desc="เลือกครูเพื่อล็อกผล AI ของครูท่านนั้นทั้งหมด"
+                        disabled={teachers.length === 0 || !hasResult}
+                        onClick={() => openConfirm('pinTeacher')}
+                      />
+                      <ClearOption
+                        icon="🏫"
+                        title="ปักหมุดตามห้อง..."
+                        desc="เลือกห้องเพื่อล็อกผล AI ของห้องเรียนนั้นทั้งหมด"
+                        disabled={classes.length === 0 || !hasResult}
+                        onClick={() => openConfirm('pinClass')}
+                      />
+                      <ClearOption
+                        icon="🔓👤"
+                        title="ปลดล็อกตามครู..."
+                        desc="เลือกครูเพื่อปลดหมุดของครูท่านนั้นทั้งหมด"
+                        disabled={teachers.length === 0 || !hasPlacements}
+                        onClick={() => openConfirm('unpinTeacher')}
+                      />
+                      <ClearOption
+                        icon="🔓🏫"
+                        title="ปลดล็อกตามห้อง..."
+                        desc="เลือกห้องเพื่อปลดหมุดของห้องเรียนนั้นทั้งหมด"
+                        disabled={classes.length === 0 || !hasPlacements}
+                        onClick={() => openConfirm('unpinClass')}
+                      />
                     </div>
                   </>
                 )}
@@ -853,88 +877,23 @@ export default function SolverToolbar({
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
-            Card 4: Unified Export & Publish (ส่งออกใช้งานจริง)
+            Card 4: Print Studio CTA (จัดพิมพ์และส่งออกเอกสาร)
         ════════════════════════════════════════════════════════════════ */}
         <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
           flex flex-col justify-between min-h-[92px] gap-2">
-          {/* Row 1: Format selector — compact radio tabs */}
-          <div className="flex items-center gap-1 w-full text-xs">
-            {[
-              { id: 'pdf', label: 'PDF', icon: FileText, title: 'ส่งออกเป็น PDF (พิมพ์/แจก)' },
-              { id: 'png', label: 'PNG', icon: ImageIcon, title: 'ส่งออกเป็นภาพ PNG (ความละเอียดสูง)' },
-              { id: 'xlsx', label: 'Excel', icon: Table, title: 'ส่งออกเป็น Excel .xlsx (แก้ไขต่อ)' },
-            ].map((opt) => {
-              const Icon = opt.icon
-              const isActive = exportFormat === opt.id
-              return (
-                <button
-                  key={opt.id}
-                  onClick={() => setExportFormat(opt.id)}
-                  className={`flex items-center justify-center gap-1 flex-1 px-2 py-1.5 rounded-lg text-xs font-medium
-                    transition-colors border
-                    ${isActive
-                      ? 'bg-slate-800 text-white border-slate-800 font-semibold'
-                      : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300'}`}
-                  title={opt.title}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  {opt.label}
-                </button>
-              )
-            })}
-          </div>
-
-          {/* Row 2: Scope checkboxes + Download button */}
-          <div className="flex items-center justify-between gap-2 text-xs">
-            {/* Checkboxes */}
-            <div className="flex items-center gap-2 min-w-0">
-              <label
-                className="flex items-center gap-1 cursor-pointer select-none whitespace-nowrap"
-                title="ส่งออกตารางของทุกห้องเรียน"
-              >
-                <input
-                  type="checkbox"
-                  checked={exportScope.classes}
-                  onChange={(e) => setExportScope((s) => ({ ...s, classes: e.target.checked }))}
-                  className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                />
-                <span className="text-gray-700">ทุกห้องเรียน</span>
-              </label>
-              <label
-                className="flex items-center gap-1 cursor-pointer select-none whitespace-nowrap"
-                title="ส่งออกตารางของครูทุกคน"
-              >
-                <input
-                  type="checkbox"
-                  checked={exportScope.teachers}
-                  onChange={(e) => setExportScope((s) => ({ ...s, teachers: e.target.checked }))}
-                  className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                />
-                <span className="text-gray-700">ครูทุกคน</span>
-              </label>
-            </div>
-
-            {/* Download button */}
-            <button
-              onClick={handleDownload}
-              disabled={exporting || (!exportScope.classes && !exportScope.teachers)}
-              className="flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-800 text-white
-                rounded-lg font-bold text-xs transition-colors shadow-sm flex-shrink-0
-                hover:bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed"
-              title={
-                exporting
-                  ? exportProgress || 'กำลังส่งออก...'
-                  : `ดาวน์โหลด ${exportFormat.toUpperCase()}${exportScope.classes && exportScope.teachers ? ' (ห้อง + ครู)' : exportScope.classes ? ' (ห้องเรียน)' : exportScope.teachers ? ' (ครู)' : ''}`
-              }
-            >
-              {exporting ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Download className="w-3.5 h-3.5" />
-              )}
-              {exporting ? '...' : 'ดาวน์โหลด'}
-            </button>
-          </div>
+          <button
+            onClick={onNavigatePrintStudio}
+            className="flex items-center justify-center gap-2 w-full py-3
+              bg-gradient-to-r from-slate-700 to-slate-800 text-white
+              rounded-xl font-bold text-sm shadow-md
+              hover:from-slate-800 hover:to-slate-900
+              transition-all border border-slate-600
+              active:scale-[0.98]"
+            title="เปิดหน้า Print Studio เพื่อจัดพิมพ์และส่งออกเอกสาร"
+          >
+            <Sparkles className="w-4 h-4" />
+            จัดพิมพ์และส่งออกเอกสาร (Print Studio) ➔
+          </button>
         </div>
       </div>
 
@@ -949,7 +908,7 @@ export default function SolverToolbar({
               <p className="text-sm text-gray-500 mt-1">ของ {selectedClassName}</p>
             )}
 
-            {pendingAction === 'teacher' && (
+            {(pendingAction === 'teacher' || pendingAction === 'pinTeacher' || pendingAction === 'unpinTeacher') && (
               <select
                 value={selectedTeacherId || ''}
                 onChange={(e) => setSelectedTeacherId(e.target.value)}
@@ -963,7 +922,7 @@ export default function SolverToolbar({
               </select>
             )}
 
-            {pendingAction === 'class' && (
+            {(pendingAction === 'class' || pendingAction === 'pinClass' || pendingAction === 'unpinClass') && (
               <select
                 value={selectedClassId || ''}
                 onChange={(e) => setSelectedClassId(e.target.value)}
@@ -989,9 +948,15 @@ export default function SolverToolbar({
                 onClick={handleConfirm}
                 disabled={confirmDisabled}
                 className={`flex-1 px-4 py-2.5 text-sm font-bold text-white rounded-xl transition-colors
-                  ${confirmDisabled ? 'bg-gray-300 cursor-not-allowed' : 'bg-rose-600 hover:bg-rose-700'}`}
+                  ${confirmDisabled
+                    ? 'bg-gray-300 cursor-not-allowed'
+                    : pendingAction?.startsWith('pin') || pendingAction?.startsWith('unpin')
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-rose-600 hover:bg-rose-700'}`}
               >
-                ยืนยันล้างข้อมูล
+                {pendingAction?.startsWith('pin') || pendingAction?.startsWith('unpin')
+                  ? 'ยืนยันดำเนินการ'
+                  : 'ยืนยันล้างข้อมูล'}
               </button>
             </div>
           </div>

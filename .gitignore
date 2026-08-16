@@ -22,3 +22,15 @@ npm-debug.log*
 
 # Vite
 .vite/
+
+# Temp/test files
+1.pdf
+test.pdf
+images.jpg
+output_template.xlsx
+1_2026-08-14.json
+
+# Local school data (Thai-named folders)
+ครูผู้สอน/
+ห้องเรียน/
+ตารางเรียน*.xlsx

@@ -6,6 +6,7 @@ import {
 import { useApp } from '../context/AppContext.jsx'
 import FixtureSelector from '../components/input/FixtureSelector.jsx'
 import DataSummary from '../components/input/DataSummary.jsx'
+import RoomSelector from '../components/rooms/RoomSelector.jsx'
 
 const BASE_URL = 'http://127.0.0.1:8000'
 
@@ -169,21 +170,25 @@ function ExcelImportPanel({ setFixtureDataDirect, clearResult, onDone }) {
         admin_role: t.admin_role || 'none',
       }))
 
+      const classRooms = (data.classes || []).map((c) => ({
+        id: `R_${c.id}`,
+        name: `ห้อง ${c.name}`,
+        room_type: 'classroom',
+      }))
+      const specialRooms = data.special_rooms || []
       const rooms = (data.rooms || []).length > 0
         ? data.rooms
-        : (data.classes || []).map((c) => ({
-            id: `R_${c.id}`,
-            name: `ห้อง ${c.name}`,
-            room_type: 'classroom',
-          }))
+        : [...classRooms, ...specialRooms]
 
       const fixtureData = {
         teachers,
         rooms,
+        special_rooms: specialRooms,
         subjects: data.subjects || [],
         classes: data.classes || [],
         lesson_blocks: data.lesson_blocks || [],
         fixed_slots: data.fixed_slots || [],
+        schedule_blocks: [],
         schedule_config: {
           days_per_week: 5,
           periods_per_day: 8,
@@ -344,6 +349,28 @@ function ExcelImportPanel({ setFixtureDataDirect, clearResult, onDone }) {
               </div>
             ))}
           </div>
+          {importResult.warnings && importResult.warnings.length > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-left">
+              {importResult.warnings.map((w, idx) =>
+                w.type === 'merged_duplicates' ? (
+                  <div key={idx} className="text-sm text-amber-800">
+                    <span className="font-bold">⚠ พบแถวซ้ำ {w.merged.length} กลุ่ม:</span>{' '}
+                    ระบบรวมคาบของแถวที่ซ้ำกัน (ครู+วิชา+ห้อง+ห้องเรียน เดียวกัน) ให้อัตโนมัติ
+                    <ul className="mt-1 ml-4 list-disc text-xs">
+                      {w.merged.slice(0, 5).map((m, i) => (
+                        <li key={i}>
+                          {m.count} แถว → รวมเป็น {m.total_periods} คาบ
+                        </li>
+                      ))}
+                      {w.merged.length > 5 && (
+                        <li>... และอีก {w.merged.length - 5} กลุ่ม</li>
+                      )}
+                    </ul>
+                  </div>
+                ) : null,
+              )}
+            </div>
+          )}
           <button onClick={onDone} className="btn-primary text-sm">
             ดู Course Offering →
           </button>
@@ -579,13 +606,51 @@ function CourseOfferingTable({ fixtureData, updateFixtureData }) {
 // ── Lesson Block Edit Modal ──────────────────────────────────────────────────
 
 function LbEditModal({ editingLb, subjects, teachers, classes, onSave, onClose }) {
+  const { fixtureData, addSpecialRoom, setLessonBlockRoom } = useApp()
+  const specialRooms = fixtureData?.special_rooms || []
   const [formData, setFormData] = useState({
     subject_id: editingLb?.subject_id || subjects[0]?.id || '',
     teacher_id: editingLb?.teacher_id || teachers[0]?.id || '',
     class_id: editingLb?.class_id || classes[0]?.id || '',
     periods_per_week: editingLb?.periods_per_week || 1,
     is_double_period: editingLb?.is_double_period || false,
+    room_id: editingLb?.room_id || null,
   })
+
+  // Determine if the current room_id is a special room (not R_{classId})
+  const defaultRoomId = formData.class_id ? `R_${formData.class_id}` : null
+  const isSpecialRoomSelected = formData.room_id && formData.room_id !== defaultRoomId && !formData.room_id.startsWith('R_')
+
+  function handleRoomChange(newRoomId) {
+    setFormData({ ...formData, room_id: newRoomId })
+  }
+
+  function handleCreateNewRoom(name) {
+    const newId = `SR_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+    addSpecialRoom({ id: newId, name, room_type: 'lab' })
+    // Auto-select the newly created room
+    setFormData({ ...formData, room_id: newId })
+  }
+
+  // When class changes, reset room_id to the new class's default if currently default
+  function handleClassChange(newClassId) {
+    const newDefault = `R_${newClassId}`
+    setFormData((prev) => ({
+      ...prev,
+      class_id: newClassId,
+      room_id: (!prev.room_id || prev.room_id === `R_${prev.class_id}` || prev.room_id.startsWith('R_'))
+        ? newDefault
+        : prev.room_id,
+    }))
+  }
+
+  function handleSave() {
+    // Ensure room_id is set: default to R_{classId} if not a special room
+    const finalRoomId = formData.room_id && !formData.room_id.startsWith('R_')
+      ? formData.room_id
+      : `R_${formData.class_id}`
+    onSave({ ...formData, room_id: finalRoomId })
+  }
 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={onClose}>
@@ -622,11 +687,20 @@ function LbEditModal({ editingLb, subjects, teachers, classes, onSave, onClose }
             <select
               className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               value={formData.class_id}
-              onChange={(e) => setFormData({ ...formData, class_id: e.target.value })}
+              onChange={(e) => handleClassChange(e.target.value)}
             >
               {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
+          {/* Special Room (Facility) Selector */}
+          <RoomSelector
+            value={isSpecialRoomSelected ? formData.room_id : null}
+            onChange={handleRoomChange}
+            specialRooms={specialRooms}
+            classId={formData.class_id}
+            onCreateNew={handleCreateNewRoom}
+            label="ห้องปฏิบัติการ (ถ้ามี)"
+          />
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-sm font-medium text-gray-700">คาบ/สัปดาห์</label>
@@ -652,7 +726,7 @@ function LbEditModal({ editingLb, subjects, teachers, classes, onSave, onClose }
         </div>
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="btn-secondary text-sm">ยกเลิก</button>
-          <button onClick={() => onSave(formData)} className="btn-primary text-sm">บันทึก</button>
+          <button onClick={handleSave} className="btn-primary text-sm">บันทึก</button>
         </div>
       </div>
     </div>

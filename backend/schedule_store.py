@@ -90,14 +90,21 @@ def _load_all() -> list[dict]:
         SCHEDULES_FILE.write_text(
             json.dumps(PRESETS, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-    return json.loads(SCHEDULES_FILE.read_text(encoding="utf-8"))
+    try:
+        return json.loads(SCHEDULES_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        # Corrupted store — fall back to presets to keep the service alive
+        return list(PRESETS)
 
 
 def _save_all(schedules: list[dict]):
+    """Atomically persist schedules (write-temp + rename) to avoid torn writes."""
     _ensure_data_dir()
-    SCHEDULES_FILE.write_text(
+    tmp = SCHEDULES_FILE.with_suffix(".json.tmp")
+    tmp.write_text(
         json.dumps(schedules, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    tmp.replace(SCHEDULES_FILE)
 
 
 def list_schedules() -> list[ScheduleTemplate]:
@@ -115,7 +122,10 @@ def get_schedule(schedule_id: str) -> ScheduleTemplate | None:
 
 def create_schedule(template: ScheduleTemplate) -> ScheduleTemplate:
     data = _load_all()
+    existing_ids = {d.get("id") for d in data}
     new_id = f"sch_{uuid.uuid4().hex[:8]}"
+    while new_id in existing_ids:
+        new_id = f"sch_{uuid.uuid4().hex[:8]}"
     template.id = new_id
     data.append(template.model_dump())
     _save_all(data)

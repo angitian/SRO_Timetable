@@ -189,7 +189,18 @@ export function exportToFile(snapshot) {
   if (!snapshot) return
   // Strip internal fields
   const { _bytes, ...clean } = snapshot
-  const json = JSON.stringify(clean, null, 2)
+  // Embed generator/branding metadata at the top of every exported file.
+  const exportPayload = {
+    _meta: {
+      generator: 'SRO Timetable',
+      developer: 'One Man Lab',
+      platform: 'KRU Platform',
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+    },
+    ...clean,
+  }
+  const json = JSON.stringify(exportPayload, null, 2)
   const blob = new Blob([json], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

@@ -16,86 +16,58 @@
  */
 
 import JSZip from 'jszip'
+import html2canvas from 'html2canvas'
 
 /**
  * Render a single grid HTML page to a PNG Blob at 2x scale.
+ *
+ * Uses html2canvas for reliable DOM→Canvas rendering across all browsers.
+ * (Previously used SVG foreignObject + Image.src, which silently failed in
+ *  Chrome's sandboxed SVG-as-image context — caused ~60s hang with no output.)
  *
  * @param {string} innerHTML — the grid page HTML
  * @param {number} widthPx — target width in CSS pixels
  * @returns {Promise<Blob>}
  */
-function renderGridHTMLToPNGBlob(innerHTML, widthPx = 1000) {
-  return new Promise((resolve, reject) => {
-    // Build a complete styled container to measure & render
-    const container = document.createElement('div')
-    container.style.cssText = `
-      position: fixed;
-      left: -99999px;
-      top: 0;
-      width: ${widthPx}px;
-      background: #ffffff;
-      padding: 16px;
-      font-family: 'Sarabun', 'Segoe UI', Tahoma, sans-serif;
-      color: #1f2937;
-    `
-    container.innerHTML = innerHTML
-    document.body.appendChild(container)
+async function renderGridHTMLToPNGBlob(innerHTML, widthPx = 1000) {
+  const container = document.createElement('div')
+  container.style.cssText = `
+    position: fixed;
+    left: -99999px;
+    top: 0;
+    width: ${widthPx}px;
+    background: #ffffff;
+    padding: 16px;
+    font-family: 'Sarabun', 'Segoe UI', Tahoma, sans-serif;
+    color: #1f2937;
+  `
+  container.innerHTML = innerHTML
+  document.body.appendChild(container)
 
-    // Wait a tick for layout
-    requestAnimationFrame(() => {
-      const rect = container.getBoundingClientRect()
-      const width = Math.ceil(rect.width)
-      const height = Math.ceil(rect.height)
+  try {
+    // Wait one frame for layout to settle
+    await new Promise((r) => requestAnimationFrame(r))
 
-      // Serialize
-      const serializer = new XMLSerializer()
-      const htmlString = serializer.serializeToString(container)
-
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-        <foreignObject width="100%" height="100%">
-          <div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;">
-            ${htmlString}
-          </div>
-        </foreignObject>
-      </svg>`
-
-      const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
-      const url = URL.createObjectURL(svgBlob)
-
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-
-      img.onload = () => {
-        const scale = 2 // 2x for sharpness
-        const canvas = document.createElement('canvas')
-        canvas.width = width * scale
-        canvas.height = height * scale
-        const ctx = canvas.getContext('2d')
-        ctx.scale(scale, scale)
-        ctx.fillStyle = '#ffffff'
-        ctx.fillRect(0, 0, width, height)
-        ctx.drawImage(img, 0, 0, width, height)
-
-        canvas.toBlob((blob) => {
-          document.body.removeChild(container)
-          URL.revokeObjectURL(url)
-          if (!blob) {
-            reject(new Error('Canvas toBlob failed'))
-            return
-          }
-          resolve(blob)
-        }, 'image/png')
-      }
-
-      img.onerror = () => {
-        document.body.removeChild(container)
-        URL.revokeObjectURL(url)
-        reject(new Error('ไม่สามารถ capture ตารางเป็น PNG ได้'))
-      }
-
-      img.src = url
+    const canvas = await html2canvas(container, {
+      scale: 2,                 // 2x for sharpness
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      logging: false,
+      width: widthPx,
+      windowWidth: widthPx,
     })
-  })
+
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((b) => {
+        if (!b) reject(new Error('Canvas toBlob failed'))
+        else resolve(b)
+      }, 'image/png')
+    })
+
+    return blob
+  } finally {
+    document.body.removeChild(container)
+  }
 }
 
 /**

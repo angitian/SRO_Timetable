@@ -14,12 +14,14 @@ from models import (
     TimetableRequest,
     TimetableResponse,
 )
-
-
-def _time_to_minutes(hhmm: str) -> int:
-    """Convert 'HH:MM' to minutes from midnight."""
-    parts = hhmm.split(":")
-    return int(parts[0]) * 60 + int(parts[1])
+from utils import (
+    time_to_minutes as _time_to_minutes,
+    time_intervals_overlap,
+    parse_day_period,
+    get_periods_for_block_on_day,
+    filter_study_periods,
+    filter_lunch_periods,
+)
 
 
 class _FirstSolutionCallback(cp_model.CpSolverSolutionCallback):
@@ -79,74 +81,91 @@ class TimetableSolver:
         self.period_time_map_by_day: dict[tuple[str, int, int], tuple[int, int]] = {}
 
         if self.use_blocks:
-            for blk in request.schedule_blocks:
-                self.block_by_id[blk.id] = blk
-                for cid in blk.target_classes:
-                    self.class_to_block[cid] = blk.id
-                for p in blk.periods:
-                    start_min = _time_to_minutes(p.start_time)
-                    end_min = _time_to_minutes(p.end_time)
-                    self.block_period_times[(blk.id, p.period_no)] = (start_min, end_min)
-            # Derive days from the first block
-            first_block = request.schedule_blocks[0]
-            self.days = list(range(1, first_block.days_per_week + 1))
-
-            # Check if any block uses per-day periods
-            any_per_day = any(not blk.apply_to_all_days for blk in request.schedule_blocks)
-
-            if any_per_day:
-                # Build per-day valid periods and lunch sets
-                # Use first block's structure as the reference for day-level periods
-                for d in self.days:
-                    day_valid = set()
-                    day_lunch = set()
-                    for blk in request.schedule_blocks:
-                        if not blk.apply_to_all_days and blk.periods_by_day:
-                            day_periods = blk.periods_by_day.get(str(d), blk.periods)
-                        else:
-                            day_periods = blk.periods
-                        for p in day_periods:
-                            if p.type == PeriodType.STUDY:
-                                day_valid.add(p.period_no)
-                            elif p.type == PeriodType.LUNCH:
-                                day_lunch.add(p.period_no)
-                            # Build per-day time map
-                            self.period_time_map_by_day[(blk.id, d, p.period_no)] = (
-                                _time_to_minutes(p.start_time),
-                                _time_to_minutes(p.end_time),
-                            )
-                    self.valid_periods_by_day[d] = sorted(day_valid)
-                    self.lunch_set_by_day[d] = day_lunch
-                # Flat valid_periods = union of all days' valid periods (for compat)
-                self.valid_periods = sorted(set().union(*[set(v) for v in self.valid_periods_by_day.values()]))
-                self.lunch_set = set().union(*[set(v) for v in self.lunch_set_by_day.values()])
-            else:
-                all_periods = list(range(1, len(first_block.periods) + 1))
-                self.valid_periods = [
-                    p.period_no for p in first_block.periods if p.type == PeriodType.STUDY
-                ]
-                self.lunch_set = {
-                    p.period_no for p in first_block.periods if p.type == PeriodType.LUNCH
-                }
-            # Build period_time_map for each block
-            for blk in request.schedule_blocks:
-                for p in blk.periods:
-                    self.period_time_map[(blk.id, p.period_no)] = (
-                        _time_to_minutes(p.start_time),
-                        _time_to_minutes(p.end_time),
-                    )
+            self._build_block_mappings(request)
         else:
-            # Legacy single-block mode
-            self.days = list(range(1, request.schedule_config.days_per_week + 1))
-            all_periods = list(range(1, request.schedule_config.periods_per_day + 1))
-            self.lunch_set = set(request.schedule_config.lunch_periods)
-            self.valid_periods = [p for p in all_periods if p not in self.lunch_set]
+            self._build_legacy_mappings(request)
 
         # Auto-assign block_id to lesson blocks if not set
         for lb in self.lb_list:
             if not lb.block_id and lb.class_id in self.class_to_block:
                 lb.block_id = self.class_to_block[lb.class_id]
 
+        self._build_fixed_slot_maps(request)
+        self._build_pe_hot_set(request)
+
+        # ── Decision variables ──────────────────────────────────────────
+        self.x: dict[tuple[int, int, int], cp_model.BoolVar] = {}
+        self.pair: dict[tuple[int, int, int], cp_model.BoolVar] = {}
+
+        self._penalty_terms: list[tuple[cp_model.LinearExpr, int]] = []
+        self._num_constraints = 0
+
+    # ── Initialization helpers (extracted from __init__) ───────────────
+
+    def _build_block_mappings(self, request: TimetableRequest) -> None:
+        """Build block/class/period mappings when schedule_blocks is provided."""
+        if not request.schedule_blocks:
+            raise ValueError("use_blocks is True but schedule_blocks is empty")
+
+        for blk in request.schedule_blocks:
+            self.block_by_id[blk.id] = blk
+            for cid in blk.target_classes:
+                self.class_to_block[cid] = blk.id
+            for p in blk.periods:
+                self.block_period_times[(blk.id, p.period_no)] = (
+                    _time_to_minutes(p.start_time),
+                    _time_to_minutes(p.end_time),
+                )
+
+        first_block = request.schedule_blocks[0]
+        self.days = list(range(1, first_block.days_per_week + 1))
+
+        any_per_day = any(not blk.apply_to_all_days for blk in request.schedule_blocks)
+        if any_per_day:
+            self._build_per_day_period_maps(request)
+        else:
+            self.valid_periods = filter_study_periods(first_block.periods)
+            self.lunch_set = set(filter_lunch_periods(first_block.periods))
+
+        # Build period_time_map for each block
+        for blk in request.schedule_blocks:
+            for p in blk.periods:
+                self.period_time_map[(blk.id, p.period_no)] = (
+                    _time_to_minutes(p.start_time),
+                    _time_to_minutes(p.end_time),
+                )
+
+    def _build_per_day_period_maps(self, request: TimetableRequest) -> None:
+        """Build per-day valid periods, lunch sets, and time maps."""
+        for d in self.days:
+            day_valid: set[int] = set()
+            day_lunch: set[int] = set()
+            for blk in request.schedule_blocks:
+                day_periods = get_periods_for_block_on_day(blk, d)
+                for p in day_periods:
+                    if p.type == PeriodType.STUDY:
+                        day_valid.add(p.period_no)
+                    elif p.type == PeriodType.LUNCH:
+                        day_lunch.add(p.period_no)
+                    self.period_time_map_by_day[(blk.id, d, p.period_no)] = (
+                        _time_to_minutes(p.start_time),
+                        _time_to_minutes(p.end_time),
+                    )
+            self.valid_periods_by_day[d] = sorted(day_valid)
+            self.lunch_set_by_day[d] = day_lunch
+        # Flat valid_periods = union of all days' valid periods (for compat)
+        self.valid_periods = sorted(set().union(*[set(v) for v in self.valid_periods_by_day.values()]))
+        self.lunch_set = set().union(*[set(v) for v in self.lunch_set_by_day.values()])
+
+    def _build_legacy_mappings(self, request: TimetableRequest) -> None:
+        """Build period mappings for legacy single-block mode."""
+        self.days = list(range(1, request.schedule_config.days_per_week + 1))
+        all_periods = list(range(1, request.schedule_config.periods_per_day + 1))
+        self.lunch_set = set(request.schedule_config.lunch_periods)
+        self.valid_periods = [p for p in all_periods if p not in self.lunch_set]
+
+    def _build_fixed_slot_maps(self, request: TimetableRequest) -> None:
+        """Build assembly_set and fixed_slots_per_class from request.fixed_slots."""
         self.assembly_set: set[tuple[int, int]] = set()
         for fs in request.fixed_slots:
             if not fs.class_ids:
@@ -156,18 +175,15 @@ class TimetableSolver:
             for cid in fs.class_ids:
                 self.fixed_slots_per_class.setdefault(cid, set()).add((fs.day, fs.period))
 
+    def _build_pe_hot_set(self, request: TimetableRequest) -> None:
+        """Build pe_hot_set from schedule_config (legacy mode only)."""
         self.pe_hot_set: set[tuple[int, int]] = set()
         if not self.use_blocks:
             for s in request.schedule_config.pe_hot_periods:
-                d, p = s.split("-")
-                self.pe_hot_set.add((int(d), int(p)))
-
-        # ── Decision variables ──────────────────────────────────────────
-        self.x: dict[tuple[int, int, int], cp_model.BoolVar] = {}
-        self.pair: dict[tuple[int, int, int], cp_model.BoolVar] = {}
-
-        self._penalty_terms: list[tuple[cp_model.LinearExpr, int]] = []
-        self._num_constraints = 0
+                parsed = parse_day_period(s)
+                if parsed is not None:
+                    d, p = parsed
+                    self.pe_hot_set.add((d, p))
 
     # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -301,21 +317,8 @@ class TimetableSolver:
             teacher_lbs.setdefault(lb.teacher_id, []).append(i)
 
         if not self.use_blocks:
-            # Legacy: same day-period check
-            for d in self.days:
-                for p in self.valid_periods:
-                    for teacher_id, lb_indices in teacher_lbs.items():
-                        active = []
-                        for i in lb_indices:
-                            if (i, d, p) in self.x:
-                                active.append(self.x[(i, d, p)])
-                            if (i, d, p) in self.pair:
-                                active.append(self.pair[(i, d, p)])
-                            if (i, d, p - 1) in self.pair:
-                                active.append(self.pair[(i, d, p - 1)])
-                        if len(active) > 1:
-                            self.model.Add(sum(active) <= 1)
-                            self._num_constraints += 1
+            # Legacy: same day-period check (uses shared clash helper)
+            self._add_entity_clash_constraint(teacher_lbs)
             return
 
         # Multi-block: check time overlap between any two lesson blocks of the same teacher
@@ -342,8 +345,8 @@ class TimetableSolver:
                                 time_j = self.period_time_map_by_day.get((block_j, d, p_j)) or self.period_time_map.get((block_j, p_j))
                                 if not time_i or not time_j:
                                     continue
-                                # Check overlap: max(start1, start2) < min(end1, end2)
-                                if max(time_i[0], time_j[0]) < min(time_i[1], time_j[1]):
+                                # Check overlap using shared helper
+                                if time_intervals_overlap(time_i[0], time_i[1], time_j[0], time_j[1]):
                                     # These slots overlap in real time → can't both be active
                                     vars_i = self._get_vars_for_lb_at_slot(i, d, p_i)
                                     vars_j = self._get_vars_for_lb_at_slot(j, d, p_j)
@@ -351,16 +354,19 @@ class TimetableSolver:
                                         self.model.Add(sum(vars_i) + sum(vars_j) <= 1)
                                         self._num_constraints += 1
 
-    def _add_h2_class_clash(self) -> None:
-        """No class has two lesson blocks at the same (day, period)."""
-        class_lbs: dict[str, list[int]] = {}
-        for i, lb in enumerate(self.lb_list):
-            class_lbs.setdefault(lb.class_id, []).append(i)
+    def _add_entity_clash_constraint(
+        self,
+        entity_lbs: dict[str, list[int]],
+    ) -> None:
+        """Generic clash constraint: no two lesson blocks in the same entity
+        (teacher/class/room) are active at the same (day, period).
 
+        Used by H1 (legacy mode), H2 (class), and H3 (room).
+        """
         for d in self.days:
             day_periods = self._get_valid_periods_for_day(d)
             for p in day_periods:
-                for class_id, lb_indices in class_lbs.items():
+                for entity_id, lb_indices in entity_lbs.items():
                     active = []
                     for i in lb_indices:
                         if (i, d, p) in self.x:
@@ -372,6 +378,13 @@ class TimetableSolver:
                     if len(active) > 1:
                         self.model.Add(sum(active) <= 1)
                         self._num_constraints += 1
+
+    def _add_h2_class_clash(self) -> None:
+        """No class has two lesson blocks at the same (day, period)."""
+        class_lbs: dict[str, list[int]] = {}
+        for i, lb in enumerate(self.lb_list):
+            class_lbs.setdefault(lb.class_id, []).append(i)
+        self._add_entity_clash_constraint(class_lbs)
 
     def _add_h3_room_clash(self) -> None:
         """No room hosts two lesson blocks at the same (day, period)."""
@@ -379,46 +392,52 @@ class TimetableSolver:
         for i, lb in enumerate(self.lb_list):
             if lb.room_id:
                 room_lbs.setdefault(lb.room_id, []).append(i)
-
-        for d in self.days:
-            day_periods = self._get_valid_periods_for_day(d)
-            for p in day_periods:
-                for room_id, lb_indices in room_lbs.items():
-                    active = []
-                    for i in lb_indices:
-                        if (i, d, p) in self.x:
-                            active.append(self.x[(i, d, p)])
-                        if (i, d, p) in self.pair:
-                            active.append(self.pair[(i, d, p)])
-                        if (i, d, p - 1) in self.pair:
-                            active.append(self.pair[(i, d, p - 1)])
-                    if len(active) > 1:
-                        self.model.Add(sum(active) <= 1)
-                        self._num_constraints += 1
+        self._add_entity_clash_constraint(room_lbs)
 
     def _add_h4_period_count(self) -> None:
-        """Each lesson block must be scheduled exactly periods_per_week times."""
+        """Each lesson block should be scheduled exactly periods_per_week times.
+
+        Uses a SOFT constraint (<= with penalty for under-assignment) so that
+        when a class has more lesson periods than available slots, the solver
+        still produces a partial timetable instead of going INFEASIBLE. The
+        penalty encourages the solver to place as many periods as possible.
+        """
         for i, lb in enumerate(self.lb_list):
             if lb.is_double_period:
                 pair_vars = [v for (ii, d, p), v in self.pair.items() if ii == i]
                 single_vars = [v for (ii, d, p), v in self.x.items() if ii == i]
                 if pair_vars and single_vars:
                     # Mixed: pairs (2 periods each) + singles (1 period each)
-                    self.model.Add(sum(pair_vars) * 2 + sum(single_vars) == lb.periods_per_week)
+                    total = sum(pair_vars) * 2 + sum(single_vars)
+                    self.model.Add(total <= lb.periods_per_week)
                     self._num_constraints += 1
+                    # Penalize under-assignment
+                    under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
+                    self.model.Add(total + under == lb.periods_per_week)
+                    self._penalty_terms.append((under, 50))
                 elif pair_vars:
-                    # Only pairs available
-                    self.model.Add(sum(pair_vars) * 2 == lb.periods_per_week)
+                    total = sum(pair_vars) * 2
+                    self.model.Add(total <= lb.periods_per_week)
                     self._num_constraints += 1
+                    under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
+                    self.model.Add(total + under == lb.periods_per_week)
+                    self._penalty_terms.append((under, 50))
                 elif single_vars:
-                    # Only singles available (no valid pair slots found)
-                    self.model.Add(sum(single_vars) == lb.periods_per_week)
+                    total = sum(single_vars)
+                    self.model.Add(total <= lb.periods_per_week)
                     self._num_constraints += 1
+                    under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
+                    self.model.Add(total + under == lb.periods_per_week)
+                    self._penalty_terms.append((under, 50))
             else:
                 single_vars = [v for (ii, d, p), v in self.x.items() if ii == i]
                 if single_vars:
-                    self.model.Add(sum(single_vars) == lb.periods_per_week)
+                    total = sum(single_vars)
+                    self.model.Add(total <= lb.periods_per_week)
                     self._num_constraints += 1
+                    under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
+                    self.model.Add(total + under == lb.periods_per_week)
+                    self._penalty_terms.append((under, 50))
 
     def _add_h5_max_per_day(self) -> None:
         """Limit periods per day per lesson block (spread across days)."""
@@ -475,7 +494,16 @@ class TimetableSolver:
                         self._num_constraints += 1
 
     def _add_teaching_load_bounds(self) -> None:
-        """Teacher total assigned periods within [min, max]."""
+        """Teacher total assigned periods within [min, max].
+
+        max_periods_per_week is a SOFT constraint: the solver prefers to stay
+        within the limit but will exceed it (with a heavy penalty) when the
+        teacher's total lesson load makes it unavoidable. This keeps the
+        timetable feasible even when a teacher is over-assigned, while still
+        surfacing a warning via TeacherLoadSummary.load_status == "over".
+
+        min_periods_per_week remains a hard constraint (a guaranteed minimum).
+        """
         teacher_lbs: dict[str, list[int]] = {}
         for i, lb in enumerate(self.lb_list):
             teacher_lbs.setdefault(lb.teacher_id, []).append(i)
@@ -496,8 +524,15 @@ class TimetableSolver:
                 continue
             total = sum(terms)
             if teacher.max_periods_per_week > 0:
-                self.model.Add(total <= teacher.max_periods_per_week)
+                # Soft max: allow overflow with a heavy penalty so the solver
+                # still places the teacher's lessons instead of going INFEASIBLE.
+                overflow = self.model.NewIntVar(
+                    0, 50, f"teacher_over_{teacher.id}"
+                )
+                self.model.Add(total <= teacher.max_periods_per_week + overflow)
                 self._num_constraints += 1
+                # High weight: discourage overflow but don't forbid it.
+                self._penalty_terms.append((overflow, 100))
             if teacher.min_periods_per_week > 0:
                 self.model.Add(total >= teacher.min_periods_per_week)
                 self._num_constraints += 1

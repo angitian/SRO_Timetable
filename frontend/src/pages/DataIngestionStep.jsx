@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Upload, Plus, Trash2, ArrowRight, ArrowLeft, FileSpreadsheet, X, Check,
-  Users, Layers, BookOpen, Download,
+  Users, Layers, BookOpen, Download, FlaskConical,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { ROOM_TYPES, getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
+import SpecialRoomsManager from '../components/rooms/SpecialRoomsManager.jsx'
+import LabPeriodSplitter from '../components/rooms/LabPeriodSplitter.jsx'
 
 const BASE_URL = 'http://127.0.0.1:8000'
 
@@ -102,7 +104,7 @@ export default function DataIngestionStep() {
             <span className="badge bg-emerald-100 text-emerald-800 text-xs">แนะนำสำหรับเริ่มต้น</span>
           </div>
           <p className="text-sm text-gray-600 mb-3">
-            อัปโหลดไฟล์ Excel <strong>ชีทเดียว</strong> เพียงมีข้อมูลพื้นฐาน <code className="bg-gray-100 px-1 rounded">ชื่อครู</code> <code className="bg-gray-100 px-1 rounded">วิชา</code> <code className="bg-gray-100 px-1 rounded">ห้องเรียน</code> และ <code className="bg-gray-100 px-1 rounded">จำนวนคาบ/สัปดาห์</code> ระบบจะสกัดรายชื่อและจับคู่ภาระงานให้อัตโนมัติทันที
+            อัปโหลดไฟล์ Excel <strong>ชีทเดียว</strong> เพียงมีข้อมูลพื้นฐาน <code className="bg-gray-100 px-1 rounded">ชื่อครู</code> <code className="bg-gray-100 px-1 rounded">วิชา</code> <code className="bg-gray-100 px-1 rounded">ห้องเรียน</code> <code className="bg-gray-100 px-1 rounded">จำนวนคาบ/สัปดาห์</code> และคอลัมน์เสริม <code className="bg-gray-100 px-1 rounded">ห้องปฏิบัติการ</code> + <code className="bg-gray-100 px-1 rounded">คาบแล็บ</code> สำหรับวิชาที่ใช้ห้องแล็บ ระบบจะสกัดรายชื่อและจับคู่ภาระงานให้อัตโนมัติทันที
           </p>
           <p className="text-xs text-gray-500 italic mb-4">
             💡 คำแนะนำ: หากยังไม่มีวิชาหรือห้องเรียนครบ ไม่เป็นไร สามารถใส่นำเข้าเฉพาะรายชื่อครูมาก่อน แล้วไปเพิ่มรายละเอียดในหน้าเว็บทีหลังได้
@@ -146,19 +148,7 @@ export default function DataIngestionStep() {
         </div>
       </div>
 
-      {/* Manual option */}
-      <div className="card border-2 border-gray-200">
-        <div className="flex items-center gap-2 mb-3">
-          <Plus className="w-5 h-5 text-gray-600" />
-          <h3 className="font-bold text-gray-900">เพิ่มห้องเรียนเอง</h3>
-        </div>
-        <p className="text-sm text-gray-600 mb-4">
-          สร้างรายการห้องเรียนด้วยตนเอง เหมาะกับโรงเรียนที่ยังไม่มีไฟล์ Excel
-        </p>
-        <ManualClassForm onAdd={addManualClass} onAddBatch={addGradeBatch} />
-      </div>
-
-      {/* Current classes list */}
+      {/* Current classes list — moved to top, above manual add */}
       {classes.length > 0 && (
         <div className="card">
           <div className="flex items-center justify-between mb-3">
@@ -190,6 +180,44 @@ export default function DataIngestionStep() {
               )
             })}
           </div>
+        </div>
+      )}
+
+      {/* Manual option */}
+      <div className="card border-2 border-gray-200">
+        <div className="flex items-center gap-2 mb-3">
+          <Plus className="w-5 h-5 text-gray-600" />
+          <h3 className="font-bold text-gray-900">เพิ่มห้องเรียนเอง</h3>
+        </div>
+        <p className="text-sm text-gray-600 mb-4">
+          สร้างรายการห้องเรียนด้วยตนเอง เหมาะกับโรงเรียนที่ยังไม่มีไฟล์ Excel
+        </p>
+        <ManualClassForm onAdd={addManualClass} onAddBatch={addGradeBatch} />
+      </div>
+
+      {/* Special Rooms (Facilities) Manager */}
+      <div className="card border-2 border-indigo-200 bg-indigo-50/30">
+        <div className="flex items-center gap-2 mb-3">
+          <FlaskConical className="w-5 h-5 text-indigo-600" />
+          <h3 className="font-bold text-gray-900">จัดการห้องพิเศษ (Labs / ห้องปฏิบัติการ)</h3>
+        </div>
+        <p className="text-sm text-gray-600 mb-4">
+          ห้องพิเศษคือห้องที่ไม่ใช่ห้องเรียนประจำชั้น เช่น ห้องวิทยาศาสตร์ ห้องคอมพิวเตอร์ ห้องดนตรี ห้องโสตทัศนศึกษา — สามารถเพิ่ม แก้ไข หรือลบได้ที่นี่ และเลือกใช้ในฟอร์มแก้ไขรายวิชา
+        </p>
+        <SpecialRoomsManager />
+      </div>
+
+      {/* Lab Period Splitter — assign lab periods to subjects */}
+      {fixtureData?.lesson_blocks?.length > 0 && (fixtureData?.special_rooms?.length || 0) > 0 && (
+        <div className="card border-2 border-purple-200 bg-purple-50/30">
+          <div className="flex items-center gap-2 mb-3">
+            <FlaskConical className="w-5 h-5 text-purple-600" />
+            <h3 className="font-bold text-gray-900">กำหนดคาบห้องปฏิบัติการ (Lab Periods)</h3>
+          </div>
+          <p className="text-sm text-gray-600 mb-4">
+            แยกคาบเรียนออกเป็นคาบห้องปกติ + คาบห้องปฏิบัติการ เช่น วิทย์ 5 คาบ = 3 คาบในห้องเรียน + 2 คาบในห้องแล็บ — เลือกชั้น → เลือกห้อง → เลือกวิชา → กำหนดคาบแล็บ → นำไปใช้
+          </p>
+          <LabPeriodSplitter />
         </div>
       )}
 
@@ -603,17 +631,20 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
         unavailable_slots: t.unavailable_slots || [],
         admin_role: t.admin_role || 'none',
       }))
-      const rooms = (data.classes || []).map((c) => ({
+      const classRooms = (data.classes || []).map((c) => ({
         id: `R_${c.id}`, name: `ห้อง ${c.name}`, room_type: 'classroom',
       }))
+      const specialRooms = data.special_rooms || []
+      const rooms = [...classRooms, ...specialRooms]
 
       setFixtureDataDirect({
         teachers,
         rooms,
+        special_rooms: specialRooms,
         subjects: data.subjects || [],
         classes: data.classes || [],
         lesson_blocks: data.lesson_blocks || [],
-        fixed_slots: [],
+        fixed_slots: data.fixed_slots || [],
         schedule_blocks: [],
         special_activities: [],
         schedule_config: {
@@ -653,13 +684,16 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
         unavailable_slots: t.unavailable_slots || [],
         admin_role: t.admin_role || 'none',
       }))
-      const rooms = (data.classes || []).map((c) => ({
+      const classRooms = (data.classes || []).map((c) => ({
         id: `R_${c.id}`, name: `ห้อง ${c.name}`, room_type: 'classroom',
       }))
+      const specialRooms = data.special_rooms || []
+      const rooms = (data.rooms && data.rooms.length > 0) ? data.rooms : [...classRooms, ...specialRooms]
 
       setFixtureDataDirect({
         teachers,
         rooms,
+        special_rooms: specialRooms,
         subjects: data.subjects || [],
         classes: data.classes || [],
         lesson_blocks: data.lesson_blocks || [],
@@ -767,6 +801,18 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
               <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
                 มี {importResult.summary.teacher_only} แถวที่มีเฉพาะชื่อครู (ไม่มีวิชา/ห้องเรียน) — นำเข้าครูแล้ว สามารถเพิ่มวิชาได้ภายหลัง
               </p>
+            )}
+            {importResult.warnings && importResult.warnings.length > 0 && (
+              <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-left text-sm text-amber-800">
+                {importResult.warnings.map((w, idx) =>
+                  w.type === 'merged_duplicates' ? (
+                    <div key={idx}>
+                      <span className="font-bold">⚠ พบแถวซ้ำ {w.merged.length} กลุ่ม:</span>{' '}
+                      ระบบรวมคาบของแถวที่ซ้ำกัน (ครู+วิชา+ห้อง+ห้องเรียน เดียวกัน) ให้อัตโนมัติ
+                    </div>
+                  ) : null,
+                )}
+              </div>
             )}
             <button onClick={onDone} className="btn-primary text-sm">
               เสร็จสิ้น

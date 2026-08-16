@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import functools
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -12,6 +13,27 @@ from models import TimetableRequest, TimetableResponse, ScheduleTemplate
 from solver import TimetableSolver
 import schedule_store
 from excel_parser import parse_excel, import_with_mapping, import_multi_sheet, generate_minimum_template, import_minimum_template, generate_full_template
+
+# Maximum accepted Excel upload size: 10 MB (prevents DoS via huge files)
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def handle_excel_errors(func):
+    """Decorator: converts RuntimeError → 500, other exceptions → 400.
+
+    Eliminates the repeated try/except pattern across Excel endpoints.
+    """
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except HTTPException:
+            raise  # Pass through already-formed HTTP errors
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to process Excel: {e}")
+    return wrapper
 
 app = FastAPI(
     title="SRO Free Timetable — POC API",
@@ -56,8 +78,19 @@ async def generate_timetable(request: TimetableRequest):
 
 @app.post("/generate/from-file")
 async def generate_from_file(file_path: str):
-    """Generate timetable from a JSON fixture file (for testing)."""
-    path = Path(file_path)
+    """Generate timetable from a JSON fixture file (for testing).
+
+    Restricted to the backend/fixtures directory to prevent path traversal.
+    """
+    fixtures_dir = (Path(__file__).parent / "fixtures").resolve()
+    path = (Path(__file__).parent / file_path).resolve()
+    try:
+        path.relative_to(fixtures_dir)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail="file_path must be within the fixtures directory",
+        )
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
 
@@ -108,19 +141,17 @@ async def delete_schedule(schedule_id: str):
 # ── Excel Import endpoints ──────────────────────────────────────────────────
 
 @app.post("/api/import/excel/detect")
+@handle_excel_errors
 async def detect_excel_columns(file: UploadFile = File(...)):
     """Upload Excel file → detect columns → return preview + auto-mapping."""
     content = await file.read()
-    try:
-        result = parse_excel(content)
-        return result
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to parse Excel: {e}")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+    return parse_excel(content)
 
 
 @app.post("/api/import/excel/import")
+@handle_excel_errors
 async def import_excel(
     file: UploadFile = File(...),
     mapping: str = Form(...),
@@ -133,51 +164,43 @@ async def import_excel(
       - Fixed_Slots (optional): fixed activity slots
     """
     content = await file.read()
-    mapping_dict = json.loads(mapping)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
     try:
-        result = import_multi_sheet(content, mapping_dict)
-        return result
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to import: {e}")
+        mapping_dict = json.loads(mapping)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in mapping parameter")
+    return import_multi_sheet(content, mapping_dict)
 
 
 # ── Minimum Template endpoints ──────────────────────────────────────────────
 
 @app.get("/api/import/excel/template")
+@handle_excel_errors
 async def download_minimum_template():
     """Download a minimum-data Excel template (1 sheet flat table)."""
-    try:
-        content = generate_minimum_template()
-        return StreamingResponse(
-            io.BytesIO(content),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": "attachment; filename=timetable_template_minimum.xlsx"},
-        )
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to generate template: {e}")
+    content = generate_minimum_template()
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=timetable_template_minimum.xlsx"},
+    )
 
 
 @app.get("/api/import/excel/template-full")
+@handle_excel_errors
 async def download_full_template():
     """Download a full multi-sheet Excel template (Course_Mapping + Teacher_Constraints + Fixed_Slots)."""
-    try:
-        content = generate_full_template()
-        return StreamingResponse(
-            io.BytesIO(content),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": "attachment; filename=timetable_template_full.xlsx"},
-        )
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to generate template: {e}")
+    content = generate_full_template()
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=timetable_template_full.xlsx"},
+    )
 
 
 @app.post("/api/import/excel/import-minimum")
+@handle_excel_errors
 async def import_minimum(file: UploadFile = File(...)):
     """Import a minimum-data Excel template (1 sheet flat table).
 
@@ -185,13 +208,9 @@ async def import_minimum(file: UploadFile = File(...)):
     Rows with empty subject/classroom still import the teacher.
     """
     content = await file.read()
-    try:
-        result = import_minimum_template(content)
-        return result
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to import: {e}")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+    return import_minimum_template(content)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react'
 import { generateTimetable } from '../api/client.js'
-import { cacheTimetable, getCachedTimetable } from '../utils/cache.js'
+import { cacheTimetable, getCachedTimetable, clearCache } from '../utils/cache.js'
 import { resolveSolverParams } from '../utils/scoreCalculator.js'
 import {
   listSnapshots,
@@ -46,7 +46,19 @@ function reducer(state, action) {
     case 'SET_FIXTURE':
       return { ...state, selectedFixture: action.payload }
     case 'SET_FIXTURE_DATA':
-      return { ...state, fixtureData: action.payload, isLoadingFixture: false, isDirty: false }
+      return {
+        ...state,
+        fixtureData: action.payload
+          ? { ...action.payload, special_rooms: action.payload.special_rooms || [] }
+          : action.payload,
+        isLoadingFixture: false,
+        isDirty: false,
+        // ล้าง result/placements เก่าเมื่อเปลี่ยน fixture
+        result: null,
+        userPlacements: {},
+        error: null,
+        errorResponse: null,
+      }
     case 'SET_LOADING_FIXTURE':
       return { ...state, isLoadingFixture: action.payload }
     case 'SET_GENERATING':
@@ -64,7 +76,22 @@ function reducer(state, action) {
     case 'SET_SOLVER_PRESET':
       return { ...state, solverPreset: action.payload }
     case 'SET_FIXTURE_DATA_DIRECT':
-      return { ...state, fixtureData: action.payload, isLoadingFixture: false, selectedFixture: 'custom', isDirty: true }
+      return {
+        ...state,
+        fixtureData: action.payload
+          ? { ...action.payload, special_rooms: action.payload.special_rooms || [] }
+          : action.payload,
+        isLoadingFixture: false,
+        selectedFixture: 'custom',
+        isDirty: true,
+        // ล้าง state เก่าทั้งหมดเมื่ออัปโหลดไฟล์ใหม่/สร้างใหม่
+        result: null,
+        userPlacements: {},
+        error: null,
+        errorResponse: null,
+        cacheKey: null,
+        lastSync: null,
+      }
     case 'UPDATE_FIXTURE_DATA':
       return { ...state, fixtureData: { ...state.fixtureData, ...action.payload }, isDirty: true }
     case 'SET_DIRTY':
@@ -119,8 +146,20 @@ function reducer(state, action) {
       return { ...state, userPlacements: {} }
     case 'CLEAR_RESULT':
       return { ...state, result: null, error: null, errorResponse: null, cacheKey: null, lastSync: null }
-    case 'RESTORE_PLACEMENTS':
-      return { ...state, userPlacements: action.payload }
+    case 'RESTORE_PLACEMENTS': {
+      // Filter out placements whose lesson_block_id no longer exists in the
+      // current fixtureData. This prevents stale placements from a previous
+      // session (e.g. after uploading a new Excel file) from being restored
+      // and merging with the new solver output, which caused duplicate slots.
+      const validLbIds = new Set(
+        (state.fixtureData?.lesson_blocks || []).map((lb) => lb.id),
+      )
+      const filteredPlacements = {}
+      for (const [lbId, placements] of Object.entries(action.payload || {})) {
+        if (validLbIds.has(lbId)) filteredPlacements[lbId] = placements
+      }
+      return { ...state, userPlacements: filteredPlacements }
+    }
     case 'CLEAR_ALL_SLOTS':
       return {
         ...state,
@@ -254,7 +293,9 @@ function reducer(state, action) {
     case 'LOAD_SNAPSHOT':
       return {
         ...state,
-        fixtureData: action.payload.fixtureData,
+        fixtureData: action.payload.fixtureData
+          ? { ...action.payload.fixtureData, special_rooms: action.payload.fixtureData.special_rooms || [] }
+          : null,
         result: action.payload.result,
         userPlacements: action.payload.userPlacements || {},
         selectedFixture: action.payload.fixtureName || 'custom',
@@ -351,6 +392,173 @@ function reducer(state, action) {
         isSnapshotDirty: true,
       }
     }
+    // ── Special rooms (facilities) management ──────────────────────
+    case 'ADD_SPECIAL_ROOM': {
+      // payload: { id, name, room_type }
+      if (!state.fixtureData) return state
+      const newRoom = action.payload
+      const existingSpecial = state.fixtureData.special_rooms || []
+      // Dedupe by name (case-insensitive)
+      if (existingSpecial.some((r) => r.name.toLowerCase() === newRoom.name.toLowerCase())) {
+        return state
+      }
+      const existingRooms = state.fixtureData.rooms || []
+      return {
+        ...state,
+        fixtureData: {
+          ...state.fixtureData,
+          special_rooms: [...existingSpecial, newRoom],
+          rooms: [...existingRooms, newRoom],
+        },
+        isDirty: true,
+        isSnapshotDirty: true,
+      }
+    }
+    case 'UPDATE_SPECIAL_ROOM': {
+      // payload: { id, name, room_type }
+      if (!state.fixtureData?.special_rooms) return state
+      const { id, name, room_type } = action.payload
+      const updateFn = (r) => (r.id === id ? { ...r, name: name ?? r.name, room_type: room_type ?? r.room_type } : r)
+      return {
+        ...state,
+        fixtureData: {
+          ...state.fixtureData,
+          special_rooms: state.fixtureData.special_rooms.map(updateFn),
+          rooms: (state.fixtureData.rooms || []).map(updateFn),
+        },
+        isDirty: true,
+        isSnapshotDirty: true,
+      }
+    }
+    case 'DELETE_SPECIAL_ROOM': {
+      // payload: { id } — remove from special_rooms + rooms, clear lesson_block room_id
+      if (!state.fixtureData?.special_rooms) return state
+      const { id } = action.payload
+      const lessonBlocks = (state.fixtureData.lesson_blocks || []).map((lb) =>
+        lb.room_id === id ? { ...lb, room_id: `R_${lb.class_id}` } : lb,
+      )
+      return {
+        ...state,
+        fixtureData: {
+          ...state.fixtureData,
+          special_rooms: state.fixtureData.special_rooms.filter((r) => r.id !== id),
+          rooms: (state.fixtureData.rooms || []).filter((r) => r.id !== id),
+          lesson_blocks: lessonBlocks,
+        },
+        isDirty: true,
+        isSnapshotDirty: true,
+      }
+    }
+    case 'SET_LESSON_BLOCK_ROOM': {
+      // payload: { lessonBlockId, roomId } — set room_id on a single lesson block
+      if (!state.fixtureData?.lesson_blocks) return state
+      const { lessonBlockId, roomId } = action.payload
+      const lessonBlocks = state.fixtureData.lesson_blocks.map((lb) =>
+        lb.id === lessonBlockId ? { ...lb, room_id: roomId } : lb,
+      )
+      return {
+        ...state,
+        fixtureData: { ...state.fixtureData, lesson_blocks: lessonBlocks },
+        isDirty: true,
+        isSnapshotDirty: true,
+      }
+    }
+    case 'CHANGE_SLOT_ROOM': {
+      // payload: { lessonBlockId, newRoomId } — update room_id on lesson block AND result slots
+      if (!state.fixtureData) return state
+      const { lessonBlockId, newRoomId } = action.payload
+      const lessonBlocks = (state.fixtureData.lesson_blocks || []).map((lb) =>
+        lb.id === lessonBlockId ? { ...lb, room_id: newRoomId } : lb,
+      )
+      let newResult = state.result
+      if (state.result?.slots) {
+        const newSlots = state.result.slots.map((s) =>
+          s.lesson_block_id === lessonBlockId ? { ...s, room_id: newRoomId } : s,
+        )
+        newResult = { ...state.result, slots: newSlots }
+      }
+      return {
+        ...state,
+        fixtureData: { ...state.fixtureData, lesson_blocks: lessonBlocks },
+        result: newResult,
+        isDirty: true,
+        isSnapshotDirty: true,
+      }
+    }
+    case 'SPLIT_LESSON_BLOCKS_FOR_LAB': {
+      // payload: { classIds: string[], subjectId: string, labPeriods: number, labRoomId: string }
+      // For each class_id + subject_id:
+      //   - Find original lesson block (room_id starts with R_)
+      //   - If labPeriods > 0: create new lab block + reduce original
+      //   - If labPeriods === 0: merge lab block back into original (un-split)
+      if (!state.fixtureData?.lesson_blocks) return state
+      const { classIds, subjectId, labPeriods, labRoomId } = action.payload
+      const classIdSet = new Set(classIds)
+      let lessonBlocks = [...state.fixtureData.lesson_blocks]
+      let nextIdNum = lessonBlocks.length + 1
+
+      for (const classId of classIdSet) {
+        // Find the normal (classroom) block for this class+subject
+        const normalIdx = lessonBlocks.findIndex(
+          (lb) => lb.class_id === classId && lb.subject_id === subjectId && lb.room_id && lb.room_id.startsWith('R_'),
+        )
+        // Find existing lab block for this class+subject
+        const labIdx = lessonBlocks.findIndex(
+          (lb) => lb.class_id === classId && lb.subject_id === subjectId && lb.room_id && !lb.room_id.startsWith('R_'),
+        )
+
+        if (normalIdx === -1) continue // no normal block to split
+
+        const normalBlock = lessonBlocks[normalIdx]
+        const totalPeriods = normalBlock.periods_per_week + (labIdx !== -1 ? lessonBlocks[labIdx].periods_per_week : 0)
+
+        if (labPeriods > 0 && labPeriods < totalPeriods) {
+          // Split: normal = total - lab, lab = labPeriods
+          const newNormalPeriods = totalPeriods - labPeriods
+          lessonBlocks[normalIdx] = { ...normalBlock, periods_per_week: newNormalPeriods }
+
+          if (labIdx !== -1) {
+            // Update existing lab block
+            lessonBlocks[labIdx] = {
+              ...lessonBlocks[labIdx],
+              periods_per_week: labPeriods,
+              room_id: labRoomId,
+            }
+          } else {
+            // Create new lab block
+            lessonBlocks.push({
+              id: `LB${nextIdNum++}`,
+              subject_id: subjectId,
+              teacher_id: normalBlock.teacher_id,
+              class_id: classId,
+              room_id: labRoomId,
+              periods_per_week: labPeriods,
+              is_double_period: normalBlock.is_double_period,
+              is_fixed: false,
+              fixed_day: null,
+              fixed_period: null,
+            })
+          }
+        } else if (labPeriods === 0) {
+          // Un-split: merge lab back into normal, remove lab block
+          if (labIdx !== -1) {
+            const labPeriodsToMerge = lessonBlocks[labIdx].periods_per_week
+            lessonBlocks[normalIdx] = {
+              ...normalBlock,
+              periods_per_week: normalBlock.periods_per_week + labPeriodsToMerge,
+            }
+            lessonBlocks = lessonBlocks.filter((_, i) => i !== labIdx)
+          }
+        }
+      }
+
+      return {
+        ...state,
+        fixtureData: { ...state.fixtureData, lesson_blocks: lessonBlocks },
+        isDirty: true,
+        isSnapshotDirty: true,
+      }
+    }
     default:
       return state
   }
@@ -385,6 +593,10 @@ export function AppProvider({ children }) {
 
   // Restore from cache on mount (page refresh)
   // Only restore if cached data has schedule_blocks (new format)
+  // Guard: if the user starts a new session (create new / upload file) before
+  // the async cache restore completes, skip the restore to avoid overriding
+  // the new data with stale cache.
+  const skipCacheRestoreRef = useRef(false)
   useEffect(() => {
     const CACHE_KEYS = ['timetable_custom', 'timetable_primary_mock', 'timetable_large', 'timetable_medium', 'timetable_small']
     let restored = false
@@ -392,6 +604,11 @@ export function AppProvider({ children }) {
       for (const key of CACHE_KEYS) {
         try {
           const cached = await getCachedTimetable(key)
+          // Abort if user already started a new session while we were reading cache
+          if (skipCacheRestoreRef.current) {
+            restored = true
+            break
+          }
           if (cached?.result && cached?.fixtureData && cached.fixtureData.schedule_blocks) {
             const fixtureName = key.replace('timetable_', '')
             dispatch({
@@ -408,7 +625,8 @@ export function AppProvider({ children }) {
             break
           }
         } catch (e) {
-          // Cache read failed, continue
+          // Cache read failed — best-effort, continue to next cache key
+          console.warn('[AppContext] Cache restore failed for key:', e.message)
         }
       }
     })()
@@ -463,7 +681,8 @@ export function AppProvider({ children }) {
         await cacheTimetable(cacheKey, { result, fixtureData: currentFixtureData, version: 1 })
         dispatch({ type: 'SET_CACHE_INFO', payload: { cacheKey, lastSync: Date.now() } })
       } catch (e) {
-        // Caching failed silently
+        // Caching is best-effort — don't block the result on cache failure
+        console.warn('[AppContext] Cache write failed:', e.message)
       }
     } catch (err) {
       // Log the error so it's visible in dev tools (prevents silent cache fallback
@@ -513,11 +732,33 @@ export function AppProvider({ children }) {
   }, [])
 
   const setFixtureDataDirect = useCallback((data) => {
+    // ล้าง cache เก่าใน IndexedDB ก่อนตั้งค่าใหม่ เพื่อไม่ให้ cache restore
+    // useEffect โหลดตารางเก่ากลับมาทับข้อมูลใหม่ที่เพิ่งอัปโหลด
+    skipCacheRestoreRef.current = true
+    clearCache().catch((e) => console.warn('[AppContext] Cache clear failed:', e.message))
+    // ล้าง localStorage placements_* ทุก key เพื่อกัน RESTORE_PLACEMENTS
+    // useEffect ดึง placement เก่ากลับมาทับข้อมูลใหม่หลังอัปโหลด Excel ใหม่
+    try {
+      const keysToRemove = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)
+        if (key && key.startsWith('placements_')) keysToRemove.push(key)
+      }
+      keysToRemove.forEach((key) => localStorage.removeItem(key))
+    } catch (e) {
+      console.warn('[AppContext] localStorage placements clear failed:', e.message)
+    }
     dispatch({ type: 'SET_FIXTURE_DATA_DIRECT', payload: data })
   }, [])
 
   const updateFixtureData = useCallback((partial) => {
     dispatch({ type: 'UPDATE_FIXTURE_DATA', payload: partial })
+  }, [])
+
+  // Set isDirty flag directly (used to suppress the "regenerate" banner when
+  // a change does not affect existing placements, e.g. inserting a short break).
+  const setIsDirty = useCallback((value) => {
+    dispatch({ type: 'SET_DIRTY', payload: value })
   }, [])
 
   const clearResult = useCallback(() => {
@@ -606,6 +847,31 @@ export function AppProvider({ children }) {
     dispatch({ type: 'UNLOCK_SLOT', payload: { day, period } })
   }, [])
 
+  // ── Special rooms (facilities) actions ──────────────────────────
+  const addSpecialRoom = useCallback((room) => {
+    dispatch({ type: 'ADD_SPECIAL_ROOM', payload: room })
+  }, [])
+
+  const updateSpecialRoom = useCallback((id, updates) => {
+    dispatch({ type: 'UPDATE_SPECIAL_ROOM', payload: { id, ...updates } })
+  }, [])
+
+  const deleteSpecialRoom = useCallback((id) => {
+    dispatch({ type: 'DELETE_SPECIAL_ROOM', payload: { id } })
+  }, [])
+
+  const setLessonBlockRoom = useCallback((lessonBlockId, roomId) => {
+    dispatch({ type: 'SET_LESSON_BLOCK_ROOM', payload: { lessonBlockId, roomId } })
+  }, [])
+
+  const changeSlotRoom = useCallback((lessonBlockId, newRoomId) => {
+    dispatch({ type: 'CHANGE_SLOT_ROOM', payload: { lessonBlockId, newRoomId } })
+  }, [])
+
+  const splitLessonBlocksForLab = useCallback((classIds, subjectId, labPeriods, labRoomId) => {
+    dispatch({ type: 'SPLIT_LESSON_BLOCKS_FOR_LAB', payload: { classIds, subjectId, labPeriods, labRoomId } })
+  }, [])
+
   // ── Snapshot versioning actions ─────────────────────────────────────
   // Load snapshot list on mount
   useEffect(() => {
@@ -668,6 +934,22 @@ export function AppProvider({ children }) {
       const snap = await importFromFile(file)
       const result = vmSaveSnapshot(snap)
       if (result.ok) {
+        // ล้าง cache เก่าก่อนโหลด snapshot ใหม่ เพื่อไม่ให้ cache restore
+        // useEffect โหลดตารางเก่ากลับมาทับ snapshot ที่เพิ่งโหลด
+        skipCacheRestoreRef.current = true
+        clearCache().catch((e) => console.warn('[AppContext] Cache clear failed:', e.message))
+        // ล้าง localStorage placements_* เช่นกัน เพราะ snapshot มี userPlacements
+        // ของตัวเอง และ RESTORE_PLACEMENTS useEffect อาจทับด้วยของเก่า
+        try {
+          const keysToRemove = []
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i)
+            if (key && key.startsWith('placements_')) keysToRemove.push(key)
+          }
+          keysToRemove.forEach((key) => localStorage.removeItem(key))
+        } catch (e) {
+          console.warn('[AppContext] localStorage placements clear failed:', e.message)
+        }
         dispatch({ type: 'ADD_SNAPSHOT_TO_LIST', payload: listSnapshots().find((s) => s.id === snap.id) })
         dispatch({ type: 'LOAD_SNAPSHOT', payload: snap })
         return { ok: true }
@@ -714,7 +996,10 @@ export function AppProvider({ children }) {
         } else {
           localStorage.removeItem(key)
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) {
+        // localStorage quota exceeded or unavailable — best-effort
+        console.warn('[AppContext] placements persist failed:', e.message)
+      }
     }
   }, [state.userPlacements, state.selectedFixture, state.fixtureData])
 
@@ -727,7 +1012,9 @@ export function AppProvider({ children }) {
         if (saved) {
           dispatch({ type: 'RESTORE_PLACEMENTS', payload: JSON.parse(saved) })
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) {
+        console.warn('[AppContext] placements restore failed:', e.message)
+      }
     }
   }, [state.fixtureData?.schedule_blocks, state.selectedFixture])
 
@@ -744,6 +1031,7 @@ export function AppProvider({ children }) {
         clearResult,
         setFixtureDataDirect,
         updateFixtureData,
+        setIsDirty,
         placeLessonBlock,
         removePlacement,
         clearPlacements,
@@ -763,6 +1051,13 @@ export function AppProvider({ children }) {
         deleteSlot,
         lockSlot,
         unlockSlot,
+        // Special rooms (facilities)
+        addSpecialRoom,
+        updateSpecialRoom,
+        deleteSpecialRoom,
+        setLessonBlockRoom,
+        changeSlotRoom,
+        splitLessonBlocksForLab,
         // Snapshot versioning
         saveSnapshot: doSaveSnapshot,
         loadSnapshot: doLoadSnapshot,

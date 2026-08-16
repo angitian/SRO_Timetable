@@ -451,9 +451,14 @@ def test_preflight_class_over_capacity() -> bool:
 
 
 def test_preflight_teacher_over_max() -> bool:
-    """Pre-flight should catch a teacher whose needed periods > max_periods_per_week."""
+    """Teacher over max_periods_per_week should produce a warning, not block the solver.
+
+    The solver treats max_periods_per_week as a SOFT constraint: it will still
+    place the teacher's lessons (exceeding max with a penalty) and surface a
+    warning via teacher_loads.load_status == "over" and diagnostics.
+    """
     print(f"\n{'='*60}")
-    print("  TEST: preflight teacher over max_periods_per_week")
+    print("  TEST: preflight teacher over max_periods_per_week (soft warning)")
     print(f"{'='*60}")
 
     request = _load_base_request()
@@ -479,18 +484,20 @@ def test_preflight_teacher_over_max() -> bool:
     solver = TimetableSolver(request)
     result = solver.solve()
 
-    if result.metrics.status != "INFEASIBLE":
-        print(f"  ❌ FAIL: expected INFEASIBLE, got {result.metrics.status}")
+    # The solver should NOT return INFEASIBLE — it should produce a timetable
+    # with the overloaded teacher's lessons placed.
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: expected non-INFEASIBLE (soft constraint), got INFEASIBLE")
         return False
-    if result.diagnostics is None or not result.diagnostics.teacher_overloads:
-        print(f"  ❌ FAIL: no teacher_overloads in diagnostics")
+    print(f"  ✅ PASS: solver returned {result.metrics.status} (not blocked by over_max)")
+
+    # The teacher should appear in teacher_loads with load_status == "over"
+    over_loads = [tl for tl in result.teacher_loads if tl.teacher_id == target_id and tl.load_status == "over"]
+    if not over_loads:
+        print(f"  ❌ FAIL: target teacher {target_id} not flagged as 'over' in teacher_loads")
         return False
-    matching = [t for t in result.diagnostics.teacher_overloads if t.teacher_id == target_id]
-    if not matching:
-        print(f"  ❌ FAIL: target teacher {target_id} not in overloads")
-        return False
-    ov = matching[0]
-    print(f"  ✅ PASS: {ov.teacher_name} flagged (needed={ov.needed_periods}, max={ov.max_periods_per_week}, reason={ov.reason})")
+    tl = over_loads[0]
+    print(f"  ✅ PASS: {tl.teacher_name} flagged as 'over' (assigned={tl.assigned_periods}, max={tl.max_periods})")
     return True
 
 
