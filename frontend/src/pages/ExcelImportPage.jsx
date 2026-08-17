@@ -1,8 +1,7 @@
 import { useState, useCallback } from 'react'
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, ArrowRight } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
-
-const BASE_URL = 'http://127.0.0.1:8000'
+import { BASE_URL } from '../api/config.js'
 
 const FIELDS = [
   { key: 'teacher_name', label: 'ชื่อครู' },

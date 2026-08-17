@@ -1,0 +1,12 @@
+# Cloudflare Workers config — deploy Vite build (static SPA) เป็น assets-only Worker
+# ใช้กับ dashboard ที่ตั้ง: build `npm run build`, deploy `npx wrangler deploy`
+#
+# หลัง build: dist/ จะถูกอัปโหลดเป็น static assets
+# SPA fallback: route ที่ไม่มีไฟล์จะกลับไป index.html (รองรับ /view?d=... ฯลฯ)
+
+name = "sro-timetable-frontend"
+compatibility_date = "2026-08-01"
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"

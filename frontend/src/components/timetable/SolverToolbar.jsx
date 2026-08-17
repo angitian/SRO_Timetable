@@ -20,7 +20,8 @@ import {
   Calendar,
   Users,
   FlaskConical,
-  Sparkles,
+  FileSpreadsheet,
+  Printer,
 } from 'lucide-react'
 import { SOLVER_PRESETS, getPreset } from '../../utils/scoreCalculator.js'
 import { formatSnapshotDate, generateLabel } from '../../utils/versionManager.js'
@@ -284,6 +285,11 @@ export default function SolverToolbar({
   activeTab = 'timetable',
   onTabChange,
   onNavigatePrintStudio,
+  // ── Excel Export props ──
+  onQuickExport,
+  onAdvancedExport,
+  exporting = false,
+  exportDisabled = false,
 }) {
   const [presetDropdownOpen, setPresetDropdownOpen] = useState(false)
   const [metricsPopoverOpen, setMetricsPopoverOpen] = useState(false)
@@ -434,7 +440,7 @@ export default function SolverToolbar({
 
   return (
     <>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-4">
         {/* ════════════════════════════════════════════════════════════════
             Card 1: View & Status (มุมมองและสถานะ)
         ════════════════════════════════════════════════════════════════ */}
@@ -877,13 +883,57 @@ export default function SolverToolbar({
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
-            Card 4: Print Studio CTA (จัดพิมพ์และส่งออกเอกสาร)
+            Card 4: Excel Export (ส่งออก Excel — แบบด่วน + แบบกำหนดเอง)
+            ฟอร์แมตเดียวกับเทมเพลตนำเข้าหน้า 1 (นำกลับเข้าได้)
         ════════════════════════════════════════════════════════════════ */}
         <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
           flex flex-col justify-between min-h-[92px] gap-2">
+          {/* Row 1: Quick export (emerald) */}
+          <button
+            onClick={onQuickExport}
+            disabled={exporting || exportDisabled}
+            className="flex items-center justify-center gap-1.5 w-full px-2 py-2
+              bg-emerald-600 hover:bg-emerald-700 text-white
+              rounded-lg font-bold text-xs shadow-sm
+              transition-colors border border-emerald-700
+              disabled:opacity-50 disabled:cursor-not-allowed"
+            title="ส่งออกไฟล์ Excel ฟอร์แมตเดียวกับเทมเพลตนำเข้าด่วน (1 ชีท) — นำกลับเข้า import หน้า 1 ได้"
+          >
+            {exporting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+            )}
+            ส่งออกแบบด่วน
+          </button>
+          {/* Row 2: Advanced export (blue) */}
+          <button
+            onClick={onAdvancedExport}
+            disabled={exporting || exportDisabled}
+            className="flex items-center justify-center gap-1.5 w-full px-2 py-2
+              bg-blue-600 hover:bg-blue-700 text-white
+              rounded-lg font-bold text-xs shadow-sm
+              transition-colors border border-blue-700
+              disabled:opacity-50 disabled:cursor-not-allowed"
+            title="เปิดตัวเลือกส่งออกแบบกำหนดเองระดับสูง (หลายชีท + เงื่อนไขครู + กิจกรรมล็อก)"
+          >
+            {exporting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+            )}
+            ส่งออกแบบกำหนดเอง
+          </button>
+        </div>
+
+        {/* ════════════════════════════════════════════════════════════════
+            Card 5: Print Studio CTA (จัดพิมพ์ / บันทึก PDF) — ปุ่มใหญ่ปุ่มเดียว
+        ════════════════════════════════════════════════════════════════ */}
+        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
+          flex flex-col min-h-[92px]">
           <button
             onClick={onNavigatePrintStudio}
-            className="flex items-center justify-center gap-2 w-full py-3
+            className="h-full min-h-[64px] flex flex-col md:flex-row items-center justify-center gap-1.5
               bg-gradient-to-r from-slate-700 to-slate-800 text-white
               rounded-xl font-bold text-sm shadow-md
               hover:from-slate-800 hover:to-slate-900
@@ -891,8 +941,11 @@ export default function SolverToolbar({
               active:scale-[0.98]"
             title="เปิดหน้า Print Studio เพื่อจัดพิมพ์และส่งออกเอกสาร"
           >
-            <Sparkles className="w-4 h-4" />
-            จัดพิมพ์และส่งออกเอกสาร (Print Studio) ➔
+            <Printer className="w-5 h-5" />
+            <span className="text-center leading-tight">
+              จัดพิมพ์ / บันทึก PDF
+              <span className="block text-[10px] font-medium opacity-80 mt-0.5">Print Studio ➔</span>
+            </span>
           </button>
         </div>
       </div>

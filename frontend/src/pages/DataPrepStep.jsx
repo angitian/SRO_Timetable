@@ -7,8 +7,7 @@ import { useApp } from '../context/AppContext.jsx'
 import FixtureSelector from '../components/input/FixtureSelector.jsx'
 import DataSummary from '../components/input/DataSummary.jsx'
 import RoomSelector from '../components/rooms/RoomSelector.jsx'
-
-const BASE_URL = 'http://127.0.0.1:8000'
+import { BASE_URL } from '../api/config.js'
 
 const FIELDS = [
   { key: 'teacher_name', label: 'ชื่อครู' },

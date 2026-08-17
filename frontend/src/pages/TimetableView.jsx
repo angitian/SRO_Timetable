@@ -8,7 +8,9 @@ import UnassignedSidebar from '../components/timetable/UnassignedSidebar.jsx'
 import SolverToolbar from '../components/timetable/SolverToolbar.jsx'
 import StickyFooter from '../components/timetable/StickyFooter.jsx'
 import ConstraintsOverviewModal from '../components/modals/ConstraintsOverviewModal.jsx'
+import ExportExcelModal from '../components/timetable/ExportExcelModal.jsx'
 import { FACILITY_TYPE_ICONS, FACILITY_TYPE_LABELS } from '../utils/roomTypes.js'
+import { exportQuickTemplateExcel, exportFullTemplateExcel } from '../utils/exportTemplateExcel.js'
 export default function TimetableView() {
   const {
     result,
@@ -70,6 +72,10 @@ export default function TimetableView() {
   const gridAreaRef = useRef(null)
   const wheelCooldownRef = useRef(false)
   const wasGeneratingRef = useRef(false)
+  // ── Excel export state ────────────────────────────────────────────
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportToast, setExportToast] = useState(null)
 
   // ── Auto-toast when solver finishes ───────────────────────────────
   // Fires when isGenerating transitions true → false AND a fresh result
@@ -478,6 +484,47 @@ export default function TimetableView() {
     setStep(6)
   }
 
+  // ── Excel export handlers (ฟอร์แมตเดียวกับเทมเพลตนำเข้าหน้า 1) ──────
+  function showExportToast(ok, msg) {
+    setExportToast({ ok, msg })
+    setTimeout(() => setExportToast(null), 3000)
+  }
+
+  async function handleQuickExport() {
+    if (!fixtureData?.lesson_blocks?.length && !fixtureData?.teachers?.length) {
+      showExportToast(false, 'ไม่มีข้อมูลให้ส่งออก')
+      return
+    }
+    setExporting(true)
+    try {
+      await exportQuickTemplateExcel(fixtureData, activeSnapshotLabel || 'ตารางสอน')
+      showExportToast(true, 'ส่งออก Excel แบบด่วนสำเร็จ (นำกลับเข้า import หน้า 1 ได้)')
+    } catch (e) {
+      showExportToast(false, 'ส่งออก Excel ไม่สำเร็จ: ' + (e?.message || e))
+    }
+    setExporting(false)
+  }
+
+  function handleOpenExportModal() {
+    if (!fixtureData?.lesson_blocks?.length && !fixtureData?.teachers?.length) {
+      showExportToast(false, 'ไม่มีข้อมูลให้ส่งออก')
+      return
+    }
+    setShowExportModal(true)
+  }
+
+  async function handleAdvancedExport(opts, filename) {
+    setExporting(true)
+    try {
+      await exportFullTemplateExcel(fixtureData, opts, filename)
+      showExportToast(true, 'ส่งออก Excel แบบกำหนดเองสำเร็จ (นำกลับเข้า import หน้า 1 ได้)')
+      setShowExportModal(false)
+    } catch (e) {
+      showExportToast(false, 'ส่งออก Excel ไม่สำเร็จ: ' + (e?.message || e))
+    }
+    setExporting(false)
+  }
+
   return (
     <div className="w-full space-y-4 pb-4">
       {/* Dirty warning banner */}
@@ -541,6 +588,11 @@ export default function TimetableView() {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         onNavigatePrintStudio={handleNavigatePrintStudio}
+        // Excel export props
+        onQuickExport={handleQuickExport}
+        onAdvancedExport={handleOpenExportModal}
+        exporting={exporting}
+        exportDisabled={!fixtureData?.lesson_blocks?.length && !fixtureData?.teachers?.length}
       />
 
       {/* Tab Content */}
@@ -1008,6 +1060,28 @@ export default function TimetableView() {
             ? <CheckCircle className="w-5 h-5 shrink-0" />
             : <XCircle className="w-5 h-5 shrink-0" />}
           {completionToast.msg}
+        </div>
+      )}
+
+      {/* ── Excel Export Modal (แบบกำหนดเองระดับสูง) ──────────────────── */}
+      <ExportExcelModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        onConfirm={handleAdvancedExport}
+        defaultFilename={activeSnapshotLabel || 'ตารางสอน'}
+        exporting={exporting}
+        counts={{ teachers: teachers?.length || 0, fixedSlots: fixed_slots?.length || 0 }}
+      />
+
+      {/* ── Export toast (top-right, ไม่ชน completion toast) ─────────── */}
+      {exportToast && (
+        <div className={`fixed top-6 right-6 z-[120] px-4 py-3 rounded-xl shadow-lg
+          text-sm font-medium flex items-center gap-2 max-w-sm
+          ${exportToast.ok ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
+          {exportToast.ok
+            ? <CheckCircle className="w-5 h-5 shrink-0" />
+            : <XCircle className="w-5 h-5 shrink-0" />}
+          {exportToast.msg}
         </div>
       )}
     </div>

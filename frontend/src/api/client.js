@@ -1,4 +1,4 @@
-const BASE_URL = 'http://127.0.0.1:8000'
+import { BASE_URL } from './config.js'
 
 export async function generateTimetable(requestData) {
   const res = await fetch(`${BASE_URL}/generate`, {

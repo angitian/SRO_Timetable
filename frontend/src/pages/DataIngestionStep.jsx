@@ -7,8 +7,7 @@ import { useApp } from '../context/AppContext.jsx'
 import { ROOM_TYPES, getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
 import SpecialRoomsManager from '../components/rooms/SpecialRoomsManager.jsx'
 import LabPeriodSplitter from '../components/rooms/LabPeriodSplitter.jsx'
-
-const BASE_URL = 'http://127.0.0.1:8000'
+import { BASE_URL } from '../api/config.js'
 
 const GRADE_LEVELS = [
   { label: 'อ.1', value: -2 },

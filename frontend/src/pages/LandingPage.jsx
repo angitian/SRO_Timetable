@@ -4,8 +4,7 @@ import {
   Printer, ShieldCheck,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
-
-const BASE_URL = 'http://127.0.0.1:8000'
+import { BASE_URL } from '../api/config.js'
 
 const FEATURES = [
   {
