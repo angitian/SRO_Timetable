@@ -1,9 +1,0 @@
-Add deep-link short URLs and responsive viewer layout
-
-- PrintStudio: deep-link QR to exact class/teacher via ?c= / ?v=teacher&t=
-- PublicViewerPage: responsive card, class/teacher view toggle, mobile scroll hint
-- exportEngine: add vcell CSS classes + --vlabel var for responsive grid scaling
-
-Generated with [Devin](https://devin.ai)
-
-Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com
