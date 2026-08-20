@@ -1,5 +1,5 @@
-import { Rocket, Loader2, Calendar, Check, Layers, Users, ClipboardCheck, Upload, Printer, BookOpen, Facebook } from 'lucide-react'
-import { useState } from 'react'
+import { Rocket, Loader2, Calendar, Check, Layers, Users, ClipboardCheck, Upload, Printer, BookOpen, Facebook, LogIn, LogOut, User as UserIcon } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import UserManualModal from '../manual/UserManualModal.jsx'
 
@@ -11,6 +11,70 @@ const STEPS = [
   { id: 5, label: 'ตารางสอน', icon: Calendar },
   { id: 6, label: 'พิมพ์ / ส่งออก', icon: Printer },
 ]
+
+/** User menu — login button or user avatar with logout dropdown. */
+function UserMenu() {
+  const { user, login, logout } = useApp()
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  if (!user) {
+    return (
+      <button
+        onClick={login}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
+          text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+        title="เข้าสู่ระบบด้วย Google (ทางเลือก — ใช้บันทึกขึ้นคลาวด์)"
+      >
+        <LogIn className="w-4 h-4" />
+        <span className="hidden sm:inline">เข้าสู่ระบบ</span>
+      </button>
+    )
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-gray-100 transition-colors"
+      >
+        {user.picture ? (
+          <img src={user.picture} alt="" className="w-7 h-7 rounded-full" referrerPolicy="no-referrer" />
+        ) : (
+          <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center">
+            <UserIcon className="w-4 h-4 text-blue-600" />
+          </div>
+        )}
+        <span className="hidden sm:inline text-sm font-medium text-gray-700 max-w-[120px] truncate">
+          {user.name || user.email}
+        </span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-50">
+          <div className="px-4 py-3 border-b border-gray-100">
+            <div className="text-sm font-semibold text-gray-800 truncate">{user.name}</div>
+            <div className="text-xs text-gray-500 truncate">{user.email}</div>
+          </div>
+          <button
+            onClick={() => { setOpen(false); logout() }}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <LogOut className="w-4 h-4 text-gray-400" />
+            ออกจากระบบ
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function Header() {
   const { activeStep, setStep, isGenerating, result, isDirty } = useApp()
@@ -48,6 +112,7 @@ export default function Header() {
                   <BookOpen className="w-4 h-4" />
                   <span className="hidden sm:inline">คู่มือการใช้งาน</span>
                 </button>
+                <UserMenu />
               </div>
             </div>
           </div>
@@ -115,7 +180,7 @@ export default function Header() {
             })}
           </nav>
 
-          {/* Right: Dirty indicator + Manual button */}
+          {/* Right: Dirty indicator + Manual button + User menu */}
           <div className="flex items-center gap-2 shrink-0">
             {isDirty && (
               <span className="hidden sm:flex items-center gap-1 text-xs text-amber-600 font-medium" title="มีการเปลี่ยนแปลงข้อมูล กรุณากดจัดตารางใหม่">
@@ -131,6 +196,7 @@ export default function Header() {
               <BookOpen className="w-4 h-4" />
               <span className="hidden lg:inline">คู่มือ</span>
             </button>
+            <UserMenu />
           </div>
         </div>
       </div>

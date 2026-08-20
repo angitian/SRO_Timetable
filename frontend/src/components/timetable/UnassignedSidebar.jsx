@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Layers, Users, Search, SearchX, Package, X, ChevronLeft } from 'lucide-react'
+import { Layers, Users, Search, SearchX, Package, X, ChevronLeft, CheckCircle2 } from 'lucide-react'
 import { getSubjectColor } from '../../utils/subjectColors.js'
 
 /**
@@ -54,7 +54,9 @@ export default function UnassignedSidebar({
   }, [resultSlots, userPlacements])
 
   // Unassigned = blocks where placed < periods_per_week
-  const unassignedBlocks = useMemo(() => {
+  // Two-stage filter so we can distinguish "everything placed" from
+  // "search returned no matches" for the empty-state message.
+  const unassignedBeforeSearch = useMemo(() => {
     return lessonBlocks
       .map((lb) => {
         const placed = placedCounts[lb.id] || 0
@@ -66,6 +68,10 @@ export default function UnassignedSidebar({
         if (filterClass && lb.class_id !== filterClass) return false
         return true
       })
+  }, [lessonBlocks, placedCounts, filterClass])
+
+  const unassignedBlocks = useMemo(() => {
+    return unassignedBeforeSearch
       .filter((lb) => {
         const q = searchQuery.trim().toLowerCase()
         if (!q) return true
@@ -78,20 +84,41 @@ export default function UnassignedSidebar({
           className.toLowerCase().includes(q)
         )
       })
-  }, [lessonBlocks, placedCounts, filterClass, searchQuery, subjectMap, teacherMap, classMap])
+  }, [unassignedBeforeSearch, searchQuery, subjectMap, teacherMap, classMap])
 
-  // Group blocks
+  // True when every subject for the current view (class/teacher filter +
+  // no search) is fully placed — used to show the "all done" empty state.
+  const allPlaced = unassignedBeforeSearch.length === 0
+
+  // Expand each block into `remaining` period-unit cards so that dragging
+  // one card onto the grid makes exactly that card disappear. A block with
+  // periods_per_week = 2 and 1 already-placed slot yields 1 unit card.
+  // `unitIndex` is purely cosmetic (label "คาบ i/N"); the drag payload is
+  // still the full lesson block — the reducer adds one placement per drop.
+  const unassignedUnits = useMemo(() => {
+    const units = []
+    for (const lb of unassignedBlocks) {
+      for (let i = 0; i < lb.remaining; i++) {
+        units.push({ ...lb, unitIndex: i })
+      }
+    }
+    return units
+  }, [unassignedBlocks])
+
+  // Group period-unit cards (not blocks) by class or teacher
   const grouped = useMemo(() => {
     const groups = {}
-    for (const lb of unassignedBlocks) {
-      const key = groupBy === 'class' ? lb.class_id : lb.teacher_id
+    for (const unit of unassignedUnits) {
+      const key = groupBy === 'class' ? unit.class_id : unit.teacher_id
       if (!groups[key]) groups[key] = []
-      groups[key].push(lb)
+      groups[key].push(unit)
     }
     return groups
-  }, [unassignedBlocks, groupBy])
+  }, [unassignedUnits, groupBy])
 
-  const totalRemaining = unassignedBlocks.reduce((sum, lb) => sum + lb.remaining, 0)
+  // Total remaining periods across all visible units (matches the sum of
+  // each unit's implicit "1 คาบ" — same as summing block.remaining).
+  const totalRemaining = unassignedUnits.length
 
   function handleDragStart(e, lb) {
     e.dataTransfer.setData('text/plain', '')
@@ -221,55 +248,63 @@ export default function UnassignedSidebar({
 
           {/* List */}
           <div className="flex-1 overflow-y-auto px-3 pb-2 space-y-3">
-            {unassignedBlocks.length === 0 ? (
-              <div className="text-center py-8 text-gray-400">
-                <SearchX className="w-6 h-6 mx-auto mb-1.5" />
-                <div className="text-xs">จัดครบทุกวิชาแล้ว</div>
-              </div>
+            {unassignedUnits.length === 0 ? (
+              allPlaced ? (
+                <div className="flex flex-col items-center justify-center py-8 px-3">
+                  <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg
+                    bg-emerald-50 text-emerald-700 border border-emerald-200 text-sm font-semibold">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    จัดครบทุกคาบแล้ว
+                  </div>
+                  <p className="text-[11px] text-emerald-600/70 mt-2 text-center">
+                    วิชาทั้งหมดในมุมมองนี้ถูกจัดลงตารางครบแล้ว
+                  </p>
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-400">
+                  <SearchX className="w-6 h-6 mx-auto mb-1.5" />
+                  <div className="text-xs">ไม่พบวิชาที่ตรงกับ "{searchQuery}"</div>
+                </div>
+              )
             ) : (
-              Object.entries(grouped).map(([groupKey, blocks]) => {
+              Object.entries(grouped).map(([groupKey, units]) => {
                 const groupName = groupBy === 'class'
                   ? (classMap.get(groupKey)?.name || groupKey)
                   : (teacherMap.get(groupKey)?.name || groupKey)
                 return (
                   <div key={groupKey}>
                     <div className="text-xs sm:text-sm font-bold text-gray-500 mb-1.5 sticky top-0 bg-white py-0.5">
-                      {groupName} <span className="text-gray-400 font-normal">({blocks.length})</span>
+                      {groupName} <span className="text-gray-400 font-normal">({units.length} คาบ)</span>
                     </div>
                     <div className="space-y-1.5">
-                      {blocks.map((lb) => {
-                        const subj = subjectMap.get(lb.subject_id)
-                        const teacher = teacherMap.get(lb.teacher_id)
-                        const cls = classMap.get(lb.class_id)
+                      {units.map((unit) => {
+                        const subj = subjectMap.get(unit.subject_id)
+                        const teacher = teacherMap.get(unit.teacher_id)
+                        const cls = classMap.get(unit.class_id)
                         const colors = getSubjectColor(subj?.name, subj?.category)
                         return (
                           <div
-                            key={lb.id}
+                            key={`${unit.id}-${unit.unitIndex}`}
                             draggable
-                            onDragStart={(e) => handleDragStart(e, lb)}
+                            onDragStart={(e) => handleDragStart(e, unit)}
                             onDragEnd={handleDragEnd}
                             className={`${colors.bg} ${colors.border} border rounded-lg p-2 cursor-grab hover:shadow-md transition-all active:cursor-grabbing`}
                           >
                             <div className={`text-base sm:text-lg font-bold leading-tight ${colors.text} truncate`}>
-                              {subj?.name || lb.subject_id}
+                              {subj?.name || unit.subject_id}
                             </div>
                             <div className="flex items-center justify-between mt-0.5">
                               <div className="text-xs sm:text-sm font-semibold text-slate-600 truncate">
-                                {teacher?.name || lb.teacher_id}
+                                {teacher?.name || unit.teacher_id}
                               </div>
                               <div className="text-xs sm:text-sm text-slate-500 shrink-0 ml-1">
-                                {cls?.name || lb.class_id}
+                                {cls?.name || unit.class_id}
                               </div>
                             </div>
                             <div className="flex items-center gap-1 mt-1">
                               <span className="text-[10px] font-semibold text-gray-700 bg-white/80 rounded-full px-1.5 py-0.5 leading-tight shadow-sm">
-                                เหลือ {lb.remaining}/{lb.periods_per_week} คาบ
+                                คาบ {unit.unitIndex + 1}/{unit.periods_per_week}
                               </span>
-                              {lb.placed > 0 && (
-                                <span className="text-[10px] font-semibold text-green-700 bg-green-100 rounded-full px-1.5 py-0.5 leading-tight shadow-sm">
-                                  จัดแล้ว {lb.placed}
-                                </span>
-                              )}
                             </div>
                           </div>
                         )

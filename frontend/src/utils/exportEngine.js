@@ -231,7 +231,6 @@ export function buildClassGridHTML(cls, ctx) {
     .join('')
 
   return `<div class="grid-page" style="break-inside:avoid;">
-    <h2 style="font-size:14px;font-weight:700;color:#1f2937;margin:0 0 6px 0;text-align:center;">ตารางสอน ${cls.name}</h2>
     ${buildHeaderRowHTML(gridCtx)}
     ${rows}
   </div>`
@@ -275,7 +274,6 @@ export function buildTeacherGridHTML(teacher, ctx) {
     .join('')
 
   return `<div class="grid-page" style="break-inside:avoid;">
-    <h2 style="font-size:14px;font-weight:700;color:#1f2937;margin:0 0 4px 0;text-align:center;">ตารางสอน ${teacher.name} (ครูผู้สอน)</h2>
     ${buildHeaderRowHTML(gridCtx)}
     ${rows}
   </div>`
@@ -322,9 +320,7 @@ export function buildFacilityGridHTML(room, ctx) {
     })
     .join('')
 
-  const roomTypeLabel = room.room_type ? ` (${room.room_type})` : ''
   return `<div class="grid-page" style="break-inside:avoid;">
-    <h2 style="font-size:14px;font-weight:700;color:#1f2937;margin:0 0 4px 0;text-align:center;">🔬 ตารางใช้ห้อง ${room.name}${roomTypeLabel}</h2>
     ${buildHeaderRowHTML(gridCtx)}
     ${rows}
   </div>`

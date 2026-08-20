@@ -353,3 +353,106 @@ class DiagnosticsReport(BaseModel):
 
 
 TimetableResponse.model_rebuild()
+
+
+# ── Timetable sharing / D1 storage models ───────────────────────────────────
+
+class GenerateAndSaveRequest(BaseModel):
+    """Request body for POST /api/v1/timetables/generate-and-save.
+
+    Wraps a full `TimetableRequest` (the solver input) plus metadata that gets
+    stored alongside the generated result in the timetables table.
+    """
+    title: str = Field(description="Human-readable label, e.g. school name")
+    academic_year: int = Field(ge=1900, le=3000)
+    term: int = Field(ge=1, le=3, description="1 = first semester, 2 = second, 3 = summer")
+    config: TimetableRequest
+    is_public: bool = Field(default=True, description="If False, the short_code link won't resolve")
+
+
+class SaveResultRequest(BaseModel):
+    """Request body for POST /api/v1/timetables/save-result.
+
+    Persists a pre-solved (or manually edited) timetable WITHOUT re-running the
+    solver. The frontend sends the exact slots currently displayed on screen
+    (solver slots ∪ manual placements, deduplicated) so the public viewer
+    matches the printed page 1:1. Avoids the INFEASIBLE failure mode that
+    arises when locking user-edited placements and re-solving.
+    """
+    title: str = Field(description="Human-readable label, e.g. school name")
+    academic_year: int = Field(ge=1900, le=3000)
+    term: int = Field(ge=1, le=3, description="1 = first semester, 2 = second, 3 = summer")
+    config: TimetableRequest
+    result: TimetableResponse
+    is_public: bool = Field(default=True, description="If False, the short_code link won't resolve")
+
+
+class ClaimTimetableRequest(BaseModel):
+    """Request body for POST /api/v1/timetables/claim."""
+    short_code: str = Field(min_length=1, max_length=32)
+
+
+class TimetableRecord(BaseModel):
+    """A stored timetable row, returned by GET /t/{short_code} and /my-schedules."""
+    id: str
+    short_code: str
+    user_id: Optional[str] = None
+    title: str
+    academic_year: int
+    term: int
+    config: Optional[dict] = None
+    result: Optional[dict] = None
+    workspace: Optional[dict] = None
+    is_public: bool = True
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class TimetableSaveResult(BaseModel):
+    """Response for POST /api/v1/timetables/generate-and-save."""
+    id: str
+    short_code: str
+    share_url: str
+    title: str
+    academic_year: int
+    term: int
+
+
+# ── User / auth models ───────────────────────────────────────────────────────
+
+class User(BaseModel):
+    """A user record (stored in the `users` table, keyed by google_sub)."""
+    id: str
+    email: str = ""
+    name: str = ""
+    picture: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+# ── Workspace save/load models ───────────────────────────────────────────────
+
+class WorkspaceSaveRequest(BaseModel):
+    """Request body for POST /api/v1/timetables/save-workspace.
+
+    Unlike `GenerateAndSaveRequest`, this does NOT re-run the solver — it stores
+    the full workspace (fixtureData + result + userPlacements + solverPreset)
+    so loading it back restores the exact state the user left at.
+    """
+    id: Optional[str] = Field(default=None, description="If set, update existing; else create new")
+    title: str
+    academic_year: int = Field(ge=1900, le=3000)
+    term: int = Field(ge=1, le=3)
+    workspace: dict = Field(description="Full workspace payload (fixtureData, result, userPlacements, ...)")
+
+
+class WorkspaceSaveResult(BaseModel):
+    """Response for POST /save-workspace."""
+    id: str
+    title: str
+    updated_at: Optional[str] = None
+
+
+class MergeGuestRequest(BaseModel):
+    """Request body for POST /api/v1/timetables/merge-guest."""
+    device_id: str = Field(min_length=1, description="Guest device id to merge into the authenticated user")

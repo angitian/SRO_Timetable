@@ -114,3 +114,122 @@ $env:VITE_API_URL='https://your-render-app.onrender.com'
 npm run build
 # ตรวจ dist/assets/*.js ว่ามี URL นี้อยู่
 ```
+
+---
+
+## 6. Cloudflare D1 — Timetable Sharing (Short Links)
+
+ระบบบันทึกตารางสอนและสร้างลิงก์สั้น (`/view?code=ABC123`) ใช้ Cloudflare D1
+เป็นที่เก็บข้อมูลใน production และมี local JSON fallback สำหรับ dev
+
+### สถาปัตยกรรม
+
+```
+PrintStudio "บันทึก & แชร์"
+  → POST /api/v1/timetables/generate-and-save (Render)
+    → solver จัดตาราง → บันทึกลง D1 (หรือ local JSON fallback)
+    → คืน short_code + share_url
+ผู้รับเปิด /view?code=ABC123
+  → GET /api/v1/timetables/t/ABC123 (Render)
+    → ดึงจาก D1 → ส่งกลับ → PublicViewerPage แสดงตาราง
+```
+
+### การตั้งค่า D1
+
+1. **สร้าง D1 database** ใน Cloudflare dashboard หรือ CLI:
+   ```bash
+   npx wrangler d1 create sro-timetable-db
+   ```
+
+2. **รัน schema migration** (จาก root ของ repo):
+   ```bash
+   npx wrangler d1 execute sro-timetable-db --remote --file scripts/init_d1.sql
+   ```
+   หรือสำหรับ local dev:
+   ```bash
+   npx wrangler d1 execute sro-timetable-db --local --file scripts/init_d1.sql
+   ```
+
+3. **ตั้ง environment variables บน Render** (Settings → Environment):
+
+   | Variable | Value |
+   |---|---|
+   | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID (ดูที่มุมขวาบน dashboard) |
+   | `CLOUDFLARE_D1_DATABASE_ID` | Database ID จากขั้นตอนที่ 1 |
+   | `CLOUDFLARE_API_TOKEN` | API token ที่มี permission `D1 Edit` ([สร้างที่นี่](https://dash.cloudflare.com/profile/api-tokens)) |
+   | `FRONTEND_BASE_URL` | URL ของ frontend เช่น `https://sro-timetable-frontend.<acct>.workers.dev` |
+
+4. **Redeploy Render** — หลังตั้ง env vars แล้ว
+
+### Local Dev (ไม่ต้องตั้งค่า D1)
+
+ถ้าไม่ได้ตั้ง `CLOUDFLARE_*` env vars, backend จะใช้ **local JSON fallback**
+(`backend/data/timetables.json`) โดยอัตโนมัติ — ทุก endpoint ทำงานเหมือนกัน
+แต่ข้อมูลเก็บในไฟล์แทน D1 (เหมาะสำหรับ dev ที่ไม่ต้องการ Cloudflare credentials)
+
+### API Endpoints (ใหม่)
+
+| Method | Path | คำอธิบาย |
+|--------|------|----------|
+| POST | `/api/v1/timetables/generate-and-save` | จัดตาราง + บันทึก + คืน short_code และ share_url |
+| GET | `/api/v1/timetables/t/{short_code}` | ดูตารางสอนจาก short code (public, Lead Magnet) |
+| GET | `/api/v1/timetables/my-schedules` | รายการตารางของผู้ใช้ (Bearer JWT หรือ `X-User-Id`) |
+| POST | `/api/v1/timetables/claim` | ผูก short code กับ user (Bearer JWT หรือ `X-User-Id`) |
+| POST | `/api/v1/timetables/save-workspace` | บันทึก workspace ขึ้นคลาวด์ (ไม่ re-solve, private) |
+| GET | `/api/v1/timetables/workspace/{id}` | โหลด workspace จากคลาวด์ (เจ้าของเท่านั้น) |
+| DELETE | `/api/v1/timetables/workspace/{id}` | ลบ workspace (เจ้าของเท่านั้น) |
+| POST | `/api/v1/timetables/merge-guest` | ย้ายของ guest device ไปผูกกับบัญชีที่ login |
+| GET | `/api/v1/auth/google/url` | สร้าง Google OAuth consent URL |
+| GET | `/api/v1/auth/google/callback` | Google redirect callback (แลก code → JWT → redirect frontend) |
+| GET | `/api/v1/auth/me` | ดึง profile ผู้ใช้ (ต้องมี Bearer JWT) |
+
+### Auth (2 ระดับ)
+
+1. **Guest (default)** — ใช้ `X-User-Id` header (device id ใน localStorage)
+   - ใช้ได้ทุก endpoint ยกเว้น `/auth/me` และ `/merge-guest`
+   - ข้อมูลผูกกับเครื่อง — เปลี่ยนเครื่อง/ล้าง cache → ดู schedules เก่าไม่ได้
+2. **Google login (optional)** — ใช้ `Authorization: Bearer <jwt>`
+   - บันทึก workspace ข้ามเครื่องได้
+   - หลัง login ระบบ merge ของที่ save ด้วย device id เข้าบัญชีอัตโนมัติ
+   - เก็บ user ด้วย `google_sub` (stable identifier) → อนาคตรวมกับเว็บหลักได้โดย map sub
+
+---
+
+## 7. Google Login + Cloud Save/Load (Optional)
+
+### การตั้งค่า Google OAuth
+
+1. **Google Cloud Console** → APIs & Services → Credentials
+2. **Create Credentials** → OAuth client ID → Web application
+3. **Authorized redirect URIs**:
+   ```
+   http://localhost:8000/api/v1/auth/google/callback          (dev)
+   https://<your-render-app>.onrender.com/api/v1/auth/google/callback  (prod)
+   ```
+4. Copy Client ID + Client Secret
+
+### การตั้งค่า Render env vars (เพิ่มเติม)
+
+| Variable | Value |
+|---|---|
+| `GOOGLE_CLIENT_ID` | จาก Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | จาก Google Cloud Console |
+| `JWT_SECRET` | สุ่มยาว 32+ ตัว: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `BACKEND_BASE_URL` | `https://<your-render-app>.onrender.com` |
+
+### การรัน migration บน D1 (เพิ่ม users table + workspace_json)
+
+```bash
+# รันจาก backend/ ด้วย D1 credentials ใน env
+python _run_migration.py ../scripts/002_upgrade.sql
+```
+
+### Flow การใช้งาน
+
+1. **Guest**: สร้างตาราง → บันทึก local snapshot (auto-save) → ใช้ได้ปกติ
+2. **กด login**: เลือก Google account → redirect กลับ → token เก็บใน localStorage
+3. **บันทึกขึ้นคลาวด์**: กดปุ่ม "บันทึกคลาวด์" ใน VersionBar (step 5) → เก็บ workspace ลง D1
+4. **เปิดจากคลาวด์**: หน้าแรก → กด "เปิดจากคลาวด์" → เลือกตาราง → โหลดกลับมาแก้ต่อ
+5. **merge-guest**: หลัง login ระบบย้ายของที่ save ด้วย device id เข้าบัญชีอัตโนมัติ
+
+> **หมายเหตุ**: login เป็น **ทางเลือก** — guest ยังใช้ทุกฟีเจอร์เดิมได้ (short code, snapshot, export JSON)

@@ -13,6 +13,8 @@ from models import TimetableRequest, TimetableResponse, ScheduleTemplate
 from solver import TimetableSolver
 import schedule_store
 from excel_parser import parse_excel, import_with_mapping, import_multi_sheet, generate_minimum_template, import_minimum_template, generate_full_template
+from api.timetables import router as timetables_router
+from api.auth import router as auth_router
 
 # Maximum accepted Excel upload size: 10 MB (prevents DoS via huge files)
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -47,6 +49,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(timetables_router)
+app.include_router(auth_router)
 
 
 @app.get("/health")

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import {
   Rocket,
   Target,
@@ -9,7 +9,6 @@ import {
   FolderOpen,
   Save,
   Trash2,
-  Upload,
   Download,
   Plus,
   AlertCircle,
@@ -22,6 +21,7 @@ import {
   FlaskConical,
   FileSpreadsheet,
   Printer,
+  Cloud,
 } from 'lucide-react'
 import { SOLVER_PRESETS, getPreset } from '../../utils/scoreCalculator.js'
 import { formatSnapshotDate, generateLabel } from '../../utils/versionManager.js'
@@ -49,7 +49,7 @@ function MetricsBadge({ metrics, onClick }) {
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium
+      className="flex items-center justify-center gap-1 w-full px-2 py-1.5 rounded-lg text-xs font-medium
         bg-gray-50 border border-gray-200 hover:bg-gray-100 hover:border-gray-300
         transition-colors"
       title="ดูสถิติการคำนวณแบบเต็ม"
@@ -281,6 +281,16 @@ export default function SolverToolbar({
   onDeleteSnapshot,
   onExportSnapshot,
   onImportSnapshot,
+  // ── Cloud workspace props ──
+  user = null,
+  onLogin,
+  cloudSyncing = false,
+  activeCloudWorkspaceId = null,
+  onSaveToCloud,
+  cloudWorkspaces = [],
+  onListCloudWorkspaces,
+  onLoadFromCloud,
+  onDeleteFromCloud,
   // ── Tab + Print Studio props ──
   activeTab = 'timetable',
   onTabChange,
@@ -295,6 +305,7 @@ export default function SolverToolbar({
   const [metricsPopoverOpen, setMetricsPopoverOpen] = useState(false)
   const [clearDropdownOpen, setClearDropdownOpen] = useState(false)
   const [pinDropdownOpen, setPinDropdownOpen] = useState(false)
+  const [excelDropdownOpen, setExcelDropdownOpen] = useState(false)
   const [pendingAction, setPendingAction] = useState(null) // 'manual'|'solver'|'all'|'teacher'|'class'|'pinTeacher'|'pinClass'|'unpinTeacher'|'unpinClass'
   const [showConfirm, setShowConfirm] = useState(false)
   const [selectedTeacherId, setSelectedTeacherId] = useState(null)
@@ -304,7 +315,8 @@ export default function SolverToolbar({
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [saveLabel, setSaveLabel] = useState('')
   const [toast, setToast] = useState(null)
-  const fileInputRef = useRef(null)
+  // ── Cloud list state ──
+  const [cloudListLoading, setCloudListLoading] = useState(false)
 
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg })
@@ -415,17 +427,78 @@ export default function SolverToolbar({
     showToast('ok', 'ดาวน์โหลดไฟล์ .json แล้ว')
   }
 
-  async function handleImportClick(e) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const result = await onImportSnapshot?.(file)
-    if (result?.ok) {
-      showToast('ok', `นำเข้า "${file.name}" แล้ว`)
-    } else {
-      showToast('err', result?.error || 'นำเข้าไม่สำเร็จ')
+  async function handleSaveToCloud() {
+    if (cloudSyncing) return
+    if (!user) {
+      showToast('err', 'กรุณาเข้าสู่ระบบด้วย Google เพื่อบันทึกขึ้นคลาวด์')
+      try {
+        await onLogin?.()
+      } catch (e) {
+        // login() redirects to Google; failure here is non-fatal
+      }
+      return
     }
-    e.target.value = ''
+    const label = activeSnapshotLabel || generateLabel(snapshots.length)
+    const result = await onSaveToCloud?.(label)
+    if (result?.ok) {
+      showToast('ok', activeCloudWorkspaceId
+        ? `อัปเดต "${result.title}" บนคลาวด์แล้ว`
+        : `บันทึก "${result.title}" ขึ้นคลาวด์แล้ว`)
+    } else {
+      showToast('err', result?.error || 'บันทึกขึ้นคลาวด์ไม่สำเร็จ')
+    }
   }
+
+  // ── Cloud list handlers ──────────────────────────────────────────────
+  // Toggle the version dropdown open/closed. When opening, fetch the latest
+  // cloud workspace list so the user sees fresh data after saves/deletes
+  // from elsewhere (e.g. the cloud save button just above).
+  function handleToggleVersionDropdown() {
+    const next = !versionDropdownOpen
+    setVersionDropdownOpen(next)
+    if (next && user && onListCloudWorkspaces) {
+      setCloudListLoading(true)
+      Promise.resolve(onListCloudWorkspaces())
+        .catch(() => { /* doListCloudWorkspaces already returns [] on err */ })
+        .finally(() => setCloudListLoading(false))
+    }
+  }
+
+  async function handleLoadCloud(id) {
+    if (cloudSyncing || !onLoadFromCloud) return
+    const result = await onLoadFromCloud(id)
+    if (result?.ok) {
+      setVersionDropdownOpen(false)
+      showToast('ok', 'โหลดตารางจากคลาวด์แล้ว')
+    } else {
+      showToast('err', result?.error || 'โหลดไม่สำเร็จ')
+    }
+  }
+
+  async function handleDeleteCloud(id, title) {
+    if (cloudSyncing || !onDeleteFromCloud) return
+    if (!confirm(`ยืนยันการลบ "${title}" จากคลาวด์?`)) return
+    const result = await onDeleteFromCloud(id)
+    if (result?.ok) {
+      showToast('ok', `ลบ "${title}" แล้ว`)
+    } else {
+      showToast('err', result?.error || 'ลบไม่สำเร็จ')
+    }
+  }
+
+  async function handleCloudLoginFromDropdown() {
+    try {
+      await onLogin?.()
+    } catch (e) {
+      // login() redirects to Google; failure here is non-fatal
+    }
+  }
+
+  // Active cloud workspace title (for dropdown label when no local snapshot
+  // is active — i.e. user opened a cloud workspace directly).
+  const activeCloudTitle = cloudWorkspaces.find(
+    (w) => w.id === activeCloudWorkspaceId,
+  )?.title
 
   const dirtyIndicator = isSnapshotDirty ? '●' : '✓'
   const dirtyColor = isSnapshotDirty ? 'text-amber-500' : 'text-green-500'
@@ -438,40 +511,47 @@ export default function SolverToolbar({
   const constraintCount = fixedCount + preAssignedCount
   const isTeacherTab = activeTab === 'teachers'
 
+  // Quick Save is enabled when:
+  //   - No snapshot yet (click opens "save new version" dialog), OR
+  //   - Active snapshot has unsaved changes (click saves over current).
+  // When a snapshot exists and nothing changed (auto-save already persisted),
+  // the button is genuinely disabled — both visually and functionally.
+  const quickSaveEnabled = !activeSnapshotId || isSnapshotDirty
+
   return (
     <>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch mb-3">
         {/* ════════════════════════════════════════════════════════════════
             Card 1: View & Status (มุมมองและสถานะ)
         ════════════════════════════════════════════════════════════════ */}
-        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
-          flex flex-col justify-between min-h-[92px] gap-2">
-          {/* Row 1: Segmented Tab — full width grid-cols-2 */}
+        <div className="bg-white p-2.5 rounded-xl border border-gray-200 shadow-sm
+          flex flex-col justify-between gap-2 min-w-0 md:col-span-3">
+          {/* Row 1: Segmented Tab — ตารางสอน / ภาระงานครู */}
           <div className="w-full grid grid-cols-2 rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-medium">
             <button
               onClick={() => onTabChange?.('timetable')}
-              className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-md transition-all
+              className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-md transition-all whitespace-nowrap
                 ${activeTab === 'timetable' ? 'bg-white text-blue-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-700'}`}
               title="ดูตารางสอนแบบกริด"
             >
-              <Calendar className="w-3.5 h-3.5" />
+              <Calendar className="w-3.5 h-3.5 shrink-0" />
               ตารางสอน
             </button>
             <button
               onClick={() => onTabChange?.('teachers')}
-              className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-md transition-all
+              className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-md transition-all whitespace-nowrap
                 ${activeTab === 'teachers' ? 'bg-white text-blue-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-700'}`}
               title="ดูภาระงานครูผู้สอน"
             >
-              <Users className="w-3.5 h-3.5" />
+              <Users className="w-3.5 h-3.5 shrink-0" />
               ภาระงานครู
             </button>
           </div>
 
-          {/* Row 2: Status badge + Constraint badge */}
-          <div className="flex items-center justify-between gap-1 text-xs">
+          {/* Row 2: Metrics badge + Constraints button — split 50/50 */}
+          <div className="w-full grid grid-cols-2 gap-2 text-xs">
             {metrics ? (
-              <div className="relative flex items-center">
+              <div className="relative flex items-center min-w-0">
                 <MetricsBadge
                   metrics={metrics}
                   onClick={() => setMetricsPopoverOpen(!metricsPopoverOpen)}
@@ -484,17 +564,17 @@ export default function SolverToolbar({
                 )}
               </div>
             ) : (
-              <span className="text-xs text-gray-400 italic px-2 py-1.5">ยังไม่มีผลลัพธ์</span>
+              <span className="text-xs text-gray-400 italic px-2 py-1.5 text-center">ยังไม่มีผลลัพธ์</span>
             )}
 
             <button
               onClick={onOpenConstraints}
-              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold
+              className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold
                 text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 hover:border-gray-400
-                transition-colors shrink-0"
+                transition-colors whitespace-nowrap min-w-0"
               title="เงื่อนไข & ข้อจำกัดทั้งหมด"
             >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
               เงื่อนไข
               {constraintCount > 0 && (
                 <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">
@@ -506,168 +586,321 @@ export default function SolverToolbar({
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
-            Card 2: Snapshots & Persistence (จัดการไฟล์ร่าง)
+            Card 2: Version & Storage / Export
+            Top: Version dropdown + Quick Save + Cloud Save
+            Bottom: Export JSON + Export Excel (dropdown)
         ════════════════════════════════════════════════════════════════ */}
-        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
-          flex flex-col justify-between min-h-[92px] gap-2">
-          {/* Row 1: Version dropdown (full width) */}
-          <div className="relative">
-            <button
-              onClick={() => setVersionDropdownOpen(!versionDropdownOpen)}
-              className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg text-xs font-semibold
-                bg-white border border-gray-300 hover:border-gray-400 hover:bg-gray-50
-                transition-colors"
-              title={dirtyText}
-            >
-              <FolderOpen className="w-4 h-4 text-blue-600 shrink-0" />
-              <span className="truncate flex-1 text-left">
-                {activeSnapshotLabel || '— ยังไม่ได้บันทึก —'}
-              </span>
-              <span className={`text-xs ${dirtyColor} shrink-0`}>
-                {dirtyIndicator}
-              </span>
-              <ChevronDown
-                className={`w-3.5 h-3.5 text-gray-500 transition-transform shrink-0
-                  ${versionDropdownOpen ? 'rotate-180' : ''}`}
-              />
-            </button>
+        <div className="bg-white p-2.5 rounded-xl border border-gray-200 shadow-sm
+          flex flex-col justify-between gap-2 min-w-0 md:col-span-4">
+          {/* Row 1: Version dropdown + Quick Save + Cloud Save */}
+          <div className="flex items-stretch gap-2">
+            {/* Version snapshot dropdown — flexible width */}
+            <div className="relative flex-1 min-w-0">
+              <button
+                onClick={handleToggleVersionDropdown}
+                className="flex items-center gap-1.5 w-full px-2.5 py-2 rounded-lg text-xs font-semibold
+                  bg-white border border-gray-300 hover:border-gray-400 hover:bg-gray-50
+                  transition-colors whitespace-nowrap"
+                title={dirtyText}
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span className="truncate flex-1 text-left">
+                  {activeSnapshotLabel || activeCloudTitle || 'เวอร์ชั่นที่บันทึกไว้'}
+                </span>
+                <span className={`text-xs shrink-0 ${dirtyColor}`}>
+                  {dirtyIndicator}
+                </span>
+                <ChevronDown
+                  className={`w-3 h-3 text-gray-500 transition-transform shrink-0
+                    ${versionDropdownOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
 
-            {versionDropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setVersionDropdownOpen(false)} />
-                <div className="absolute left-0 top-full mt-1 z-50 w-80 bg-white rounded-xl
-                  shadow-xl border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
-                        เวอร์ชันที่บันทึกไว้
-                      </span>
-                      <span className="text-xs text-gray-400">{snapshots.length} รายการ</span>
-                    </div>
-                  </div>
-
-                  <div className="max-h-72 overflow-y-auto">
-                    {snapshots.length === 0 ? (
-                      <div className="px-4 py-8 text-center text-sm text-gray-400">
-                        ยังไม่มีเวอร์ชันที่บันทึกไว้
-                        <br />
-                        กด "บันทึกใหม่" เพื่อเริ่ม
+              {versionDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setVersionDropdownOpen(false)} />
+                  <div className="absolute left-0 top-full mt-1 z-50 w-80 bg-white rounded-xl
+                    shadow-xl border border-gray-200 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+                          เวอร์ชันที่บันทึกไว้
+                        </span>
+                        <span className="text-xs text-gray-400">{snapshots.length} รายการ</span>
                       </div>
-                    ) : (
-                      snapshots.map((snap) => (
-                        <div
-                          key={snap.id}
-                          className={`flex items-center gap-2 px-4 py-3 border-t border-gray-50
-                            first:border-t-0 transition-colors
-                            ${snap.id === activeSnapshotId ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
-                        >
-                          <button
-                            onClick={() => handleLoadSnap(snap.id)}
-                            className="flex-1 text-left min-w-0"
+                    </div>
+
+                    <div className="max-h-72 overflow-y-auto">
+                      {/* ── Local snapshots (บันทึกด่วน — IndexedDB) ── */}
+                      {snapshots.length === 0 ? (
+                        <div className="px-4 py-6 text-center text-sm text-gray-400">
+                          ยังไม่มีเวอร์ชันที่บันทึกไว้
+                          <br />
+                          กด "บันทึกด่วน" เพื่อเริ่ม
+                        </div>
+                      ) : (
+                        snapshots.map((snap) => (
+                          <div
+                            key={snap.id}
+                            className={`flex items-center gap-2 px-4 py-3 border-t border-gray-50
+                              first:border-t-0 transition-colors
+                              ${snap.id === activeSnapshotId ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
                           >
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-semibold text-gray-800 truncate">
-                                {snap.label}
-                              </span>
-                              {snap.id === activeSnapshotId && (
-                                <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                              )}
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0
-                                ${snap.status === 'final'
-                                  ? 'bg-green-100 text-green-700'
-                                  : 'bg-amber-100 text-amber-700'}`}>
-                                {snap.status === 'final' ? 'สมบูรณ์' : 'ร่าง'}
-                              </span>
-                            </div>
-                            <div className="text-xs text-gray-400 mt-0.5">
-                              {formatSnapshotDate(snap.updatedAt)}
-                              {snap.solverPreset && ` · ${snap.solverPreset}`}
-                            </div>
-                          </button>
+                            <button
+                              onClick={() => handleLoadSnap(snap.id)}
+                              className="flex-1 text-left min-w-0"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-gray-800 truncate">
+                                  {snap.label}
+                                </span>
+                                {snap.id === activeSnapshotId && (
+                                  <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                )}
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0
+                                  ${snap.status === 'final'
+                                    ? 'bg-green-100 text-green-700'
+                                    : 'bg-amber-100 text-amber-700'}`}>
+                                  {snap.status === 'final' ? 'สมบูรณ์' : 'ร่าง'}
+                                </span>
+                              </div>
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                {formatSnapshotDate(snap.updatedAt)}
+                                {snap.solverPreset && ` · ${snap.solverPreset}`}
+                              </div>
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDeleteSnap(snap.id, snap.label) }}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50
+                                transition-colors shrink-0"
+                              title="ลบเวอร์ชันนี้"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+
+                      {/* ── Cloud workspaces ── */}
+                      <div className="px-4 pt-3 pb-1.5 border-t border-gray-100 bg-violet-50/30">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-violet-500 uppercase tracking-wide flex items-center gap-1">
+                            <Cloud className="w-3 h-3" />
+                            ตารางบนคลาวด์
+                          </span>
+                          <span className="text-[10px] text-gray-400">
+                            {user ? `${cloudWorkspaces.length} รายการ` : 'ต้องเข้าสู่ระบบ'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {!user ? (
+                        <div className="px-4 py-3 text-center">
+                          <p className="text-xs text-gray-500 mb-2">
+                            เข้าสู่ระบบด้วย Google เพื่อดูตารางบนคลาวด์
+                          </p>
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteSnap(snap.id, snap.label) }}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50
-                              transition-colors shrink-0"
-                            title="ลบเวอร์ชันนี้"
+                            onClick={handleCloudLoginFromDropdown}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold
+                              bg-violet-600 text-white hover:bg-violet-700 transition-colors"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            เข้าสู่ระบบ
                           </button>
                         </div>
-                      ))
-                    )}
+                      ) : cloudListLoading ? (
+                        <div className="flex items-center justify-center px-4 py-4 text-xs text-gray-400">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                          กำลังโหลด...
+                        </div>
+                      ) : cloudWorkspaces.length === 0 ? (
+                        <div className="px-4 py-3 text-center text-xs text-gray-400">
+                          ยังไม่มีตารางบนคลาวด์
+                          <br />
+                          กดปุ่ม ☁️ บันทึก เพื่อบันทึกตารางนี้ขึ้นคลาวด์
+                        </div>
+                      ) : (
+                        cloudWorkspaces.map((ws) => (
+                          <div
+                            key={ws.id}
+                            className={`flex items-center gap-2 px-4 py-3 border-t border-gray-50
+                              transition-colors
+                              ${ws.id === activeCloudWorkspaceId ? 'bg-violet-50' : 'hover:bg-gray-50'}`}
+                          >
+                            <button
+                              onClick={() => handleLoadCloud(ws.id)}
+                              disabled={cloudSyncing}
+                              className="flex-1 text-left min-w-0 disabled:opacity-50"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-gray-800 truncate">
+                                  {ws.title}
+                                </span>
+                                {ws.id === activeCloudWorkspaceId && (
+                                  <Check className="w-3.5 h-3.5 text-violet-600 shrink-0" />
+                                )}
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0
+                                  bg-violet-100 text-violet-700">
+                                  คลาวด์
+                                </span>
+                              </div>
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                {ws.updated_at
+                                  ? new Date(ws.updated_at).toLocaleDateString('th-TH', {
+                                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                                    })
+                                  : '—'}
+                                {' · '}
+                                ปีการศึกษา {ws.academic_year}/{ws.term}
+                              </div>
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDeleteCloud(ws.id, ws.title) }}
+                              disabled={cloudSyncing}
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50
+                                transition-colors shrink-0 disabled:opacity-50"
+                              title="ลบจากคลาวด์"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
-                </div>
-              </>
-            )}
-          </div>
+                </>
+              )}
+            </div>
 
-          {/* Row 2: Save / Import / Export JSON */}
-          <div className="flex items-center gap-1.5 w-full text-xs">
-            {activeSnapshotId && (
-              <button
-                onClick={handleSaveCurrent}
-                disabled={!isSnapshotDirty}
-                className={`flex items-center justify-center px-2 py-1.5 rounded-lg text-xs font-bold
-                  transition-colors shrink-0
-                  ${isSnapshotDirty
-                    ? 'bg-green-600 text-white hover:bg-green-700'
-                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
-                title={isSnapshotDirty
+            {/* Quick Save button (local IndexedDB) */}
+            <button
+              onClick={() => {
+                if (!activeSnapshotId) {
+                  setShowSaveDialog(true)
+                } else {
+                  handleSaveCurrent()
+                }
+              }}
+              disabled={!quickSaveEnabled}
+              className={`flex-shrink-0 flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold
+                whitespace-nowrap transition-colors border
+                ${quickSaveEnabled
+                  ? 'bg-green-600 text-white hover:bg-green-700 border-green-700'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200'}`}
+              title={!activeSnapshotId
+                ? 'ยังไม่มีเวอร์ชัน — กดเพื่อสร้างใหม่'
+                : isSnapshotDirty
                   ? 'บันทึกทับเวอร์ชันปัจจุบัน'
                   : 'ไม่มีการเปลี่ยนแปลงที่ต้องบันทึก'}
-              >
-                <Save className="w-3.5 h-3.5" />
-              </button>
-            )}
-            <button
-              onClick={() => setShowSaveDialog(true)}
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold
-                bg-blue-600 text-white hover:bg-blue-700 transition-colors flex-1 justify-center"
-              title="บันทึกเป็นเวอร์ชันใหม่"
             >
-              <Plus className="w-3.5 h-3.5" />
-              บันทึกใหม่
+              <Save className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">บันทึกด่วน</span>
             </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json,application/json"
-              onChange={handleImportClick}
-              className="hidden"
-            />
+
+            {/* Cloud Save button */}
             <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium
-                text-gray-700 bg-white border border-gray-300 hover:bg-gray-50
-                transition-colors shrink-0"
-              title="นำเข้าไฟล์ .json (สำรอง/กู้คืน)"
+              onClick={handleSaveToCloud}
+              disabled={cloudSyncing}
+              className={`flex-shrink-0 flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold
+                whitespace-nowrap transition-colors border
+                ${user
+                  ? 'bg-purple-600 text-white hover:bg-purple-700 shadow-sm border-purple-700'
+                  : 'bg-gray-100 text-gray-400 hover:bg-gray-200 border-gray-200'}`}
+              title={user
+                ? (activeCloudWorkspaceId ? 'บันทึกทับบนคลาวด์' : 'บันทึกขึ้นคลาวด์ (สร้างใหม่)')
+                : 'เข้าสู่ระบบด้วย Google เพื่อบันทึกขึ้นคลาวด์'}
             >
-              <Upload className="w-3.5 h-3.5" />
-              นำเข้า
+              {cloudSyncing ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+              ) : (
+                <Cloud className="w-3.5 h-3.5 shrink-0" />
+              )}
+              <span className="hidden sm:inline whitespace-nowrap">
+                {activeCloudWorkspaceId ? '☁️ บันทึก' : '☁️ บันทึก'}
+              </span>
+              {!user && (
+                <span className="hidden lg:inline-flex items-center text-[9px] font-bold px-1 py-0.5 rounded-full bg-amber-100 text-amber-700 shrink-0">
+                  login
+                </span>
+              )}
             </button>
+          </div>
+
+          {/* Row 2: Export JSON + Export Excel (dropdown) */}
+          <div className="grid grid-cols-2 gap-2">
+            {/* Export JSON */}
             <button
               onClick={handleExport}
               disabled={!activeSnapshotId && !snapshots.length}
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium
-                text-gray-700 bg-white border border-gray-300 hover:bg-gray-50
-                transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium
+                whitespace-nowrap text-gray-700 bg-white border border-gray-300 hover:bg-gray-50
+                transition-colors min-w-0 disabled:opacity-40 disabled:cursor-not-allowed"
               title="ส่งออกไฟล์ .json (สำรองข้อมูล)"
             >
-              <Download className="w-3.5 h-3.5" />
-              ส่งออก JSON
+              <Download className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">ส่งออก JSON</span>
             </button>
+
+            {/* Export Excel dropdown */}
+            <div className="relative min-w-0">
+              <button
+                onClick={() => setExcelDropdownOpen(!excelDropdownOpen)}
+                disabled={exporting || exportDisabled}
+                className="flex items-center justify-center gap-1 w-full px-2 py-1.5
+                  bg-emerald-600 hover:bg-emerald-700 text-white
+                  rounded-lg font-bold text-xs shadow-sm
+                  transition-colors border border-emerald-700
+                  disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap min-w-0"
+                title="ส่งออกไฟล์ Excel"
+              >
+                {exporting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                ) : (
+                  <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                )}
+                <span className="truncate">ส่งออก Excel</span>
+                <ChevronDown
+                  className={`w-3 h-3 transition-transform shrink-0
+                    ${excelDropdownOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+
+              {excelDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setExcelDropdownOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-50 w-64 bg-white rounded-xl shadow-xl
+                    border border-gray-200 overflow-hidden">
+                    <ClearOption
+                      icon="⚡"
+                      title="ส่งออกด่วน"
+                      desc="1 ชีท ฟอร์แมตเดียวกับเทมเพลต — นำกลับเข้า import ได้"
+                      disabled={exporting || exportDisabled}
+                      onClick={() => { onQuickExport?.(); setExcelDropdownOpen(false) }}
+                    />
+                    <ClearOption
+                      icon="🎨"
+                      title="ส่งออกแบบกำหนดเอง"
+                      desc="หลายชีท + เงื่อนไขครู + กิจกรรมล็อก (เปิด modal)"
+                      disabled={exporting || exportDisabled}
+                      onClick={() => { onAdvancedExport?.(); setExcelDropdownOpen(false) }}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
-            Card 3: AI Solver Engine (สั่งประมวลผล AI)
+            Card 3: Auto Solver Engine
+            Left (stacked): Preset dropdown (top) + Clear/Pin buttons (bottom)
+            Right: Large primary generate button (full height)
         ════════════════════════════════════════════════════════════════ */}
-        <div className={`bg-white p-3 rounded-xl border border-gray-200 shadow-sm
-          grid grid-cols-2 gap-2 min-h-[92px]
+        <div className={`bg-white p-2.5 rounded-xl border border-gray-200 shadow-sm
+          grid grid-cols-[1.2fr_1fr] gap-2 min-w-0 md:col-span-3
           ${isTeacherTab ? 'opacity-50 pointer-events-none' : ''}`}>
-          {/* ── Left column: Controls ── */}
-          <div className="flex flex-col gap-1.5 justify-between">
-            {/* Row 1: Solver Preset Dropdown */}
+          {/* ── Left column: Controls (stacked) ── */}
+          <div className="flex flex-col gap-1.5 justify-between min-w-0">
+            {/* Top: Solver Preset Dropdown */}
             <div className="relative">
               <button
                 onClick={() => setPresetDropdownOpen(!presetDropdownOpen)}
@@ -682,7 +915,7 @@ export default function SolverToolbar({
                 <span className="font-semibold text-gray-800 flex-1 text-left truncate text-xs">
                   {currentPreset.shortName}
                 </span>
-                <span className="text-[10px] text-gray-500 shrink-0">
+                <span className="text-[10px] text-gray-500 shrink-0 whitespace-nowrap">
                   (~{currentPreset.timeLimit}วิ)
                 </span>
                 <ChevronDown
@@ -713,14 +946,14 @@ export default function SolverToolbar({
               )}
             </div>
 
-            {/* Row 2: Pin + Clear side by side */}
+            {/* Bottom: Pin + Clear side by side */}
             <div className="grid grid-cols-2 gap-1">
               {/* Pin dropdown */}
               <div className="relative">
                 <button
                   onClick={() => setPinDropdownOpen(!pinDropdownOpen)}
                   className="flex items-center justify-center gap-0.5 w-full px-1.5 py-1 text-xs font-medium text-gray-600
-                    bg-white border border-gray-300 hover:bg-gray-100 rounded-md transition-colors"
+                    bg-white border border-gray-300 hover:bg-gray-100 rounded-md transition-colors whitespace-nowrap"
                   title="ปักหมุด / ล็อกตำแหน่ง"
                 >
                   📌
@@ -791,11 +1024,11 @@ export default function SolverToolbar({
                 <button
                   onClick={() => setClearDropdownOpen(!clearDropdownOpen)}
                   className="flex items-center justify-center gap-0.5 w-full px-1.5 py-1 text-xs font-medium text-gray-600
-                    bg-white border border-gray-300 hover:bg-gray-100 rounded-md transition-colors"
+                    bg-white border border-gray-300 hover:bg-gray-100 rounded-md transition-colors whitespace-nowrap"
                   title="ล้างตาราง"
                 >
                   🗑️
-                  <span className="truncate">ล้าง</span>
+                  <span className="truncate">ล้างข้อมูล</span>
                   <ChevronDown
                     className={`w-2.5 h-2.5 transition-transform shrink-0
                       ${clearDropdownOpen ? 'rotate-180' : ''}`}
@@ -860,94 +1093,47 @@ export default function SolverToolbar({
             </div>
           </div>
 
-          {/* ── Right column: Primary Hero CTA ── */}
+          {/* ── Right column: Large primary generate button (full height) ── */}
           <button
             onClick={onGenerate}
             disabled={isGenerating || disabled}
-            className="h-full min-h-[64px] flex flex-col md:flex-row items-center justify-center gap-1.5
+            className="flex flex-col justify-center items-center gap-1.5 px-4 py-2
               bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-sm text-sm
-              disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap
+              min-w-[120px]"
           >
             {isGenerating ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                กำลังจัด...
+                <Loader2 className="w-6 h-6 animate-spin" />
+                <span className="text-xs">กำลังจัด...</span>
               </>
             ) : (
               <>
-                <Rocket className="w-4 h-4" />
-                สั่งจัดอัตโนมัติ
+                <Rocket className="w-6 h-6" />
+                <span className="text-sm leading-tight">จัดอัตโนมัติ</span>
               </>
             )}
           </button>
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
-            Card 4: Excel Export (ส่งออก Excel — แบบด่วน + แบบกำหนดเอง)
-            ฟอร์แมตเดียวกับเทมเพลตนำเข้าหน้า 1 (นำกลับเข้าได้)
+            Card 4: Print Studio CTA
+            Single full-height dark button
         ════════════════════════════════════════════════════════════════ */}
-        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
-          flex flex-col justify-between min-h-[92px] gap-2">
-          {/* Row 1: Quick export (emerald) */}
-          <button
-            onClick={onQuickExport}
-            disabled={exporting || exportDisabled}
-            className="flex items-center justify-center gap-1.5 w-full px-2 py-2
-              bg-emerald-600 hover:bg-emerald-700 text-white
-              rounded-lg font-bold text-xs shadow-sm
-              transition-colors border border-emerald-700
-              disabled:opacity-50 disabled:cursor-not-allowed"
-            title="ส่งออกไฟล์ Excel ฟอร์แมตเดียวกับเทมเพลตนำเข้าด่วน (1 ชีท) — นำกลับเข้า import หน้า 1 ได้"
-          >
-            {exporting ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-            )}
-            ส่งออกแบบด่วน
-          </button>
-          {/* Row 2: Advanced export (blue) */}
-          <button
-            onClick={onAdvancedExport}
-            disabled={exporting || exportDisabled}
-            className="flex items-center justify-center gap-1.5 w-full px-2 py-2
-              bg-blue-600 hover:bg-blue-700 text-white
-              rounded-lg font-bold text-xs shadow-sm
-              transition-colors border border-blue-700
-              disabled:opacity-50 disabled:cursor-not-allowed"
-            title="เปิดตัวเลือกส่งออกแบบกำหนดเองระดับสูง (หลายชีท + เงื่อนไขครู + กิจกรรมล็อก)"
-          >
-            {exporting ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-            )}
-            ส่งออกแบบกำหนดเอง
-          </button>
-        </div>
-
-        {/* ════════════════════════════════════════════════════════════════
-            Card 5: Print Studio CTA (จัดพิมพ์ / บันทึก PDF) — ปุ่มใหญ่ปุ่มเดียว
-        ════════════════════════════════════════════════════════════════ */}
-        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm
-          flex flex-col min-h-[92px]">
-          <button
-            onClick={onNavigatePrintStudio}
-            className="h-full min-h-[64px] flex flex-col md:flex-row items-center justify-center gap-1.5
-              bg-gradient-to-r from-slate-700 to-slate-800 text-white
-              rounded-xl font-bold text-sm shadow-md
-              hover:from-slate-800 hover:to-slate-900
-              transition-all border border-slate-600
-              active:scale-[0.98]"
-            title="เปิดหน้า Print Studio เพื่อจัดพิมพ์และส่งออกเอกสาร"
-          >
-            <Printer className="w-5 h-5" />
-            <span className="text-center leading-tight">
-              จัดพิมพ์ / บันทึก PDF
-              <span className="block text-[10px] font-medium opacity-80 mt-0.5">Print Studio ➔</span>
-            </span>
-          </button>
-        </div>
+        <button
+          onClick={onNavigatePrintStudio}
+          className="h-full flex items-center justify-center text-center gap-2 p-2
+            bg-gradient-to-br from-slate-700 to-slate-900 text-white
+            rounded-xl font-bold text-sm shadow-md
+            hover:from-slate-800 hover:to-black
+            transition-all border border-slate-600
+            active:scale-[0.98] whitespace-nowrap min-w-0 md:col-span-2"
+          title="เปิดหน้า Print Studio เพื่อจัดพิมพ์และส่งออกเอกสาร"
+        >
+          <Printer className="w-5 h-5 shrink-0" />
+          <span className="truncate">จัดพิมพ์ Print Studio</span>
+          <span className="text-base shrink-0">→</span>
+        </button>
       </div>
 
       {/* ── Confirmation Modal ─────────────────────────────────────── */}

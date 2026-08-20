@@ -1,5 +1,17 @@
 import { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react'
-import { generateTimetable } from '../api/client.js'
+import {
+  generateTimetable,
+  loginWithGoogle,
+  fetchMe,
+  clearAuthToken,
+  getAuthToken,
+  fetchMySchedules,
+  saveWorkspaceToCloud,
+  fetchCloudWorkspace,
+  deleteCloudWorkspace,
+  mergeGuestWorkspaces,
+  getUserId,
+} from '../api/client.js'
 import { cacheTimetable, getCachedTimetable, clearCache } from '../utils/cache.js'
 import { resolveSolverParams } from '../utils/scoreCalculator.js'
 import {
@@ -39,6 +51,13 @@ const initialState = {
   activeSnapshotLabel: null, // display label
   isSnapshotDirty: false, // unsaved changes since last snapshot save
   lastSnapshotSaveAt: null, // timestamp for "saved X ago" display
+  // ── Auth (Google OAuth, optional) ──
+  user: null, // { id, email, name, picture } or null when logged out
+  authToken: null, // JWT string or null
+  // ── Cloud workspaces ──
+  cloudWorkspaces: [], // list of cloud-saved workspaces (metadata)
+  activeCloudWorkspaceId: null, // currently loaded cloud workspace id
+  cloudSyncing: false, // true while saving/loading from cloud
 }
 
 function reducer(state, action) {
@@ -335,6 +354,40 @@ function reducer(state, action) {
         activeSnapshotId: state.activeSnapshotId === action.payload ? null : state.activeSnapshotId,
         activeSnapshotLabel: state.activeSnapshotId === action.payload ? null : state.activeSnapshotLabel,
       }
+    // ── Auth ─────────────────────────────────────────────────────────
+    case 'SET_USER':
+      return { ...state, user: action.payload, authToken: action.payload ? state.authToken : null }
+    case 'SET_AUTH_TOKEN':
+      return { ...state, authToken: action.payload }
+    case 'LOGOUT':
+      return { ...state, user: null, authToken: null, cloudWorkspaces: [], activeCloudWorkspaceId: null }
+    // ── Cloud workspaces ─────────────────────────────────────────────
+    case 'SET_CLOUD_WORKSPACES':
+      return { ...state, cloudWorkspaces: action.payload }
+    case 'SET_CLOUD_SYNCING':
+      return { ...state, cloudSyncing: action.payload }
+    case 'LOAD_CLOUD_WORKSPACE': {
+      const ws = action.payload
+      return {
+        ...state,
+        fixtureData: ws.fixtureData || null,
+        result: ws.result || null,
+        userPlacements: ws.userPlacements || {},
+        solverPreset: ws.solverPreset || 'balanced',
+        activeCloudWorkspaceId: action.payload._cloudId || null,
+        // Reset local snapshot tracking — cloud workspace is separate
+        activeSnapshotId: null,
+        activeSnapshotLabel: null,
+        isSnapshotDirty: false,
+        isDirty: false,
+        error: null,
+        errorResponse: null,
+        // Jump to step 5 if we have a result, else step 1
+        activeStep: ws.result ? 5 : 1,
+      }
+    }
+    case 'CLEAR_CLOUD_WORKSPACE':
+      return { ...state, activeCloudWorkspaceId: null }
     // ── Slot-level editing ───────────────────────────────────────────
     case 'MOVE_SLOT': {
       // payload: { lessonBlockId, newDay, newPeriod }
@@ -353,11 +406,20 @@ function reducer(state, action) {
       }
     }
     case 'DELETE_SLOT': {
-      // payload: { lessonBlockId } — removes all slots for this lesson block
+      // payload: { lessonBlockId, day, period } — removes the specific
+      // slot at (day, period). If day/period are omitted, removes all
+      // slots for this lesson block (kept for backward compatibility).
       if (!state.result?.slots) return state
-      const newSlots = state.result.slots.filter(
-        (s) => s.lesson_block_id !== action.payload.lessonBlockId,
-      )
+      const { lessonBlockId, day, period } = action.payload
+      const newSlots = state.result.slots.filter((s) => {
+        if (s.lesson_block_id !== lessonBlockId) return true
+        if (day != null && period != null) {
+          // Remove only the specific slot at this day/period
+          return !(s.day === day && s.period === period)
+        }
+        // Legacy: remove all slots for this block
+        return false
+      })
       return {
         ...state,
         result: { ...state.result, slots: newSlots },
@@ -835,8 +897,8 @@ export function AppProvider({ children }) {
     dispatch({ type: 'MOVE_SLOT', payload: { lessonBlockId, newDay, newPeriod } })
   }, [])
 
-  const deleteSlot = useCallback((lessonBlockId) => {
-    dispatch({ type: 'DELETE_SLOT', payload: { lessonBlockId } })
+  const deleteSlot = useCallback((lessonBlockId, day, period) => {
+    dispatch({ type: 'DELETE_SLOT', payload: { lessonBlockId, day, period } })
   }, [])
 
   const lockSlot = useCallback((day, period, name) => {
@@ -1018,6 +1080,113 @@ export function AppProvider({ children }) {
     }
   }, [state.fixtureData?.schedule_blocks, state.selectedFixture])
 
+  // ── Auth actions (Google OAuth, optional) ───────────────────────────
+  const doLogin = useCallback(async () => {
+    try {
+      await loginWithGoogle()
+    } catch (e) {
+      console.error('[AppContext] login failed:', e.message)
+    }
+  }, [])
+
+  const doLogout = useCallback(() => {
+    clearAuthToken()
+    dispatch({ type: 'LOGOUT' })
+  }, [])
+
+  const doRefreshMe = useCallback(async () => {
+    const token = getAuthToken()
+    if (!token) return
+    dispatch({ type: 'SET_AUTH_TOKEN', payload: token })
+    try {
+      const user = await fetchMe()
+      dispatch({ type: 'SET_USER', payload: user })
+    } catch {
+      clearAuthToken()
+      dispatch({ type: 'LOGOUT' })
+    }
+  }, [])
+
+  // Restore auth on mount
+  useEffect(() => {
+    doRefreshMe()
+  }, [doRefreshMe])
+
+  // ── Cloud workspace actions ─────────────────────────────────────────
+  const doListCloudWorkspaces = useCallback(async () => {
+    try {
+      const records = await fetchMySchedules()
+      const workspaces = records
+        .filter((r) => r.workspace)
+        .map((r) => ({
+          id: r.id,
+          title: r.title,
+          academic_year: r.academic_year,
+          term: r.term,
+          updated_at: r.updated_at,
+          created_at: r.created_at,
+        }))
+      dispatch({ type: 'SET_CLOUD_WORKSPACES', payload: workspaces })
+      return workspaces
+    } catch (e) {
+      console.error('[AppContext] listCloudWorkspaces failed:', e.message)
+      return []
+    }
+  }, [])
+
+  const doSaveToCloud = useCallback(async (label) => {
+    dispatch({ type: 'SET_CLOUD_SYNCING', payload: true })
+    try {
+      const workspace = {
+        fixtureData: state.fixtureData,
+        result: state.result,
+        userPlacements: state.userPlacements,
+        solverPreset: state.solverPreset,
+        optimizationMode: state.optimizationMode,
+      }
+      const result = await saveWorkspaceToCloud({
+        id: state.activeCloudWorkspaceId || null,
+        title: label || state.activeSnapshotLabel || 'ตารางของฉัน',
+        academicYear: 2569,
+        term: 1,
+        workspace,
+      })
+      dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
+      await doListCloudWorkspaces()
+      return { ok: true, id: result.id, title: result.title }
+    } catch (e) {
+      dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
+      return { ok: false, error: e.message }
+    }
+  }, [state.fixtureData, state.result, state.userPlacements, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotLabel, doListCloudWorkspaces])
+
+  const doLoadFromCloud = useCallback(async (id) => {
+    dispatch({ type: 'SET_CLOUD_SYNCING', payload: true })
+    try {
+      const record = await fetchCloudWorkspace(id)
+      const ws = record.workspace || {}
+      dispatch({
+        type: 'LOAD_CLOUD_WORKSPACE',
+        payload: { ...ws, _cloudId: id },
+      })
+      dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
+      return { ok: true }
+    } catch (e) {
+      dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
+      return { ok: false, error: e.message }
+    }
+  }, [])
+
+  const doDeleteFromCloud = useCallback(async (id) => {
+    try {
+      await deleteCloudWorkspace(id)
+      await doListCloudWorkspaces()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }, [doListCloudWorkspaces])
+
   return (
     <AppContext.Provider
       value={{
@@ -1064,6 +1233,15 @@ export function AppProvider({ children }) {
         deleteSnapshot: doDeleteSnapshot,
         exportSnapshot: doExportSnapshot,
         importSnapshot: doImportSnapshot,
+        // Auth
+        login: doLogin,
+        logout: doLogout,
+        refreshMe: doRefreshMe,
+        // Cloud workspaces
+        listCloudWorkspaces: doListCloudWorkspaces,
+        saveToCloud: doSaveToCloud,
+        loadFromCloud: doLoadFromCloud,
+        deleteFromCloud: doDeleteFromCloud,
       }}
     >
       {children}

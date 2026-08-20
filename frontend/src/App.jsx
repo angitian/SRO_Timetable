@@ -8,9 +8,15 @@ import VerificationStep from './pages/VerificationStep.jsx'
 import TimetableView from './pages/TimetableView.jsx'
 import PrintStudio from './pages/PrintStudio.jsx'
 import PublicViewerPage from './pages/PublicViewerPage.jsx'
+import AuthCallback from './pages/AuthCallback.jsx'
 
 function AppContent() {
   const { activeStep } = useApp()
+
+  // Auth callback route: /auth/callback?token=... — standalone, no Layout needed
+  if (window.location.pathname === '/auth/callback') {
+    return <AuthCallback />
+  }
 
   // Public viewer route: /view?d=<base64> — standalone, no AppContext needed
   if (window.location.pathname === '/view') {

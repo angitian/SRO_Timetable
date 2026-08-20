@@ -42,7 +42,7 @@ export default function TimetableGrid({
   onViewModeChange,
   // ── Slot-level editing (persisted to AppContext) ──
   onSlotMove,         // (lessonBlockId, newDay, newPeriod) => void
-  onSlotDelete,       // (lessonBlockId) => void
+  onSlotDelete,       // (lessonBlockId, day, period) => void
   onRemovePlacement,  // (lessonBlockId, day, period) => void
   onLockSlot,         // (day, period) => void
   onUnlockSlot,       // (day, period) => void
@@ -268,8 +268,15 @@ export default function TimetableGrid({
     const existingSlots = (slotMap.get(`${d}-${p}`) || []).filter(
       (s) => !classId || s.class_id === classId,
     )
-    if (existingSlots.length > 0)
+    if (existingSlots.length > 0) {
+      // Same lesson block already occupies this cell → hard-block (no
+      // force option) with a clear message. Force-placing would create
+      // a duplicate placement that the reducer would reject anyway, and
+      // pinning the same block twice would double-count.
+      if (existingSlots.some((s) => s.lesson_block_id === lb.id))
+        return { valid: false, forceable: false, reason: 'มีคาบนี้วางอยู่แล้ว' }
       return { valid: false, reason: 'มีวิชาอื่นวางอยู่แล้ว (ระบบจัด)' }
+    }
     // 5. Already occupied by user placement
     if (classId && userPlacementMap.has(`${d}-${p}-${classId}`))
       return { valid: false, reason: 'มีวิชาอื่นวางด้วยมืออยู่แล้ว' }
@@ -375,6 +382,14 @@ export default function TimetableGrid({
       const lb = JSON.parse(lbJson)
       const result = validateCell(lb, d, p, classId)
       if (!result.valid) {
+        // Hard-block (e.g. same lesson block already in this cell) — do
+        // NOT open the force-place modal; just leave the red drag target
+        // so the user sees the reason without being offered a destructive
+        // confirm that would double-count the placement.
+        if (result.forceable === false) {
+          setDragTarget({ day: d, period: p, classId, ...result })
+          return
+        }
         // Show force-place confirmation
         setForcePlacePending({ lb, day: d, period: p, classId, reason: result.reason })
         setShowForceConfirm(true)

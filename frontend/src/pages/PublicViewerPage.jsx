@@ -13,6 +13,7 @@ import {
   buildClassGridHTML,
   buildTeacherGridHTML,
 } from '../utils/exportEngine.js'
+import { fetchTimetableByShortCode } from '../api/client.js'
 
 // Google Fonts @import for Sarabun (Thai font)
 const SARABUN_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap');`
@@ -80,6 +81,73 @@ function expandCompactPayload(p) {
   }
 }
 
+/**
+ * Derive a gridConfig from a stored TimetableRequest config, mirroring the
+ * logic in PrintStudio.jsx (supports both schedule_blocks and legacy schedule_config).
+ */
+function deriveGridConfig(config) {
+  const schedule_blocks = config?.schedule_blocks || []
+  const schedule_config = config?.schedule_config
+  if (schedule_blocks.length > 0) {
+    const periodSet = new Set()
+    const lunchSet = new Set()
+    const breakSet = new Set()
+    let maxDays = 0
+    for (const blk of schedule_blocks) {
+      for (const p of (blk.periods || [])) {
+        periodSet.add(p.period_no)
+        if (p.type === 'LUNCH') lunchSet.add(p.period_no)
+        else if (p.type === 'BREAK') breakSet.add(p.period_no)
+      }
+      if (blk.days_per_week > maxDays) maxDays = blk.days_per_week
+    }
+    return {
+      periodList: [...periodSet].sort((a, b) => a - b),
+      lunchPeriods: [...lunchSet].sort((a, b) => a - b),
+      breakPeriods: [...breakSet].sort((a, b) => a - b),
+      daysPerWeek: maxDays,
+    }
+  }
+  const periodsPerDay = schedule_config?.periods_per_day || 7
+  return {
+    periodsPerDay,
+    periodList: Array.from({ length: periodsPerDay }, (_, i) => i + 1),
+    lunchPeriods: schedule_config?.lunch_periods || [4],
+    breakPeriods: [],
+    daysPerWeek: schedule_config?.days_per_week || 5,
+  }
+}
+
+/**
+ * Convert a fetched TimetableRecord (from the backend short-code API) into
+ * the payload shape expected by buildExportContext / buildClassGridHTML.
+ */
+function recordToPayload(record, selectedClassId) {
+  const config = record?.config || {}
+  const result = record?.result || {}
+  const classes = (config.classes || []).map((c) => ({ id: c.id, name: c.name }))
+  const cls = classes.find((c) => c.id === selectedClassId) || classes[0] || null
+  const term = record.term
+  const semester = term === 3 ? 'summer' : String(term)
+  return {
+    kind: 'class',
+    item: cls,
+    slots: result.slots || [],
+    subjects: (config.subjects || []).map((s) => ({ id: s.id, name: s.name })),
+    teachers: (config.teachers || []).map((t) => ({ id: t.id, name: t.name })),
+    classes,
+    gridConfig: deriveGridConfig(config),
+    fixedSlots: (config.fixed_slots || []).map((fs) => ({
+      day: fs.day, period: fs.period, name: fs.name,
+    })),
+    settings: {
+      schoolName: record.title || '',
+      semester,
+      academicYear: record.academic_year,
+    },
+  }
+}
+
 // atob may produce malformed URI sequences for multibyte chars; use a safe decoder
 function escapeAtob(b64) {
   const binary = atob(b64)
@@ -130,13 +198,17 @@ function buildHeaderHTML(settings, itemName) {
 }
 
 /**
- * Build the footer strip (timestamp + branding). QR code disabled in this
- * version — will be re-enabled once the backend DB for short-links is in place.
+ * Build the footer strip (timestamp + branding + QR code).
+ * The QR code encodes the current page URL — short enough to fit when loaded
+ * via a short code (?code=ABC123). Falls back to a static link if the URL is
+ * too long for a QR (e.g. legacy ?d=<compressed> payloads).
  */
 function buildFooterHTML(currentUrl) {
   const now = new Date()
   const dateStr = now.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
   const timeStr = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+
+  const qrSvg = buildQRSVGString(currentUrl, 96)
 
   return `<div style="margin-top:auto;padding-top:8px;border-top:1px solid #e5e7eb;
     display:flex;align-items:center;justify-content:space-between;
@@ -146,6 +218,7 @@ function buildFooterHTML(currentUrl) {
       ระบบจัดตารางสอนอัตโนมัติ —
       <a href="${KRU_PLATFORM_URL}" style="color:#64748b;text-decoration:none;">KRU Platform</a>
     </div>
+    <div style="flex-shrink:0;">${qrSvg}</div>
   </div>`
 }
 
@@ -153,10 +226,30 @@ export default function PublicViewerPage() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
+  // TimetableRecord fetched via short code (null when loaded via ?d= payload)
+  const [record, setRecord] = useState(null)
+  const [selectedClassId, setSelectedClassId] = useState(null)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
     const encoded = params.get('d')
+
+    // Short-code path: fetch from backend D1/local store
+    if (code) {
+      fetchTimetableByShortCode(code)
+        .then((rec) => {
+          setRecord(rec)
+          setLoading(false)
+        })
+        .catch((e) => {
+          setError(e?.message || 'ไม่พบตารางจากรหัสที่ระบุ')
+          setLoading(false)
+        })
+      return
+    }
+
+    // Legacy path: decode compressed payload from ?d=
     if (!encoded) {
       setError('ไม่พบข้อมูลตารางในลิงก์')
       setLoading(false)
@@ -170,6 +263,15 @@ export default function PublicViewerPage() {
       setLoading(false)
     }
   }, [])
+
+  // When a record is loaded via short code, derive the viewer payload from it.
+  // Recomputes when the user picks a different class from the dropdown.
+  useEffect(() => {
+    if (record) {
+      const payload = recordToPayload(record, selectedClassId)
+      setData(payload)
+    }
+  }, [record, selectedClassId])
 
   // Build export context from decoded data
   const ctx = useMemo(() => {
@@ -245,14 +347,28 @@ export default function PublicViewerPage() {
           <ArrowLeft className="w-4 h-4" />
           กลับหน้าหลัก
         </a>
-        <button
-          onClick={() => window.print()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white
-            bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          <Calendar className="w-4 h-4" />
-          พิมพ์ / บันทึก PDF
-        </button>
+        <div className="flex items-center gap-3">
+          {/* Class selector (only for short-code records with multiple classes) */}
+          {record && (data?.classes?.length || 0) > 1 && (
+            <select
+              value={selectedClassId || data?.item?.id || ''}
+              onChange={(e) => setSelectedClassId(e.target.value)}
+              className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {(data?.classes || []).map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white
+              bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Calendar className="w-4 h-4" />
+            พิมพ์ / บันทึก PDF
+          </button>
+        </div>
       </div>
 
       {/* A4 Preview */}

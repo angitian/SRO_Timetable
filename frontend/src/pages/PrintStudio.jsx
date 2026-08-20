@@ -12,6 +12,8 @@ import {
   XCircle,
   Loader2,
   FileText,
+  Link2,
+  Copy,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import {
@@ -22,11 +24,153 @@ import {
 } from '../utils/exportEngine.js'
 import { exportMultiExcel } from '../utils/exportExcel.js'
 import { exportMultiPNG } from '../utils/exportImage.js'
+import { saveTimetableResult } from '../api/client.js'
 import PrintSettingsPanel from '../components/print/PrintSettingsPanel.jsx'
 
 // ── Constants ────────────────────────────────────────────────────────────
 const TEMPLATE_KEY = 'app_timetable_print_template'
+const SHORT_LINK_KEY = 'sro_print_saved_links'
+const MAX_SAVED_SLOTS = 5
+const SHORT_LINK_DEBOUNCE_MS = 800
 const KRU_PLATFORM_URL = 'https://kru-platform.com'
+
+// FNV-1a 32-bit hash — compact schedule fingerprint for short-link caching.
+function hashString(str) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(36)
+}
+
+// Standardized frontend origin: prefer VITE_FRONTEND_URL, fall back to the
+// window origin so short links work under any dev/deploy host.
+function getFrontendOrigin() {
+  const envUrl = import.meta.env.VITE_FRONTEND_URL
+  if (envUrl) return envUrl.replace(/\/+$/, '')
+  return window.location.origin
+}
+
+function buildShortViewerURL(shortCode) {
+  return `${getFrontendOrigin()}/view?code=${shortCode}`
+}
+
+/**
+ * Build the canonical slot list shown on screen = solver slots ∪ manual
+ * placements, deduplicated by (lesson_block_id, day, period). Manual
+ * placements are materialized into full ScheduledSlot objects using the
+ * lesson block's subject/teacher/class/room ids (room falls back to the
+ * solver slot for the same block if present, else to the block's room_id).
+ *
+ * This is what gets persisted via /save-result so the public viewer matches
+ * the printed page 1:1 — no re-solve, no INFEASIBLE, no solver drift.
+ */
+function buildMergedSlots(lessonBlocks, placements, resultSlots) {
+  const lbMap = new Map((lessonBlocks || []).map((lb) => [lb.id, lb]))
+  // First index solver slots by (lbId, day, period) so we can both dedupe
+  // and reuse their room_id when materializing manual placements.
+  const solverByKey = new Map()
+  for (const s of resultSlots || []) {
+    solverByKey.set(`${s.lesson_block_id}:${s.day}:${s.period}`, s)
+  }
+  const out = []
+  const seen = new Set()
+  // 1) solver slots (already full ScheduledSlot objects)
+  for (const s of resultSlots || []) {
+    const key = `${s.lesson_block_id}:${s.day}:${s.period}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(s)
+  }
+  // 2) manual placements not already covered by a solver slot
+  for (const [lbId, arr] of Object.entries(placements || {})) {
+    const lb = lbMap.get(lbId)
+    for (const p of arr || []) {
+      const key = `${lbId}:${p.day}:${p.period}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      // Reuse a solver slot for the same block as a template (for room_id);
+      // otherwise derive from the lesson block.
+      const template = solverByKey.size > 0
+        ? [...solverByKey.values()].find((s) => s.lesson_block_id === lbId)
+        : null
+      out.push({
+        lesson_block_id: lbId,
+        day: p.day,
+        period: p.period,
+        subject_id: lb?.subject_id ?? template?.subject_id ?? '',
+        teacher_id: lb?.teacher_id ?? template?.teacher_id ?? '',
+        class_id: lb?.class_id ?? template?.class_id ?? '',
+        room_id: lb?.room_id ?? template?.room_id ?? null,
+      })
+    }
+  }
+  return out
+}
+
+// ── Saved-links store (localStorage, capped at MAX_SAVED_SLOTS) ──────────
+function loadSavedLinks() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(SHORT_LINK_KEY) || '[]')
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+
+function persistSavedLinks(entries) {
+  try {
+    localStorage.setItem(SHORT_LINK_KEY, JSON.stringify(entries.slice(0, MAX_SAVED_SLOTS)))
+  } catch {
+    // storage quota/unavailable — best effort; auto-cache retries on next change
+  }
+}
+
+/**
+ * Upsert an entry ({ fingerprint, shortCode, url, title, savedAt }) into the store.
+ * - fifo (auto-cache background QR): upsert by fingerprint, then FIFO-evict the
+ *   oldest entry when over the cap — never interrupts the user.
+ * - manual ("บันทึก & แชร์"): update in place if the fingerprint exists; append
+ *   when there's room; otherwise return { full: true, entries } so the caller
+ *   can open the overwrite modal.
+ */
+function saveLinkEntry(entry, { fifo = false } = {}) {
+  const entries = loadSavedLinks()
+  const idx = entries.findIndex((e) => e.fingerprint === entry.fingerprint)
+  if (idx >= 0) {
+    entries[idx] = { ...entries[idx], ...entry }
+    persistSavedLinks(entries)
+    return entries
+  }
+  if (entries.length < MAX_SAVED_SLOTS) {
+    entries.push(entry)
+    persistSavedLinks(entries)
+    return entries
+  }
+  if (fifo) {
+    const sorted = [...entries].sort((a, b) => (a.savedAt || '').localeCompare(b.savedAt || ''))
+    const oldest = sorted[0]
+    const evicted = entries.filter((e) => e !== oldest)
+    evicted.push(entry)
+    persistSavedLinks(evicted)
+    return evicted
+  }
+  return { full: true, entries }
+}
+
+function formatThaiDate(iso) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleDateString('th-TH', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+  } catch {
+    return ''
+  }
+}
 
 // Render QR code as an inline SVG string for use in HTML export/print.
 // Uses includeMargin (quiet zone) + level "L" for fast scanning.
@@ -88,7 +232,7 @@ function buildQRPayload(kind, item, ctx, gridConfig, fixedSlots, settings) {
 
 function buildViewerURL(payload) {
   // Output is already URL-safe (compressToEncodedURIComponent)
-  return `${window.location.origin}/view?d=${payload}`
+  return `${getFrontendOrigin()}/view?d=${payload}`
 }
 
 const DEFAULT_SETTINGS = {
@@ -102,6 +246,7 @@ const DEFAULT_SETTINGS = {
   showWorkloadSummary: true,
   showSignOff: true,
   showFooter: true,   // controls the 3-part footer strip (timestamp + branding + QR)
+  showQRCode: true,   // QR code at bottom-right of each page → /view?d=...
 }
 
 // Google Fonts @import for Sarabun (Thai font) — injected into print window
@@ -138,76 +283,71 @@ function buildHeaderHTML(settings, itemName) {
 }
 
 /**
- * Build the sign-off section HTML (signature blocks).
+ * Build the consolidated A4 page footer — a single 3-column flex container:
+ *   [Left: metadata (timestamp + branding)] [Center: signature] [Right: QR]
+ *
+ * - Timestamp is toggleable via settings.showFooter; branding is always-on.
+ * - Signature column is rendered only when settings.showSignOff is true.
+ * - QR column is rendered only when settings.showQRCode is true AND a
+ *   viewerUrl is available (facility pages have no viewer URL).
+ * - When signature is off → 2-column (metadata | QR).
+ * - When QR is off → 2-column (metadata | signature) or just metadata.
+ * - margin-top:auto pins the footer to the bottom of the flex-column page.
+ * - break-inside:avoid prevents the footer from splitting across pages.
  */
-function buildSignOffHTML(settings) {
-  const { signatoryName, signatoryTitle } = settings
-  const dateStr = new Date().toLocaleDateString('th-TH', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
-
-  return `<div style="margin-top:8px;display:flex;justify-content:space-between;gap:40px;break-inside:avoid;">
-    <div style="text-align:center;font-size:12px;color:#4b5563;">
-      <div>ลงนามวันที่ ${dateStr}</div>
-      <div style="margin-top:18px;border-top:1px solid #1f2937;padding-top:3px;min-width:200px;">
-        ${signatoryName ? escapeHTML(signatoryName) : '..............................'}
-      </div>
-      <div style="margin-top:2px;font-weight:600;">
-        ${signatoryTitle ? escapeHTML(signatoryTitle) : 'ผู้จัดทำ'}
-      </div>
-    </div>
-  </div>`
-}
-
-/**
- * Build the toggleable timestamp footer strip (print date/time only).
- * Pinned to the bottom of the A4 page via margin-top:auto in a flex column.
- * Returns empty string when settings.showFooter is false — the user may
- * turn this off without affecting the always-on branding footer below.
- */
-function buildTimestampFooterHTML(settings) {
-  if (!settings.showFooter) return ''
+function buildFooterHTML(settings, viewerUrl) {
+  const { signatoryName, signatoryTitle, showFooter, showSignOff, showQRCode } = settings
   const now = new Date()
-  const dateStr = now.toLocaleDateString('th-TH', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
+  const dateStr = now.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
   const timeStr = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
 
-  return `<div style="padding-top:8px;border-top:1px solid #e5e7eb;
-    font-size:10px;color:#64748b;line-height:1.3;">
-    <div style="white-space:nowrap;">พิมพ์เมื่อ ${dateStr} เวลา ${timeStr} น.</div>
+  // ── Left column: metadata (timestamp + branding) ──────────────────────
+  const timestampLine = showFooter
+    ? `<div style="font-size:11px;color:#64748b;white-space:nowrap;">พิมพ์เมื่อ ${dateStr} เวลา ${timeStr} น.</div>`
+    : ''
+  const brandingLine = `<div style="font-size:10px;color:#94a3b8;margin-top:2px;white-space:nowrap;user-select:none;-webkit-user-select:none;">SRO Timetable — พัฒนาโดย One Man Lab เพื่อ KRU Platform</div>`
+  const leftCol = `<div style="flex:0 0 auto;">
+    ${timestampLine}
+    ${brandingLine}
   </div>`
-}
 
-/**
- * Build the ALWAYS-ON branding footer strip (developer credits).
- * This is hardcoded and cannot be disabled by any setting — the developer
- * credit "One Man Lab / KRU Platform" must remain visible on every print.
- * Pinned to the very bottom of the A4 page via margin-top:auto.
- * Equivalent Tailwind: text-[9px] text-slate-400 select-none
- */
-function buildBrandingFooterHTML() {
-  return `<div style="margin-top:auto;padding-top:6px;
-    display:flex;align-items:center;justify-content:space-between;
-    font-size:9px;color:#94a3b8;line-height:1.3;user-select:none;-webkit-user-select:none;">
-    <div style="white-space:nowrap;">SRO Timetable — พัฒนาโดย One Man Lab เพื่อ KRU Platform</div>
-    <div style="white-space:nowrap;">
-      <a href="${KRU_PLATFORM_URL}" style="color:#94a3b8;text-decoration:none;">kru-platform.com</a>
-    </div>
+  // ── Center column: signature block ────────────────────────────────────
+  const centerCol = showSignOff
+    ? `<div style="flex:0 0 auto;text-align:center;font-size:12px;color:#4b5563;">
+      <div>ลงนามวันที่ ${dateStr}</div>
+      <div style="margin-top:14px;">ลงชื่อ ....................................................</div>
+      <div style="margin-top:2px;">(${signatoryName ? escapeHTML(signatoryName) : '........................................'})</div>
+      <div style="margin-top:1px;font-weight:600;">${signatoryTitle ? escapeHTML(signatoryTitle) : 'ผู้อำนวยการโรงเรียน'}</div>
+    </div>`
+    : ''
+
+  // ── Right column: compact QR code ─────────────────────────────────────
+  const rightCol = (showQRCode && viewerUrl)
+    ? (() => {
+        const qrSvg = buildQRSVGString(viewerUrl, 72)
+        return `<div style="flex:0 0 auto;text-align:center;">
+        <div style="width:72px;height:72px;margin:0 auto;">${qrSvg}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:2px;white-space:nowrap;">สแกนดูตารางออนไลน์</div>
+      </div>`
+      })()
+    : ''
+
+  return `<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;
+    padding-top:8px;margin-top:auto;border-top:1px solid #e5e7eb;break-inside:avoid;">
+    ${leftCol}
+    ${centerCol}
+    ${rightCol}
   </div>`
 }
 
 /**
  * Build the workload summary HTML for a class or teacher.
- * Compact inline badge strip (1-2 lines) instead of a tall table.
+ * Compact flex-wrap pill strip (1-2 lines) — pills flow naturally without
+ * awkward box breaks, gap-based spacing instead of margins.
  */
 function buildWorkloadSummaryHTML(kind, item, ctx) {
-  const badgeStyle = `display:inline-block;background:#f1f5f9;border-radius:3px;padding:1px 6px;margin:0 3px 2px 0;font-size:10px;color:#334155;`
-  const labelStyle = `font-weight:700;color:#374151;`
+  const pillStyle = `display:inline-block;background:#f1f5f9;border-radius:9999px;padding:1px 8px;font-size:10px;color:#334155;white-space:nowrap;`
+  const labelStyle = `font-weight:700;color:#374151;white-space:nowrap;`
 
   if (kind === 'class') {
     // Count lessons per subject for this class
@@ -219,9 +359,9 @@ function buildWorkloadSummaryHTML(kind, item, ctx) {
     }
     const total = Object.values(subjCount).reduce((a, b) => a + b, 0)
     const items = Object.entries(subjCount)
-      .map(([name, count]) => `<span style="${badgeStyle}">${escapeHTML(name)} (${count})</span>`)
+      .map(([name, count]) => `<span style="${pillStyle}">${escapeHTML(name)} (${count})</span>`)
       .join('')
-    return `<div style="margin-top:4px;font-size:10px;color:#6b7280;line-height:1.5;break-inside:avoid;">
+    return `<div style="margin-top:6px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:10px;color:#6b7280;line-height:1.5;break-inside:avoid;">
       <span style="${labelStyle}">สรุปภาระงาน (${total} คาบ/สัปดาห์):</span> ${items}
     </div>`
   } else {
@@ -234,9 +374,9 @@ function buildWorkloadSummaryHTML(kind, item, ctx) {
     }
     const total = Object.values(classCount).reduce((a, b) => a + b, 0)
     const items = Object.entries(classCount)
-      .map(([name, count]) => `<span style="${badgeStyle}">${escapeHTML(name)} (${count})</span>`)
+      .map(([name, count]) => `<span style="${pillStyle}">${escapeHTML(name)} (${count})</span>`)
       .join('')
-    return `<div style="margin-top:4px;font-size:10px;color:#6b7280;line-height:1.5;break-inside:avoid;">
+    return `<div style="margin-top:6px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:10px;color:#6b7280;line-height:1.5;break-inside:avoid;">
       <span style="${labelStyle}">สรุปภาระงาน (${total} คาบ/สัปดาห์):</span> ${items}
     </div>`
   }
@@ -260,20 +400,14 @@ function escapeHTML(str) {
 function buildFullPageHTML({ gridHTML, item, kind, ctx, settings, viewerUrl }) {
   const header = buildHeaderHTML(settings, item?.name || item?.label || '')
   const workload = settings.showWorkloadSummary ? buildWorkloadSummaryHTML(kind, item, ctx) : ''
-  const signOff = settings.showSignOff ? buildSignOffHTML(settings) : ''
-  // Timestamp footer is toggleable via settings.showFooter; branding footer
-  // is always rendered and pinned to the bottom of the A4 page.
-  const timestampFooter = buildTimestampFooterHTML(settings)
-  const brandingFooter = buildBrandingFooterHTML()
+  const footer = buildFooterHTML(settings, viewerUrl)
 
   // The grid HTML from exportEngine already includes the page title (h2)
   return `<div class="print-studio-page" style="page-break-after:always;break-inside:avoid;display:flex;flex-direction:column;">
     ${header}
     ${gridHTML}
     ${workload}
-    ${signOff}
-    ${timestampFooter}
-    ${brandingFooter}
+    ${footer}
   </div>`
 }
 
@@ -288,9 +422,23 @@ export default function PrintStudio() {
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState('')
   const [exportScope, setExportScope] = useState('current') // 'current' | 'tab' | 'all'
+  const [sidebarTab, setSidebarTab] = useState('export') // 'header' | 'export'
   const [toast, setToast] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [savedLinks, setSavedLinks] = useState([]) // [{ short_code, share_url, title }]
+  // Short-link state (auto-created for the current schedule → small QR codes)
+  const [shortLink, setShortLink] = useState(null) // { shortCode, url } | null
+  const [shortLinkStatus, setShortLinkStatus] = useState('idle') // 'idle' | 'creating' | 'ready' | 'error'
+  const [savedLinkEntries, setSavedLinkEntries] = useState([]) // persisted store (≤ MAX_SAVED_SLOTS)
+  const [overwritePending, setOverwritePending] = useState(null) // { entry } awaiting slot selection
+  const [confirmOverwrite, setConfirmOverwrite] = useState(null) // slot index awaiting 2nd-step confirm
+  const isMountedRef = useRef(true)
+  const createSeqRef = useRef(0)
+  const debounceTimerRef = useRef(null)
   const toastTimerRef = useRef(null)
   const previewRef = useRef(null)
+  const storageModalRef = useRef(null)
+  const lastFocusedRef = useRef(null)
 
   // ── Hydrate settings from localStorage on mount ───────────────────────
   useEffect(() => {
@@ -301,6 +449,21 @@ export default function PrintStudio() {
       }
     } catch {
       // Ignore parse errors
+    }
+  }, [])
+
+  // ── Hydrate saved-links store + mark mounted; cleanup on unmount ──────
+  // StrictMode runs mount→cleanup→mount in dev; reset isMountedRef to true
+  // at the START of every run so the auto-cache effect's guards stay valid.
+  useEffect(() => {
+    isMountedRef.current = true
+    const entries = loadSavedLinks()
+    setSavedLinkEntries(entries)
+    setSavedLinks(
+      entries.map((e) => ({ short_code: e.shortCode, share_url: e.url, title: e.title })),
+    )
+    return () => {
+      isMountedRef.current = false
     }
   }, [])
 
@@ -317,6 +480,52 @@ export default function PrintStudio() {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
     }
   }, [])
+
+  // ── Storage modal: focus management + Escape-to-close + Tab-cycle trap ─
+  // On open: stash the previously focused element and move focus into the
+  // dialog. On close: clear the pending confirm and restore focus.
+  useEffect(() => {
+    if (!overwritePending) return
+    lastFocusedRef.current = document.activeElement
+    const modal = storageModalRef.current
+    if (modal) {
+      // Focus the first focusable element (the cancel button is the safest
+      // default — it's the most reversible action).
+      const focusables = modal.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )
+      if (focusables.length > 0) focusables[0].focus()
+    }
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        setOverwritePending(null)
+        setConfirmOverwrite(null)
+        return
+      }
+      if (e.key === 'Tab' && modal) {
+        const focusables = modal.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        )
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      if (lastFocusedRef.current && typeof lastFocusedRef.current.focus === 'function') {
+        lastFocusedRef.current.focus()
+      }
+    }
+  }, [overwritePending])
 
   // ── Template persistence handlers ─────────────────────────────────────
   function handleSaveTemplate() {
@@ -336,6 +545,77 @@ export default function PrintStudio() {
       // ignore
     }
     showToast('ok', 'รีเซ็ตเป็นค่าเริ่มต้นแล้ว')
+  }
+
+  // ── Save & Share: persist the current on-screen result (no re-solve) ──
+  async function handleSaveAndShare() {
+    if (saving) return
+    setSaving(true)
+    try {
+      const term = settings.semester === 'summer' ? 3 : parseInt(settings.semester || '1', 10)
+      const payload = buildPersistPayload()
+      const result = await saveTimetableResult({
+        title: settings.schoolName || activeSnapshotLabel || 'ตารางสอน',
+        academicYear: parseInt(settings.academicYear, 10) || 2569,
+        term,
+        config: payload.config,
+        result: payload.result,
+      })
+      const url = buildShortViewerURL(result.short_code)
+      const entry = {
+        fingerprint: scheduleFingerprint,
+        shortCode: result.short_code,
+        url,
+        title: result.title,
+        savedAt: new Date().toISOString(),
+      }
+      // Manual save mode: update in place → append → else overwrite modal
+      const outcome = saveLinkEntry(entry, { fifo: false })
+      if (outcome && outcome.full) {
+        setSavedLinkEntries(outcome.entries)
+        setOverwritePending({ entry })
+        showToast('err', 'พื้นที่บันทึกเต็ม (5/5) — เลือกรายการที่จะแทนที่')
+        return
+      }
+      setSavedLinkEntries(Array.isArray(outcome) ? outcome : loadSavedLinks())
+      setSavedLinks((prev) => [
+        { short_code: result.short_code, share_url: url, title: result.title },
+        ...prev.filter((l) => l.short_code !== result.short_code),
+      ].slice(0, MAX_SAVED_SLOTS))
+      setShortLink({ shortCode: result.short_code, url })
+      setShortLinkStatus('ready')
+      showToast('ok', 'บันทึกและสร้างลิงก์สั้นเรียบร้อย')
+    } catch (err) {
+      showToast('err', err?.message || 'บันทึกตารางไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ── Overwrite modal: replace the selected saved slot with the pending entry ──
+  function handleOverwriteSave(index) {
+    if (!overwritePending) return
+    const entries = loadSavedLinks()
+    const safeIndex = Math.min(index, entries.length - 1)
+    if (safeIndex < 0) return
+    entries[safeIndex] = overwritePending.entry
+    persistSavedLinks(entries)
+    setSavedLinkEntries(entries)
+    setSavedLinks((prev) => [
+      { short_code: overwritePending.entry.shortCode, share_url: overwritePending.entry.url, title: overwritePending.entry.title },
+      ...prev.filter((l) => l.short_code !== overwritePending.entry.shortCode),
+    ].slice(0, MAX_SAVED_SLOTS))
+    setShortLink({ shortCode: overwritePending.entry.shortCode, url: overwritePending.entry.url })
+    setShortLinkStatus('ready')
+    setOverwritePending(null)
+    showToast('ok', 'บันทึกและสร้างลิงก์สั้นเรียบร้อย')
+  }
+
+  function handleCopyLink(url) {
+    navigator.clipboard?.writeText(url).then(
+      () => showToast('ok', 'คัดลอกลิงก์แล้ว'),
+      () => showToast('err', 'คัดลอกลิงก์ไม่สำเร็จ'),
+    )
   }
 
   // ── Settings update helper (merges partial updates) ───────────────────
@@ -359,7 +639,7 @@ export default function PrintStudio() {
           className="btn-primary flex items-center gap-2"
         >
           <ArrowLeft className="w-4 h-4" />
-          กลับไปหน้าจัดตาราง
+          กลับไปจัดตาราง
         </button>
       </div>
     )
@@ -376,6 +656,82 @@ export default function PrintStudio() {
     schedule_blocks = [],
   } = fixtureData
   const resultSlots = result?.slots || []
+
+  // ── Short-link fingerprint (schedule content only, not metadata) ──────
+  const scheduleFingerprint = useMemo(() => {
+    if (!fixtureData) return null
+    return hashString(JSON.stringify({ f: fixtureData, r: resultSlots, u: userPlacements }))
+  }, [fixtureData, resultSlots, userPlacements])
+
+  // Payload sent to /save-result: the original config (no re-solve) plus the
+  // exact slots currently displayed on screen (solver ∪ manual, deduped) so
+  // the public viewer matches the printed page 1:1.
+  const buildPersistPayload = useCallback(() => {
+    const mergedSlots = buildMergedSlots(fixtureData?.lesson_blocks, userPlacements, resultSlots)
+    return {
+      config: fixtureData,
+      result: {
+        ...(result || { slots: [], teacher_loads: [], metrics: { status: 'FEASIBLE', objective_value: 0, wall_time_seconds: 0, num_variables: 0, num_constraints: 0, hard_violations: 0, soft_violations: 0 } }),
+        slots: mergedSlots,
+      },
+    }
+  }, [fixtureData, userPlacements, result, resultSlots])
+
+  // ── Auto-create the short link (debounced, async-safe) ────────────────
+  // Reuses a previously saved short code for the same schedule fingerprint;
+  // otherwise calls the backend once. Results from stale fingerprint runs are
+  // ignored (createSeqRef), and no state is set after unmount (isMountedRef).
+  useEffect(() => {
+    if (!scheduleFingerprint) return
+    // Defensive: ensure isMountedRef is true on every effect run (StrictMode
+    // re-mounts in dev; the hydrate effect above also resets it, but this
+    // guards against any re-run ordering).
+    isMountedRef.current = true
+    setShortLink(null)
+    setShortLinkStatus('creating')
+    const seq = ++createSeqRef.current
+    clearTimeout(debounceTimerRef.current)
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        const cached = loadSavedLinks().find((e) => e.fingerprint === scheduleFingerprint)
+        if (cached) {
+          if (!isMountedRef.current || seq !== createSeqRef.current) return
+          setShortLink({ shortCode: cached.shortCode, url: cached.url })
+          setShortLinkStatus('ready')
+          return
+        }
+        const term = settings.semester === 'summer' ? 3 : parseInt(settings.semester || '1', 10)
+        const payload = buildPersistPayload()
+        const res = await saveTimetableResult({
+          title: settings.schoolName || activeSnapshotLabel || 'ตารางสอน',
+          academicYear: parseInt(settings.academicYear, 10) || 2569,
+          term,
+          config: payload.config,
+          result: payload.result,
+        })
+        if (!isMountedRef.current || seq !== createSeqRef.current) return
+        const url = buildShortViewerURL(res.short_code)
+        // Auto-cache mode: FIFO rotation, never blocks the user
+        const updated = saveLinkEntry({
+          fingerprint: scheduleFingerprint,
+          shortCode: res.short_code,
+          url,
+          title: res.title,
+          savedAt: new Date().toISOString(),
+        }, { fifo: true })
+        setSavedLinkEntries(Array.isArray(updated) ? updated : loadSavedLinks())
+        setShortLink({ shortCode: res.short_code, url })
+        setShortLinkStatus('ready')
+      } catch (err) {
+        console.error('[PrintStudio] auto-create short link failed:', err?.message || err, err?.payload || '')
+        if (isMountedRef.current && seq === createSeqRef.current) {
+          setShortLinkStatus('error')
+        }
+      }
+    }, SHORT_LINK_DEBOUNCE_MS)
+    return () => clearTimeout(debounceTimerRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleFingerprint])
 
   // ── Grid config (mirrors TimetableView logic) ─────────────────────────
   const gridConfig = useMemo(() => {
@@ -450,6 +806,9 @@ export default function PrintStudio() {
   const ctx = useMemo(() => buildExportContext(exportData), [exportData])
 
   // ── Build page arrays for each tab ────────────────────────────────────
+  // viewerUrl prefers the DB short link (small QR); falls back to the
+  // embedded compressed payload when the short link isn't ready/failed.
+  const shortUrl = shortLink?.url || null
   const classPages = useMemo(() => {
     return classes.map((cls) => {
       const qrPayload = buildQRPayload('class', cls, ctx, gridConfig, fixed_slots, settings)
@@ -459,11 +818,11 @@ export default function PrintStudio() {
         id: cls.id,
         item: cls,
         qrPayload,
-        viewerUrl: buildViewerURL(qrPayload),
+        viewerUrl: shortUrl || buildViewerURL(qrPayload),
         gridHTML: buildClassGridHTML(cls, ctx),
       }
     })
-  }, [classes, ctx, gridConfig, fixed_slots, settings])
+  }, [classes, ctx, gridConfig, fixed_slots, settings, shortUrl])
 
   const teacherPages = useMemo(() => {
     return teachers.map((teacher) => {
@@ -474,11 +833,11 @@ export default function PrintStudio() {
         id: teacher.id,
         item: teacher,
         qrPayload,
-        viewerUrl: buildViewerURL(qrPayload),
+        viewerUrl: shortUrl || buildViewerURL(qrPayload),
         gridHTML: buildTeacherGridHTML(teacher, ctx),
       }
     })
-  }, [teachers, ctx, gridConfig, fixed_slots, settings])
+  }, [teachers, ctx, gridConfig, fixed_slots, settings, shortUrl])
 
   // ── Build facility pages (one per special room) ──────────────────────
   const specialRooms = fixtureData?.special_rooms || []
@@ -1005,96 +1364,213 @@ export default function PrintStudio() {
         {/* ════════════════════════════════════════════════════════════════
             Left Panel: Settings & Controls (w-80)
         ════════════════════════════════════════════════════════════════ */}
-        <div className="print-studio-left-panel w-80 shrink-0 overflow-y-auto bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-4">
+        <div className="print-studio-left-panel w-80 shrink-0 overflow-y-auto bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3">
           {/* Back button */}
           <button
             onClick={() => setStep(5)}
             className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-            กลับไปแก้ไขตาราง
+            กลับไปจัดตาราง
           </button>
 
-          {/* Settings Form (extracted component) */}
-          <PrintSettingsPanel
-            settings={settings}
-            onSettingsChange={updateSettings}
-            onSaveTemplate={handleSaveTemplate}
-            onResetTemplate={handleResetTemplate}
-          />
-
-          {/* Export Scope Selector — horizontal segmented buttons */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide">ขอบเขตการส่งออก</h3>
-            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-              {[
-                { id: 'current', label: 'หน้านี้' },
-                { id: 'tab', label: `แท็บนี้ (${activePages.length})` },
-                { id: 'all', label: `ทั้งหมด (${classPages.length + teacherPages.length + facilityPages.length})` },
-              ].map((opt) => (
-                <button
-                  key={opt.id}
-                  onClick={() => setExportScope(opt.id)}
-                  className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors
-                    ${exportScope === opt.id
-                      ? 'bg-white text-gray-900 shadow-sm font-bold'
-                      : 'text-gray-500 hover:text-gray-700'}`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+          {/* Tab Switcher — ตั้งค่าหัวกระดาษ / ส่งออกเอกสาร */}
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-1" role="tablist" aria-label="โหมดแผงด้านซ้าย">
+            {[
+              { id: 'header', label: 'ตั้งค่าหัวกระดาษ', active: 'bg-white text-blue-700 border-blue-500' },
+              { id: 'export', label: 'ส่งออกเอกสาร', active: 'bg-white text-emerald-700 border-emerald-500' },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                id={`tab-${opt.id}`}
+                role="tab"
+                aria-selected={sidebarTab === opt.id}
+                aria-controls={`panel-${opt.id}`}
+                onClick={() => setSidebarTab(opt.id)}
+                className={`flex-1 px-2 py-2 rounded-md text-xs font-semibold transition-all border
+                  ${sidebarTab === opt.id
+                    ? `${opt.active} shadow-sm border-b-2`
+                    : 'text-gray-500 border border-transparent hover:bg-white hover:text-gray-800 hover:shadow-sm'}`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
 
-          {/* Output Action Buttons */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide">ส่งออกเอกสาร</h3>
-            <>
-              <button
-                onClick={handlePrint}
-                disabled={exporting}
-                className="flex items-center justify-center gap-2 w-full py-2.5
-                  bg-blue-600 text-white rounded-lg font-bold text-sm shadow-sm
-                  hover:bg-blue-700 transition-colors
-                  disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Printer className="w-4 h-4" />
-                สั่งพิมพ์ / บันทึก PDF ({exportLabelSuffix})
-              </button>
-              <button
-                onClick={handleExportPNG}
-                disabled={exporting}
-                className="flex items-center justify-center gap-2 w-full py-2.5
-                  bg-emerald-600 text-white rounded-lg font-bold text-sm shadow-sm
-                  hover:bg-emerald-700 transition-colors
-                  disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {exporting && exportProgress.includes('PNG') ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <ImageIcon className="w-4 h-4" />
+          {/* ── Tab 1: ตั้งค่าหัวกระดาษ ─────────────────────────────── */}
+          <div
+            id="panel-header"
+            role="tabpanel"
+            aria-labelledby="tab-header"
+            className={sidebarTab === 'header' ? '' : 'hidden'}
+          >
+            <PrintSettingsPanel
+              settings={settings}
+              onSettingsChange={updateSettings}
+              onSaveTemplate={handleSaveTemplate}
+              onResetTemplate={handleResetTemplate}
+            />
+          </div>
+
+          {/* ── Tab 2: ส่งออกเอกสาร ─────────────────────────────────── */}
+          <div
+            id="panel-export"
+            role="tabpanel"
+            aria-labelledby="tab-export"
+            className={sidebarTab === 'export' ? '' : 'hidden'}
+          >
+              {/* Short-link status — fixed height so switching messages never shifts layout */}
+              <div className="min-h-[28px] flex items-center text-[11px] leading-tight">
+                {shortLinkStatus === 'creating' && (
+                  <span className="flex items-center gap-1.5 text-gray-500">
+                    <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                    กำลังสร้างลิงก์สั้นสำหรับ QR…
+                  </span>
                 )}
-                ส่งออกโฟลเดอร์ PNG ({exportLabelSuffix})
-              </button>
-              <button
-                onClick={handleExportExcel}
-                disabled={exporting}
-                className="flex items-center justify-center gap-2 w-full py-2.5
-                  bg-green-700 text-white rounded-lg font-bold text-sm shadow-sm
-                  hover:bg-green-800 transition-colors
-                  disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {exporting && exportProgress.includes('Excel') ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Table className="w-4 h-4" />
+                {shortLinkStatus === 'error' && (
+                  <span className="w-full min-h-[28px] h-auto text-amber-700 bg-amber-50 rounded-lg p-2">
+                    ไม่สามารถสร้างลิงก์สั้นได้ — QR จะใช้ลิงก์แนบข้อมูลแทน
+                  </span>
                 )}
-                ส่งออก Excel ({exportScope === 'all' ? 'ทุกชีต' : previewTab === 'class' ? 'ชีตห้องเรียน' : previewTab === 'teacher' ? 'ชีตครู' : 'ชีตห้องพิเศษ'})
-              </button>
-            </>
-            {exporting && exportProgress && (
-              <div className="text-xs text-gray-500 text-center py-1">{exportProgress}</div>
-            )}
+                {shortLinkStatus === 'ready' && shortLink && (
+                  <span className="text-emerald-600 truncate" title={shortLink.url}>
+                    QR ใช้ลิงก์สั้น /view?code={shortLink.shortCode}
+                  </span>
+                )}
+              </div>
+
+              {/* Primary CTA — Print / Save PDF (prominent at top) */}
+              <div className="space-y-2">
+                <button
+                  onClick={handlePrint}
+                  disabled={exporting}
+                  className="flex items-center justify-center gap-2 w-full py-2.5
+                    bg-blue-600 text-white rounded-lg font-bold text-sm shadow-sm
+                    hover:bg-blue-700 transition-colors
+                    disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Printer className="w-4 h-4" />
+                  สั่งพิมพ์ / บันทึก PDF ({exportLabelSuffix})
+                </button>
+              </div>
+
+              {/* Export Scope Selector — horizontal segmented buttons */}
+              <div className="space-y-2">
+                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide">ขอบเขตการส่งออก</h3>
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-1" role="tablist" aria-label="ขอบเขตการส่งออก">
+                  {[
+                    { id: 'current', label: 'หน้านี้' },
+                    { id: 'tab', label: `แท็บนี้ (${activePages.length})` },
+                    { id: 'all', label: `ทั้งหมด (${classPages.length + teacherPages.length + facilityPages.length})` },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      id={`tab-scope-${opt.id}`}
+                      role="tab"
+                      aria-selected={exportScope === opt.id}
+                      aria-controls="panel-scope"
+                      onClick={() => setExportScope(opt.id)}
+                      className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors
+                        ${exportScope === opt.id
+                          ? 'bg-white text-gray-900 shadow-sm font-bold'
+                          : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Secondary export buttons — 2-column grid (tabpanel for scope pills) */}
+              <div
+                id="panel-scope"
+                role="tabpanel"
+                aria-labelledby={`tab-scope-${exportScope}`}
+                className="space-y-2"
+              >
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={handleExportPNG}
+                    disabled={exporting}
+                    className="flex items-center justify-center gap-1.5 w-full py-2.5
+                      bg-indigo-600 text-white rounded-lg font-bold text-xs shadow-sm
+                      hover:bg-indigo-700 transition-colors
+                      disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {exporting && exportProgress.includes('PNG') ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <ImageIcon className="w-4 h-4" />
+                    )}
+                    โฟลเดอร์ PNG
+                  </button>
+                  <button
+                    onClick={handleExportExcel}
+                    disabled={exporting}
+                    className="flex items-center justify-center gap-1.5 w-full py-2.5
+                      bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-sm
+                      hover:bg-emerald-800 transition-colors
+                      disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {exporting && exportProgress.includes('Excel') ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Table className="w-4 h-4" />
+                    )}
+                    Excel
+                  </button>
+                </div>
+              {exporting && exportProgress && (
+                <div className="text-xs text-gray-500 text-center py-0.5">{exportProgress}</div>
+              )}
+              </div>
+
+              {/* Save & Share (short link via backend D1/local store) */}
+              <div className="space-y-2 pt-2 border-t border-gray-200">
+                <button
+                  onClick={handleSaveAndShare}
+                  disabled={saving}
+                  className="flex items-center justify-center gap-2 w-full py-2.5
+                    bg-violet-600 text-white rounded-lg font-bold text-sm shadow-sm
+                    hover:bg-violet-700 transition-colors
+                    disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {saving ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Link2 className="w-4 h-4" />
+                  )}
+                  บันทึก & แชร์ (ลิงก์สั้น)
+                </button>
+                {savedLinks.length > 0 && (
+                  <div className="space-y-1.5">
+                    {savedLinks.map((link) => (
+                      <div
+                        key={link.short_code}
+                        className="flex items-center gap-2 bg-violet-50 border border-violet-200 rounded-lg px-2.5 py-1.5"
+                      >
+                        <a
+                          href={link.share_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 text-xs text-violet-700 hover:text-violet-900 truncate font-medium"
+                          title={link.share_url}
+                        >
+                          {link.share_url}
+                        </a>
+                        <button
+                          onClick={() => handleCopyLink(link.share_url)}
+                          className="text-violet-500 hover:text-violet-700 shrink-0"
+                          title="คัดลอกลิงก์"
+                          aria-label="คัดลอกลิงก์"
+                        >
+                          <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
           </div>
 
         </div>
@@ -1137,30 +1613,33 @@ export default function PrintStudio() {
               <div className="flex flex-col gap-1 p-2 border-b border-gray-200 bg-white">
                 <button
                   onClick={() => setPreviewTab('class')}
+                  aria-label={`ห้องเรียน (${classPages.length})`}
                   className={`px-2 py-1.5 rounded-md text-xs font-medium transition-colors text-center
                     ${previewTab === 'class'
                       ? 'bg-blue-50 text-blue-700 border border-blue-400 font-bold'
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200 border border-transparent'}`}
                 >
-                  📋 ห้องเรียน ({classPages.length})
+                  <span aria-hidden="true">📋</span> ห้องเรียน ({classPages.length})
                 </button>
                 <button
                   onClick={() => setPreviewTab('teacher')}
+                  aria-label={`ครูผู้สอน (${teacherPages.length})`}
                   className={`px-2 py-1.5 rounded-md text-xs font-medium transition-colors text-center
                     ${previewTab === 'teacher'
                       ? 'bg-blue-50 text-blue-700 border border-blue-400 font-bold'
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200 border border-transparent'}`}
                 >
-                  👤 ครูผู้สอน ({teacherPages.length})
+                  <span aria-hidden="true">👤</span> ครูผู้สอน ({teacherPages.length})
                 </button>
                 <button
                   onClick={() => setPreviewTab('facility')}
+                  aria-label={`ห้องพิเศษ (${facilityPages.length})`}
                   className={`px-2 py-1.5 rounded-md text-xs font-medium transition-colors text-center
                     ${previewTab === 'facility'
                       ? 'bg-indigo-50 text-indigo-700 border border-indigo-400 font-bold'
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200 border border-transparent'}`}
                 >
-                  🔬 ห้องพิเศษ ({facilityPages.length})
+                  <span aria-hidden="true">🔬</span> ห้องพิเศษ ({facilityPages.length})
                 </button>
               </div>
 
@@ -1224,14 +1703,108 @@ export default function PrintStudio() {
         </div>
       </div>
 
+      {/* ── Overwrite modal — saved-links store is full (5/5) ──────────── */}
+      {overwritePending && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            role="button"
+            tabIndex={0}
+            aria-label="ปิดหน้าต่าง"
+            onClick={() => { setOverwritePending(null); setConfirmOverwrite(null) }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setOverwritePending(null)
+                setConfirmOverwrite(null)
+              }
+            }}
+          />
+          <div
+            ref={storageModalRef}
+            id="storage-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-title"
+            className="relative bg-white rounded-xl shadow-2xl w-full max-w-md p-5 space-y-3"
+          >
+            <div>
+              <h3 id="modal-title" className="text-base font-bold text-gray-800">พื้นที่บันทึกเต็ม (5/5 รายการ)</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                คลิกเลือก 1 รายการด้านล่างเพื่อแทนที่ด้วยตารางปัจจุบัน หรือกดยกเลิก
+              </p>
+            </div>
+            <div className="space-y-1.5 max-h-64 overflow-y-auto">
+              {savedLinkEntries.map((e, idx) => (
+                <button
+                  key={`${e.shortCode}-${idx}`}
+                  onClick={() => setConfirmOverwrite(idx)}
+                  className={`w-full text-left px-3 py-2 rounded-lg border transition-colors
+                    ${confirmOverwrite === idx
+                      ? 'border-red-500 bg-red-50 ring-1 ring-red-400'
+                      : 'border-gray-200 hover:border-red-400 hover:bg-red-50'}`}
+                >
+                  <div className="text-sm font-semibold text-gray-800 truncate">
+                    {e.title || 'ตารางสอน'}
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">
+                    {formatThaiDate(e.savedAt)}
+                    {e.savedAt ? ' · ' : ''}
+                    {e.shortCode}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {/* ── 2-step confirmation: shown after a slot is selected ─── */}
+            {confirmOverwrite !== null && (
+              <div className="rounded-lg bg-amber-50 border border-amber-300 p-3 space-y-2">
+                <p className="text-sm text-amber-800 font-medium">
+                  ต้องการบันทึกทับ '{savedLinkEntries[confirmOverwrite]?.title || 'ตารางสอน'}' ใช่หรือไม่?
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleOverwriteSave(confirmOverwrite)}
+                    className="flex-1 py-2 text-sm font-bold text-white bg-red-600
+                      hover:bg-red-700 rounded-lg transition-colors"
+                  >
+                    ยืนยันบันทึกทับ
+                  </button>
+                  <button
+                    onClick={() => setConfirmOverwrite(null)}
+                    className="flex-1 py-2 text-sm font-medium text-gray-600 bg-gray-100
+                      hover:bg-gray-200 rounded-lg transition-colors"
+                  >
+                    ยกเลิก
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => { setOverwritePending(null); setConfirmOverwrite(null) }}
+                className="flex-1 py-2 text-sm font-medium text-gray-600 bg-gray-100
+                  hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Toast notification ─────────────────────────────────────────── */}
       {toast && (
-        <div className={`fixed bottom-6 right-6 z-[120] px-4 py-3 rounded-xl shadow-lg
+        <div
+          role={toast.type === 'ok' ? 'status' : 'alert'}
+          aria-live={toast.type === 'ok' ? 'polite' : 'assertive'}
+          className={`fixed bottom-6 right-6 z-[120] px-4 py-3 rounded-xl shadow-lg
           text-sm font-medium flex items-center gap-2 max-w-sm
           ${toast.type === 'ok' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
           {toast.type === 'ok'
-            ? <CheckCircle className="w-5 h-5 shrink-0" />
-            : <XCircle className="w-5 h-5 shrink-0" />}
+            ? <CheckCircle className="w-5 h-5 shrink-0" aria-hidden="true" />
+            : <XCircle className="w-5 h-5 shrink-0" aria-hidden="true" />}
           {toast.msg}
         </div>
       )}

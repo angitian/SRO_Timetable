@@ -1,7 +1,7 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Plus, FolderOpen, Check, AlertCircle, Zap,
-  Printer, ShieldCheck,
+  Printer, ShieldCheck, Cloud, Loader2, Trash2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { BASE_URL } from '../api/config.js'
@@ -34,10 +34,12 @@ const ACCENT_STYLES = {
 }
 
 export default function LandingPage() {
-  const { setStep, setFixtureDataDirect, importSnapshot, selectFixture } = useApp()
+  const { setStep, setFixtureDataDirect, importSnapshot, selectFixture, user, listCloudWorkspaces, loadFromCloud, deleteFromCloud, cloudWorkspaces, cloudSyncing } = useApp()
   const fileInputRef = useRef(null)
   const [toast, setToast] = useState(null) // { type: 'ok'|'err', msg }
   const [isDragOver, setIsDragOver] = useState(false)
+  const [showCloudModal, setShowCloudModal] = useState(false)
+  const [cloudLoading, setCloudLoading] = useState(false)
 
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg })
@@ -114,6 +116,42 @@ export default function LandingPage() {
     window.open(`${BASE_URL}/api/import/excel/template`, '_blank')
   }
 
+  async function handleOpenCloud() {
+    if (!user) {
+      showToast('err', 'กรุณาเข้าสู่ระบบเพื่อเปิดตารางจากคลาวด์')
+      return
+    }
+    setShowCloudModal(true)
+    setCloudLoading(true)
+    try {
+      await listCloudWorkspaces()
+    } catch (e) {
+      showToast('err', 'โหลดรายการตารางไม่สำเร็จ')
+    } finally {
+      setCloudLoading(false)
+    }
+  }
+
+  async function handleLoadCloudWorkspace(id) {
+    const result = await loadFromCloud(id)
+    if (result.ok) {
+      setShowCloudModal(false)
+      showToast('ok', 'โหลดตารางจากคลาวด์แล้ว')
+    } else {
+      showToast('err', result.error || 'โหลดไม่สำเร็จ')
+    }
+  }
+
+  async function handleDeleteCloudWorkspace(id, title) {
+    if (!confirm(`ยืนยันการลบ "${title}" จากคลาวด์?`)) return
+    const result = await deleteFromCloud(id)
+    if (result.ok) {
+      showToast('ok', `ลบ "${title}" แล้ว`)
+    } else {
+      showToast('err', result.error || 'ลบไม่สำเร็จ')
+    }
+  }
+
   return (
     <div
       className="min-h-[calc(100vh-3.5rem)] bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex flex-col"
@@ -144,19 +182,19 @@ export default function LandingPage() {
 
         {/* ── Actions & Drag-Drop Area ───────────────────────────────── */}
         <div
-          className={`w-full max-w-2xl mx-auto border-2 border-dashed rounded-2xl p-8 bg-slate-50/50 my-4 transition-all
+          className={`w-full max-w-4xl mx-auto border-2 border-dashed rounded-2xl p-8 bg-slate-50/50 my-4 transition-all
             ${isDragOver
               ? 'border-blue-500 bg-blue-50/80 scale-[1.01]'
               : 'border-slate-300 hover:border-slate-400'
             }`}
         >
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
             {/* Primary: Create new */}
             <button
               onClick={handleCreateNew}
-              className="flex items-center gap-2 px-6 py-3.5 text-base font-semibold rounded-xl shadow-sm bg-blue-600 text-white hover:bg-blue-700 transition-all"
+              className="flex items-center gap-2 px-6 py-3.5 text-base font-semibold rounded-xl shadow-sm bg-blue-600 text-white hover:bg-blue-700 transition-all whitespace-nowrap"
             >
-              <Plus className="w-5 h-5" />
+              <Plus className="w-5 h-5 flex-shrink-0" />
               สร้างตารางสอน
             </button>
 
@@ -170,10 +208,23 @@ export default function LandingPage() {
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-6 py-3.5 text-base font-semibold rounded-xl shadow-sm bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition-all"
+              className="flex items-center gap-2 px-6 py-3.5 text-base font-semibold rounded-xl shadow-sm bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition-all whitespace-nowrap"
             >
-              <FolderOpen className="w-5 h-5 text-slate-500" />
+              <FolderOpen className="w-5 h-5 text-slate-500 flex-shrink-0" />
               เปิดไฟล์ตารางเดิม (.json)
+            </button>
+
+            {/* Tertiary: Open from cloud (requires login) */}
+            <button
+              onClick={handleOpenCloud}
+              className={`flex items-center gap-2 px-6 py-3.5 text-base font-semibold rounded-xl shadow-sm transition-all whitespace-nowrap
+                ${user
+                  ? 'bg-violet-600 text-white hover:bg-violet-700'
+                  : 'bg-white text-slate-400 border border-slate-200 cursor-not-allowed'}`}
+              title={user ? 'เปิดตารางที่บันทึกไว้บนคลาวด์' : 'เข้าสู่ระบบเพื่อใช้งาน'}
+            >
+              <Cloud className="w-5 h-5 flex-shrink-0" />
+              เปิดจากคลาวด์
             </button>
           </div>
 
@@ -250,6 +301,74 @@ export default function LandingPage() {
             ? <Check className="w-5 h-5" />
             : <AlertCircle className="w-5 h-5" />}
           {toast.msg}
+        </div>
+      )}
+
+      {/* ── Cloud Workspace Modal ─────────────────────────────────────── */}
+      {showCloudModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowCloudModal(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-4 max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Cloud className="w-5 h-5 text-violet-600" />
+                ตารางบนคลาวด์
+              </h3>
+              <button
+                onClick={() => setShowCloudModal(false)}
+                className="text-gray-400 hover:text-gray-600 text-xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {cloudLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 text-violet-500 animate-spin" />
+              </div>
+            ) : cloudWorkspaces.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <Cloud className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                <p className="text-sm">ยังไม่มีตารางบนคลาวด์</p>
+                <p className="text-xs mt-1">บันทึกจากหน้าตารางสอน (step 5) เพื่อเก็บขึ้นคลาวด์</p>
+              </div>
+            ) : (
+              <div className="overflow-y-auto flex-1 space-y-2">
+                {cloudWorkspaces.map((ws) => (
+                  <div
+                    key={ws.id}
+                    className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 hover:border-violet-300 hover:bg-violet-50/30 transition-colors"
+                  >
+                    <button
+                      onClick={() => handleLoadCloudWorkspace(ws.id)}
+                      disabled={cloudSyncing}
+                      className="flex-1 text-left min-w-0"
+                    >
+                      <div className="text-sm font-semibold text-gray-800 truncate">
+                        {ws.title}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-0.5">
+                        {ws.updated_at
+                          ? new Date(ws.updated_at).toLocaleDateString('th-TH', {
+                              day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                            })
+                          : '—'}
+                        {' · '}
+                        ปีการศึกษา {ws.academic_year}/{ws.term}
+                      </div>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteCloudWorkspace(ws.id, ws.title)}
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0"
+                      title="ลบจากคลาวด์"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

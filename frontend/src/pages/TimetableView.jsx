@@ -55,6 +55,16 @@ export default function TimetableView() {
     deleteSnapshot,
     exportSnapshot,
     importSnapshot,
+    // Cloud workspace
+    user,
+    login,
+    cloudSyncing,
+    activeCloudWorkspaceId,
+    saveToCloud,
+    cloudWorkspaces,
+    listCloudWorkspaces,
+    loadFromCloud,
+    deleteFromCloud,
   } = useApp()
   const [activeTab, setActiveTab] = useState('timetable')
   const [viewMode, setViewMode] = useState('class') // 'class' | 'teacher'
@@ -69,6 +79,13 @@ export default function TimetableView() {
   const [completionToast, setCompletionToast] = useState(null)
   const [railSearch, setRailSearch] = useState('')
   const [facilitySearch, setFacilitySearch] = useState('')
+  // ── Stale-data banner dismiss state ───────────────────────────────
+  // User can dismiss the "มีการเปลี่ยนแปลงข้อมูล" banner for the current
+  // session. Reset to false only when isDirty transitions false → true
+  // (i.e. a *new* round of data changes happens in steps 1–4), so the
+  // banner re-appears for the next batch of changes.
+  const [isBannerDismissed, setIsBannerDismissed] = useState(false)
+  const prevIsDirtyRef = useRef(false)
   const gridAreaRef = useRef(null)
   const wheelCooldownRef = useRef(false)
   const wasGeneratingRef = useRef(false)
@@ -76,6 +93,9 @@ export default function TimetableView() {
   const [showExportModal, setShowExportModal] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportToast, setExportToast] = useState(null)
+  // ── Placement feedback toast (sidebar → grid drop) ───────────────
+  const [placementToast, setPlacementToast] = useState(null)
+  const placementTimerRef = useRef(null)
 
   // ── Auto-toast when solver finishes ───────────────────────────────
   // Fires when isGenerating transitions true → false AND a fresh result
@@ -96,6 +116,21 @@ export default function TimetableView() {
       return () => clearTimeout(t)
     }
   }, [isGenerating, result])
+
+  // ── Reset stale-data banner dismissal on new changes ───────────────
+  // When isDirty flips false → true (a fresh batch of data changes from
+  // steps 1–4 or from moving a card on the grid), re-arm the banner so
+  // the user is alerted to the new changes. When isDirty goes back to
+  // false (e.g. after runSolver completes via SET_RESULT), keep the
+  // banner hidden — there's nothing stale to warn about anymore.
+  useEffect(() => {
+    const wasDirty = prevIsDirtyRef.current
+    prevIsDirtyRef.current = isDirty
+    if (!wasDirty && isDirty) {
+      // New round of changes → re-show banner
+      setIsBannerDismissed(false)
+    }
+  }, [isDirty])
 
   // Empty state — no fixture data yet
   if (!fixtureData) {
@@ -391,7 +426,25 @@ export default function TimetableView() {
   // ── Handlers ──────────────────────────────────────────────────────
   function handleDropFromSidebar(lessonBlock, day, period, classId) {
     if (classId && lessonBlock.class_id !== classId) return
-    placeLessonBlock(lessonBlock.id, day, period)
+    // Predict the post-placement remaining count using the same formula
+    // the reducer uses (solver slots + user placements, deduped at this
+    // day/period). This is only shown as feedback — the reducer remains
+    // the source of truth for actual state.
+    const lbId = lessonBlock.id
+    const existing = (userPlacements[lbId] || []).filter(
+      (p) => !(p.day === day && p.period === period),
+    )
+    const solverPlaced = resultSlots.filter((s) => s.lesson_block_id === lbId).length
+    const afterCount = solverPlaced + existing.length + 1
+    const remaining = (lessonBlock.periods_per_week || 0) - afterCount
+    placeLessonBlock(lbId, day, period)
+    setPlacementToast({
+      msg: remaining > 0
+        ? `วางแล้ว — เหลืออีก ${remaining} คาบ`
+        : 'จัดครบทุกคาบแล้ว ✓',
+    })
+    if (placementTimerRef.current) clearTimeout(placementTimerRef.current)
+    placementTimerRef.current = setTimeout(() => setPlacementToast(null), 2500)
   }
 
   // ❌ Remove a slot/placement from the grid (button on card)
@@ -399,7 +452,7 @@ export default function TimetableView() {
     if (isPreAssigned) {
       removePlacement(lessonBlockId, day, period)
     } else {
-      deleteSlot(lessonBlockId)
+      deleteSlot(lessonBlockId, day, period)
     }
   }
 
@@ -527,21 +580,37 @@ export default function TimetableView() {
 
   return (
     <div className="w-full space-y-4 pb-4">
-      {/* Dirty warning banner */}
-      {isDirty && (
-        <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 text-amber-800">
-          <AlertTriangle className="w-5 h-5 shrink-0" />
-          <span className="text-sm font-medium">
-            มีการเปลี่ยนแปลงข้อมูล กรุณากดจัดตารางใหม่เพื่ออัปเดตผลลัพธ์
-          </span>
-          <button
-            onClick={() => runSolver({ preAssignments: userPlacements })}
-            disabled={isGenerating}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold bg-amber-600 text-white hover:bg-amber-700 transition-colors disabled:opacity-60"
-          >
-            <Rocket className="w-3.5 h-3.5" />
-            จัดใหม่
-          </button>
+      {/* Stale-data warning banner — dismissible, auto-hides on re-solve */}
+      {isDirty && !isBannerDismissed && (
+        <div className="flex items-center justify-between px-4 py-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl mb-3 text-xs sm:text-sm">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span className="font-medium min-w-0 truncate">
+              มีการเปลี่ยนแปลงข้อมูล — กดจัดตารางใหม่เพื่ออัปเดตผลลัพธ์
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 ml-3">
+            <button
+              onClick={() => {
+                setIsBannerDismissed(true)
+                runSolver({ preAssignments: userPlacements })
+              }}
+              disabled={isGenerating}
+              className="flex items-center gap-1 bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded-lg font-medium text-xs transition-colors disabled:opacity-60"
+            >
+              <Rocket className="w-3 h-3" />
+              จัดใหม่
+            </button>
+            <button
+              onClick={() => setIsBannerDismissed(true)}
+              disabled={isGenerating}
+              className="p-1 rounded-lg text-amber-600 hover:text-amber-800 hover:bg-amber-100 transition-colors disabled:opacity-50"
+              aria-label="ปิดการแจ้งเตือน"
+              title="ปิดการแจ้งเตือนชั่วคราว"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -584,6 +653,16 @@ export default function TimetableView() {
         onDeleteSnapshot={deleteSnapshot}
         onExportSnapshot={exportSnapshot}
         onImportSnapshot={importSnapshot}
+        // Cloud workspace props
+        user={user}
+        onLogin={login}
+        cloudSyncing={cloudSyncing}
+        activeCloudWorkspaceId={activeCloudWorkspaceId}
+        onSaveToCloud={saveToCloud}
+        cloudWorkspaces={cloudWorkspaces}
+        onListCloudWorkspaces={listCloudWorkspaces}
+        onLoadFromCloud={loadFromCloud}
+        onDeleteFromCloud={deleteFromCloud}
         // Tab + Print Studio props
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -1082,6 +1161,15 @@ export default function TimetableView() {
             ? <CheckCircle className="w-5 h-5 shrink-0" />
             : <XCircle className="w-5 h-5 shrink-0" />}
           {exportToast.msg}
+        </div>
+      )}
+
+      {/* ── Placement feedback toast (bottom-left, ไม่ชน toasts อื่น) ── */}
+      {placementToast && (
+        <div className="fixed bottom-6 left-6 z-[120] px-4 py-3 rounded-xl shadow-lg
+          text-sm font-medium flex items-center gap-2 max-w-sm bg-emerald-600 text-white">
+          <CheckCircle className="w-5 h-5 shrink-0" />
+          {placementToast.msg}
         </div>
       )}
     </div>

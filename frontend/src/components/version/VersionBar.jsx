@@ -9,6 +9,8 @@ import {
   Check,
   Plus,
   AlertCircle,
+  Cloud,
+  Loader2,
 } from 'lucide-react'
 import { useApp } from '../../context/AppContext.jsx'
 import { formatSnapshotDate, generateLabel } from '../../utils/versionManager.js'
@@ -31,6 +33,12 @@ export default function VersionBar() {
     deleteSnapshot,
     exportSnapshot,
     importSnapshot,
+    // Cloud workspace
+    user,
+    login,
+    cloudSyncing,
+    activeCloudWorkspaceId,
+    saveToCloud,
   } = useApp()
 
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -105,6 +113,28 @@ export default function VersionBar() {
     }
     // Reset input so same file can be re-selected
     e.target.value = ''
+  }
+
+  async function handleSaveToCloud() {
+    if (cloudSyncing) return
+    if (!user) {
+      showToast('err', 'กรุณาเข้าสู่ระบบด้วย Google เพื่อบันทึกขึ้นคลาวด์')
+      try {
+        await login()
+      } catch (e) {
+        // login() redirects to Google; failure here is non-fatal
+      }
+      return
+    }
+    const label = activeSnapshotLabel || generateLabel(snapshots.length)
+    const result = await saveToCloud(label)
+    if (result.ok) {
+      showToast('ok', activeCloudWorkspaceId
+        ? `อัปเดต "${result.title}" บนคลาวด์แล้ว`
+        : `บันทึก "${result.title}" ขึ้นคลาวด์แล้ว`)
+    } else {
+      showToast('err', result.error || 'บันทึกขึ้นคลาวด์ไม่สำเร็จ')
+    }
   }
 
   const dirtyIndicator = isSnapshotDirty ? '●' : '✓'
@@ -274,8 +304,35 @@ export default function VersionBar() {
           </div>
         </div>
 
-        {/* ── Right: Import / Export JSON ─────────────────────────── */}
+        {/* ── Right: Cloud save + Import / Export JSON ─────────────── */}
         <div className="flex items-center gap-2">
+          {/* Save to cloud (requires login) */}
+          <button
+            onClick={handleSaveToCloud}
+            disabled={cloudSyncing}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium
+              whitespace-nowrap transition-colors
+              ${user
+                ? 'bg-purple-600 text-white hover:bg-purple-700 shadow-sm'
+                : 'bg-gray-100 text-gray-400 hover:bg-gray-200 border border-gray-200'}`}
+            title={user
+              ? (activeCloudWorkspaceId ? 'บันทึกทับบนคลาวด์' : 'บันทึกขึ้นคลาวด์ (สร้างใหม่)')
+              : 'เข้าสู่ระบบด้วย Google เพื่อบันทึกขึ้นคลาวด์'}
+          >
+            {cloudSyncing ? (
+              <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+            ) : (
+              <Cloud className="w-4 h-4 flex-shrink-0" />
+            )}
+            <span className="hidden sm:inline">
+              {activeCloudWorkspaceId ? 'อัปเดตคลาวด์' : 'บันทึกคลาวด์'}
+            </span>
+            {!user && (
+              <span className="hidden sm:inline-flex items-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                เข้าสู่ระบบ
+              </span>
+            )}
+          </button>
           <input
             ref={fileInputRef}
             type="file"

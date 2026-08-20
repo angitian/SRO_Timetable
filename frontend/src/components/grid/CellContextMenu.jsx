@@ -83,7 +83,7 @@ export default function CellContextMenu({
       label: 'ลบคาบนี้',
       desc: 'นำคาบนี้ออกจากตาราง',
       danger: true,
-      onClick: () => handleAction(onDeleteSlot, slot?.lesson_block_id),
+      onClick: () => handleAction(onDeleteSlot, slot?.lesson_block_id, day, period),
     })
     items.push({
       icon: Lock,

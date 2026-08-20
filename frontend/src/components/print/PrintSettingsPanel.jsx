@@ -4,12 +4,12 @@ import { Upload, Trash2, Save, RotateCcw } from 'lucide-react'
 // ── Toggle Switch Component ──────────────────────────────────────────────
 function ToggleSwitch({ checked, onChange, label }) {
   return (
-    <label className="flex items-center justify-between cursor-pointer select-none py-1.5">
-      <span className="text-sm text-gray-700">{label}</span>
+    <label className="flex items-start justify-between cursor-pointer select-none py-1">
+      <span className="text-sm text-gray-700 leading-tight pr-2">{label}</span>
       <button
         type="button"
         onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors
           ${checked ? 'bg-blue-600' : 'bg-gray-300'}`}
         role="switch"
         aria-checked={checked}
@@ -30,7 +30,7 @@ function ToggleSwitch({ checked, onChange, label }) {
  *   settings          — settings object (schoolName, semester, academicYear,
  *                       schoolLogo, signatoryName, signatoryTitle,
  *                       showPeriodTimes, showWorkloadSummary, showSignOff,
- *                       showFooter)
+ *                       showFooter, showQRCode)
  *   onSettingsChange  — callback receiving partial updates, e.g.
  *                       onSettingsChange({ schoolName: '...' })
  *   onSaveTemplate    — callback for the save-template button
@@ -133,33 +133,35 @@ export default function PrintSettingsPanel({
             />
           </div>
         </div>
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">ผู้ลงนาม</label>
-          <input
-            type="text"
-            value={settings.signatoryName}
-            onChange={(e) => onSettingsChange({ signatoryName: e.target.value })}
-            placeholder="เช่น นายสมชาย ใจดี"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg
-              focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">ตำแหน่ง</label>
-          <input
-            type="text"
-            value={settings.signatoryTitle}
-            onChange={(e) => onSettingsChange({ signatoryTitle: e.target.value })}
-            placeholder="เช่น ผู้อำนวยการโรงเรียน"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg
-              focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          />
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">ผู้ลงนาม</label>
+            <input
+              type="text"
+              value={settings.signatoryName}
+              onChange={(e) => onSettingsChange({ signatoryName: e.target.value })}
+              placeholder="เช่น นายสมชาย ใจดี"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg
+                focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">ตำแหน่ง</label>
+            <input
+              type="text"
+              value={settings.signatoryTitle}
+              onChange={(e) => onSettingsChange({ signatoryTitle: e.target.value })}
+              placeholder="เช่น ผู้อำนวยการโรงเรียน"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg
+                focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
         </div>
       </div>
 
       {/* Component Toggles — 2-column grid */}
       <div className="space-y-1">
-        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">ส่วนประกอบเอกสาร</h3>
+        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">ส่วนประกอบเอกสาร</h3>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
           <ToggleSwitch
             checked={settings.showPeriodTimes}
@@ -180,6 +182,11 @@ export default function PrintSettingsPanel({
             checked={settings.showFooter}
             onChange={(v) => onSettingsChange({ showFooter: v })}
             label="วันที่พิมพ์ท้ายกระดาษ"
+          />
+          <ToggleSwitch
+            checked={settings.showQRCode}
+            onChange={(v) => onSettingsChange({ showQRCode: v })}
+            label="QR ดูตารางสอน"
           />
         </div>
       </div>
