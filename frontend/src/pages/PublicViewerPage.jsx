@@ -20,18 +20,6 @@ const SARABUN_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Sa
 const KRU_PLATFORM_URL = 'https://kru-platform.com'
 
 /**
- * Escape HTML special characters.
- */
-function escapeHTML(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-/**
  * Decode a compressed payload from the `?d=` query param.
  * Supports:
  *   v3 — lz-string compressToEncodedURIComponent (current, URL-safe)
@@ -121,20 +109,25 @@ function deriveGridConfig(config) {
 /**
  * Convert a fetched TimetableRecord (from the backend short-code API) into
  * the payload shape expected by buildExportContext / buildClassGridHTML.
+ * Supports both class view (default) and teacher view via viewMode.
  */
-function recordToPayload(record, selectedClassId) {
+function recordToPayload(record, viewMode, selectedClassId, selectedTeacherId) {
   const config = record?.config || {}
   const result = record?.result || {}
   const classes = (config.classes || []).map((c) => ({ id: c.id, name: c.name }))
+  const teachers = (config.teachers || []).map((t) => ({ id: t.id, name: t.name }))
+  const isTeacher = viewMode === 'teacher' && teachers.length > 0
   const cls = classes.find((c) => c.id === selectedClassId) || classes[0] || null
+  const teacher = teachers.find((t) => t.id === selectedTeacherId) || teachers[0] || null
+  const item = isTeacher ? teacher : cls
   const term = record.term
   const semester = term === 3 ? 'summer' : String(term)
   return {
-    kind: 'class',
-    item: cls,
+    kind: isTeacher ? 'teacher' : 'class',
+    item,
     slots: result.slots || [],
     subjects: (config.subjects || []).map((s) => ({ id: s.id, name: s.name })),
-    teachers: (config.teachers || []).map((t) => ({ id: t.id, name: t.name })),
+    teachers,
     classes,
     gridConfig: deriveGridConfig(config),
     fixedSlots: (config.fixed_slots || []).map((fs) => ({
@@ -173,73 +166,38 @@ function buildQRSVGString(url, size = 128) {
   }
 }
 
-/**
- * Build the document header HTML — 3-part flex layout (mirrors PrintStudio).
- */
-function buildHeaderHTML(settings, itemName) {
-  const { schoolName, semester, academicYear } = settings
-  const semesterLabel =
-    semester === '1' ? 'ภาคเรียนที่ 1'
-    : semester === '2' ? 'ภาคเรียนที่ 2'
-    : semester === 'summer' ? 'ภาคเรียนฤดูร้อน'
-    : ''
-
-  const leftText = `${semesterLabel ? escapeHTML(semesterLabel) : ''}${semesterLabel && academicYear ? ' ' : ''}${academicYear ? 'ปีการศึกษา ' + academicYear : ''}`
-
-  return `<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;margin-bottom:8px;border-bottom:2px solid #1f2937;">
-    <div style="font-size:12px;color:#4b5563;white-space:nowrap;">${leftText}</div>
-    <div style="font-size:16px;font-weight:700;color:#1f2937;text-align:center;">
-      ตารางสอน ${escapeHTML(itemName || '')}
-    </div>
-    <div style="font-size:13px;font-weight:700;color:#1f2937;white-space:nowrap;">
-      ${schoolName ? escapeHTML(schoolName) : ''}
-    </div>
-  </div>`
-}
-
-/**
- * Build the footer strip (timestamp + branding + QR code).
- * The QR code encodes the current page URL — short enough to fit when loaded
- * via a short code (?code=ABC123). Falls back to a static link if the URL is
- * too long for a QR (e.g. legacy ?d=<compressed> payloads).
- */
-function buildFooterHTML(currentUrl) {
-  const now = new Date()
-  const dateStr = now.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
-  const timeStr = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
-
-  const qrSvg = buildQRSVGString(currentUrl, 96)
-
-  return `<div style="margin-top:auto;padding-top:8px;border-top:1px solid #e5e7eb;
-    display:flex;align-items:center;justify-content:space-between;
-    font-size:10px;color:#64748b;line-height:1.3;">
-    <div style="white-space:nowrap;">พิมพ์เมื่อ ${dateStr} เวลา ${timeStr} น.</div>
-    <div style="text-align:center;">
-      ระบบจัดตารางสอนอัตโนมัติ —
-      <a href="${KRU_PLATFORM_URL}" style="color:#64748b;text-decoration:none;">KRU Platform</a>
-    </div>
-    <div style="flex-shrink:0;">${qrSvg}</div>
-  </div>`
-}
-
 export default function PublicViewerPage() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
   // TimetableRecord fetched via short code (null when loaded via ?d= payload)
   const [record, setRecord] = useState(null)
+  const [viewMode, setViewMode] = useState('class') // 'class' | 'teacher'
   const [selectedClassId, setSelectedClassId] = useState(null)
+  const [selectedTeacherId, setSelectedTeacherId] = useState(null)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
     const encoded = params.get('d')
+    // Optional deep-link params: v=teacher&t=<teacherId> / c=<classId>
+    const v = params.get('v')
+    const t = params.get('t')
+    const c = params.get('c')
+    const teacherMode = v === 'teacher'
 
     // Short-code path: fetch from backend D1/local store
     if (code) {
       fetchTimetableByShortCode(code)
         .then((rec) => {
           setRecord(rec)
+          setViewMode(teacherMode ? 'teacher' : 'class')
+          setSelectedClassId(c || null)
+          setSelectedTeacherId(teacherMode ? (t || null) : null)
+          // Derive the viewer payload immediately so there is no render
+          // window where loading=false but data is still null (would crash
+          // the success-block JSX). null ids → first class/teacher.
+          setData(recordToPayload(rec, teacherMode ? 'teacher' : 'class', c || null, teacherMode ? (t || null) : null))
           setLoading(false)
         })
         .catch((e) => {
@@ -265,13 +223,13 @@ export default function PublicViewerPage() {
   }, [])
 
   // When a record is loaded via short code, derive the viewer payload from it.
-  // Recomputes when the user picks a different class from the dropdown.
+  // Recomputes when the user switches view mode or picks a class/teacher.
   useEffect(() => {
     if (record) {
-      const payload = recordToPayload(record, selectedClassId)
+      const payload = recordToPayload(record, viewMode, selectedClassId, selectedTeacherId)
       setData(payload)
     }
-  }, [record, selectedClassId])
+  }, [record, viewMode, selectedClassId, selectedTeacherId])
 
   // Build export context from decoded data
   const ctx = useMemo(() => {
@@ -282,23 +240,10 @@ export default function PublicViewerPage() {
   // Build the grid HTML
   const gridHTML = useMemo(() => {
     if (!data || !ctx) return ''
-    if (data.kind === 'class') return buildClassGridHTML(data.item, ctx)
-    if (data.kind === 'teacher') return buildTeacherGridHTML(data.item, ctx)
+    if (data.kind === 'class' && data.item) return buildClassGridHTML(data.item, ctx)
+    if (data.kind === 'teacher' && data.item) return buildTeacherGridHTML(data.item, ctx)
     return ''
   }, [data, ctx])
-
-  // Build full page HTML (header + grid + footer)
-  const pageHTML = useMemo(() => {
-    if (!data || !gridHTML) return ''
-    const header = buildHeaderHTML(data.settings || {}, data.item?.name || '')
-    const currentUrl = window.location.href
-    const footer = buildFooterHTML(currentUrl)
-    return `<div style="display:flex;flex-direction:column;min-height:100%;">
-      ${header}
-      ${gridHTML}
-      ${footer}
-    </div>`
-  }, [data, gridHTML])
 
   // ── Loading state ──
   if (loading && !data && !error) {
@@ -329,15 +274,52 @@ export default function PublicViewerPage() {
   }
 
   // ── Success: render timetable ──
+  const settings = data?.settings || {}
+  const semester = settings.semester
+  const semesterLabel =
+    semester === '1' ? 'ภาคเรียนที่ 1'
+    : semester === '2' ? 'ภาคเรียนที่ 2'
+    : semester === 'summer' ? 'ภาคเรียนฤดูร้อน'
+    : ''
+  const academicYear = settings.academicYear
+  const schoolName = settings.schoolName || ''
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
+  const timeStr = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+  const qrSvg = buildQRSVGString(window.location.href, 96)
+
   return (
     <div className="min-h-screen bg-slate-100">
-      {/* Print styles */}
+      {/* Print + desktop-scaling styles */}
       <style>{`
         @media print {
           body { background: white !important; }
           .viewer-toolbar { display: none !important; }
           .viewer-page { box-shadow: none !important; border-radius: 0 !important; }
           @page { size: A4 landscape; margin: 8mm; }
+        }
+        /* Desktop (lg+): scale up the grid so the table fills the screen better */
+        @media screen and (min-width: 1024px) {
+          .viewer-page .grid-page > div {
+            --vlabel: 100px;
+            gap: 3px !important;
+            margin-bottom: 3px !important;
+          }
+          .viewer-page .vcell {
+            min-height: 58px !important;
+            font-size: 13px !important;
+            padding: 6px 10px !important;
+            border-radius: 6px !important;
+          }
+          .viewer-page .grid-page > div:first-child .vcell { min-height: 34px !important; }
+          .viewer-page .vcell-title { font-size: 16px !important; }
+          .viewer-page .vcell-sub   { font-size: 13px !important; }
+        }
+        @media screen and (min-width: 1536px) {
+          .viewer-page .grid-page > div { --vlabel: 110px; }
+          .viewer-page .vcell         { min-height: 64px !important; font-size: 14px !important; }
+          .viewer-page .vcell-title   { font-size: 17px !important; }
+          .viewer-page .vcell-sub     { font-size: 14px !important; }
         }
       `}</style>
 
@@ -348,8 +330,33 @@ export default function PublicViewerPage() {
           กลับหน้าหลัก
         </a>
         <div className="flex items-center gap-3">
-          {/* Class selector (only for short-code records with multiple classes) */}
-          {record && (data?.classes?.length || 0) > 1 && (
+          {/* View-mode toggle (only for short-code records that have both views) */}
+          {record && (data?.classes?.length || 0) > 0 && (data?.teachers?.length || 0) > 0 && (
+            <div className="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-0.5">
+              <button
+                onClick={() => setViewMode('class')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  viewMode === 'class'
+                    ? 'bg-white text-blue-700 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                🏫 ห้องเรียน
+              </button>
+              <button
+                onClick={() => setViewMode('teacher')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  viewMode === 'teacher'
+                    ? 'bg-white text-purple-700 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                👤 ครู
+              </button>
+            </div>
+          )}
+          {/* Class selector (short-code records with multiple classes) */}
+          {record && viewMode === 'class' && (data?.classes?.length || 0) > 1 && (
             <select
               value={selectedClassId || data?.item?.id || ''}
               onChange={(e) => setSelectedClassId(e.target.value)}
@@ -357,6 +364,18 @@ export default function PublicViewerPage() {
             >
               {(data?.classes || []).map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          )}
+          {/* Teacher selector (short-code records with multiple teachers) */}
+          {record && viewMode === 'teacher' && (data?.teachers?.length || 0) > 1 && (
+            <select
+              value={selectedTeacherId || data?.item?.id || ''}
+              onChange={(e) => setSelectedTeacherId(e.target.value)}
+              className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            >
+              {(data?.teachers || []).map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </select>
           )}
@@ -371,20 +390,54 @@ export default function PublicViewerPage() {
         </div>
       </div>
 
-      {/* A4 Preview */}
-      <div className="p-6 flex items-start justify-center">
+      {/* Responsive card */}
+      <div className="p-2 sm:p-6 flex items-start justify-center">
         <div
-          className="viewer-page bg-white shadow-lg rounded-lg p-8 w-full max-w-[1100px]"
-          style={{
-            aspectRatio: '297 / 210',
-            fontFamily: "'Sarabun', 'Segoe UI', Tahoma, sans-serif",
-          }}
+          className="viewer-page bg-white shadow-sm rounded-2xl w-full max-w-7xl 2xl:max-w-[1600px] mx-auto p-3 sm:p-6"
+          style={{ fontFamily: "'Sarabun', 'Segoe UI', Tahoma, sans-serif" }}
         >
           <style>{SARABUN_IMPORT}</style>
-          <div
-            dangerouslySetInnerHTML={{ __html: pageHTML }}
-            style={{ width: '100%', height: '100%' }}
-          />
+
+          {/* Header: semester+year | title | school name (stacks on mobile) */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-center sm:text-left pb-3 mb-3 border-b-2 border-gray-800">
+            <div className="text-xs text-gray-500 whitespace-nowrap">
+              {semesterLabel}{academicYear ? ` ปีการศึกษา ${academicYear}` : ''}
+            </div>
+            <div className="text-base sm:text-lg font-bold text-gray-900">
+              ตารางสอน {data?.item?.name || ''}
+            </div>
+            <div className="text-sm font-bold text-gray-900 whitespace-nowrap">
+              {schoolName}
+            </div>
+          </div>
+
+          {/* Mobile swipe hint */}
+          <div className="sm:hidden text-[11px] text-slate-400 text-center mb-1">
+            👈 เลื่อนซ้าย-ขวาเพื่อดูตารางเต็ม 👉
+          </div>
+
+          {/* Scrollable grid */}
+          <div className="w-full overflow-x-auto pb-4 -mx-2 px-2 sm:mx-0 sm:px-0">
+            <div
+              className="min-w-[720px] md:min-w-full"
+              dangerouslySetInnerHTML={{ __html: gridHTML }}
+            />
+          </div>
+
+          {/* Footer: timestamp + branding (wrap) | QR (hidden on mobile screens) */}
+          <div className="mt-auto pt-2 border-t border-gray-200 flex items-center justify-between gap-2 text-xs text-slate-500">
+            <div className="flex flex-wrap gap-2">
+              <span className="whitespace-nowrap">พิมพ์เมื่อ {dateStr} เวลา {timeStr} น.</span>
+              <span>
+                ระบบจัดตารางสอนอัตโนมัติ —{' '}
+                <a href={KRU_PLATFORM_URL} className="text-slate-500 hover:text-slate-700 no-underline">KRU Platform</a>
+              </span>
+            </div>
+            <div
+              className="hidden sm:block print:block flex-shrink-0"
+              dangerouslySetInnerHTML={{ __html: qrSvg }}
+            />
+          </div>
         </div>
       </div>
     </div>

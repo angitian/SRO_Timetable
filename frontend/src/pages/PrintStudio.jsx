@@ -56,6 +56,16 @@ function buildShortViewerURL(shortCode) {
   return `${getFrontendOrigin()}/view?code=${shortCode}`
 }
 
+// Deep-link variants: point a short link directly at one class or teacher so
+// QRs on printed pages always open the correct timetable (the viewer falls
+// back to the first item when these params are absent).
+function buildClassViewerShortURL(shortCode, classId) {
+  return `${getFrontendOrigin()}/view?code=${shortCode}&c=${encodeURIComponent(classId)}`
+}
+function buildTeacherViewerShortURL(shortCode, teacherId) {
+  return `${getFrontendOrigin()}/view?code=${shortCode}&v=teacher&t=${encodeURIComponent(teacherId)}`
+}
+
 /**
  * Build the canonical slot list shown on screen = solver slots ∪ manual
  * placements, deduplicated by (lesson_block_id, day, period). Manual
@@ -806,9 +816,11 @@ export default function PrintStudio() {
   const ctx = useMemo(() => buildExportContext(exportData), [exportData])
 
   // ── Build page arrays for each tab ────────────────────────────────────
-  // viewerUrl prefers the DB short link (small QR); falls back to the
-  // embedded compressed payload when the short link isn't ready/failed.
+  // viewerUrl prefers the DB short link (small QR), deep-linked to the exact
+  // class/teacher; falls back to the embedded compressed payload when the
+  // short link isn't ready/failed.
   const shortUrl = shortLink?.url || null
+  const shortCode = shortLink?.shortCode || null
   const classPages = useMemo(() => {
     return classes.map((cls) => {
       const qrPayload = buildQRPayload('class', cls, ctx, gridConfig, fixed_slots, settings)
@@ -818,11 +830,13 @@ export default function PrintStudio() {
         id: cls.id,
         item: cls,
         qrPayload,
-        viewerUrl: shortUrl || buildViewerURL(qrPayload),
+        viewerUrl: shortUrl && shortCode
+          ? buildClassViewerShortURL(shortCode, cls.id)
+          : buildViewerURL(qrPayload),
         gridHTML: buildClassGridHTML(cls, ctx),
       }
     })
-  }, [classes, ctx, gridConfig, fixed_slots, settings, shortUrl])
+  }, [classes, ctx, gridConfig, fixed_slots, settings, shortUrl, shortCode])
 
   const teacherPages = useMemo(() => {
     return teachers.map((teacher) => {
@@ -833,11 +847,13 @@ export default function PrintStudio() {
         id: teacher.id,
         item: teacher,
         qrPayload,
-        viewerUrl: shortUrl || buildViewerURL(qrPayload),
+        viewerUrl: shortUrl && shortCode
+          ? buildTeacherViewerShortURL(shortCode, teacher.id)
+          : buildViewerURL(qrPayload),
         gridHTML: buildTeacherGridHTML(teacher, ctx),
       }
     })
-  }, [teachers, ctx, gridConfig, fixed_slots, settings, shortUrl])
+  }, [teachers, ctx, gridConfig, fixed_slots, settings, shortUrl, shortCode])
 
   // ── Build facility pages (one per special room) ──────────────────────
   const specialRooms = fixtureData?.special_rooms || []
@@ -1346,6 +1362,14 @@ export default function PrintStudio() {
     setExportProgress('')
   }
 
+  // ── Current-schedule short link(s) ────────────────────────────────────
+  // Only entries matching the current schedule fingerprint are listed; older
+  // entries from previous fingerprints stay cached (auto-cache reuses them)
+  // but are hidden so duplicates don't confuse users.
+  const currentSavedLinks = savedLinkEntries.filter(
+    (e) => e.fingerprint === scheduleFingerprint,
+  )
+
   // ── Render ────────────────────────────────────────────────────────────
   return (
     <div className="w-full">
@@ -1542,32 +1566,35 @@ export default function PrintStudio() {
                   )}
                   บันทึก & แชร์ (ลิงก์สั้น)
                 </button>
-                {savedLinks.length > 0 && (
+                {currentSavedLinks.length > 0 && (
                   <div className="space-y-1.5">
-                    {savedLinks.map((link) => (
-                      <div
-                        key={link.short_code}
-                        className="flex items-center gap-2 bg-violet-50 border border-violet-200 rounded-lg px-2.5 py-1.5"
-                      >
-                        <a
-                          href={link.share_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex-1 text-xs text-violet-700 hover:text-violet-900 truncate font-medium"
-                          title={link.share_url}
+                    {currentSavedLinks.map((e) => {
+                      const link = { short_code: e.shortCode, share_url: e.url, title: e.title }
+                      return (
+                        <div
+                          key={link.short_code}
+                          className="flex items-center gap-2 bg-violet-50 border border-violet-200 rounded-lg px-2.5 py-1.5"
                         >
-                          {link.share_url}
-                        </a>
-                        <button
-                          onClick={() => handleCopyLink(link.share_url)}
-                          className="text-violet-500 hover:text-violet-700 shrink-0"
-                          title="คัดลอกลิงก์"
-                          aria-label="คัดลอกลิงก์"
-                        >
-                          <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      </div>
-                    ))}
+                          <a
+                            href={link.share_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 text-xs text-violet-700 hover:text-violet-900 truncate font-medium"
+                            title={link.share_url}
+                          >
+                            {link.share_url}
+                          </a>
+                          <button
+                            onClick={() => handleCopyLink(link.share_url)}
+                            className="text-violet-500 hover:text-violet-700 shrink-0"
+                            title="คัดลอกลิงก์"
+                            aria-label="คัดลอกลิงก์"
+                          >
+                            <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>

@@ -44,7 +44,7 @@ function buildHeaderCellHTML(p, { lunchSet, breakSet, periodTimeMap, showPeriodT
   const label = isLunch ? 'พัก' : isBreak ? 'พัก' : p
   const bg = isLunch ? '#f3f4f6' : isBreak ? '#f9fafb' : '#fff'
   const color = isLunch ? '#9ca3af' : isBreak ? '#9ca3af' : '#374151'
-  return `<div style="${GRID_CELL_STYLE}background:${bg};text-align:center;font-weight:700;color:${color};min-height:28px;justify-content:center;">${label}${timeStr}</div>`
+  return `<div class="vcell" style="${GRID_CELL_STYLE}background:${bg};text-align:center;font-weight:700;color:${color};min-height:28px;justify-content:center;">${label}${timeStr}</div>`
 }
 
 /**
@@ -52,8 +52,8 @@ function buildHeaderCellHTML(p, { lunchSet, breakSet, periodTimeMap, showPeriodT
  */
 function buildHeaderRowHTML(ctx) {
   const headerCells = ctx.periodList.map((p) => buildHeaderCellHTML(p, ctx)).join('')
-  return `<div style="display:grid;grid-template-columns:80px ${ctx.periodColsTemplate};gap:2px;margin-bottom:2px;">
-    <div style="${GRID_CELL_STYLE}background:#f9fafb;text-align:center;font-weight:700;color:#9ca3af;justify-content:center;min-height:26px;">วัน \\ คาบ</div>
+  return `<div style="display:grid;grid-template-columns:var(--vlabel, 80px) ${ctx.periodColsTemplate};gap:2px;margin-bottom:2px;">
+    <div class="vcell" style="${GRID_CELL_STYLE}background:#f9fafb;text-align:center;font-weight:700;color:#9ca3af;justify-content:center;min-height:26px;">วัน \\ คาบ</div>
     ${headerCells}
   </div>`
 }
@@ -63,10 +63,10 @@ function buildHeaderRowHTML(ctx) {
  */
 function buildLunchBreakCellHTML(p, { lunchSet, breakSet }) {
   if (lunchSet.has(p)) {
-    return `<div style="${GRID_CELL_STYLE}background:#f3f4f6;color:#9ca3af;text-align:center;justify-content:center;">พักเที่ยง</div>`
+    return `<div class="vcell" style="${GRID_CELL_STYLE}background:#f3f4f6;color:#9ca3af;text-align:center;justify-content:center;">พักเที่ยง</div>`
   }
   if (breakSet.has(p)) {
-    return `<div style="${GRID_CELL_STYLE}background:#f9fafb;color:#9ca3af;text-align:center;justify-content:center;font-size:10px;">พัก</div>`
+    return `<div class="vcell" style="${GRID_CELL_STYLE}background:#f9fafb;color:#9ca3af;text-align:center;justify-content:center;font-size:10px;">พัก</div>`
   }
   return null
 }
@@ -75,8 +75,8 @@ function buildLunchBreakCellHTML(p, { lunchSet, breakSet }) {
  * Build a day row wrapper HTML with the day label cell.
  */
 function buildDayRowHTML(day, cellsHTML, periodColsTemplate) {
-  return `<div style="display:grid;grid-template-columns:80px ${periodColsTemplate};gap:2px;margin-bottom:2px;">
-    <div style="${GRID_CELL_STYLE}background:#f3f4f6;text-align:center;font-weight:700;color:#4b5563;justify-content:center;min-height:42px;">${DAY_LABELS[day] || `วัน${day}`}</div>
+  return `<div style="display:grid;grid-template-columns:var(--vlabel, 80px) ${periodColsTemplate};gap:2px;margin-bottom:2px;">
+    <div class="vcell" style="${GRID_CELL_STYLE}background:#f3f4f6;text-align:center;font-weight:700;color:#4b5563;justify-content:center;min-height:42px;">${DAY_LABELS[day] || `วัน${day}`}</div>
     ${cellsHTML}
   </div>`
 }
@@ -85,7 +85,7 @@ function buildDayRowHTML(day, cellsHTML, periodColsTemplate) {
  * Build an empty cell HTML.
  */
 function buildEmptyCellHTML() {
-  return `<div style="${GRID_CELL_STYLE}background:#fff;"></div>`
+  return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;"></div>`
 }
 
 // ── Export branding config ───────────────────────────────────────────────
@@ -214,13 +214,13 @@ export function buildClassGridHTML(cls, ctx) {
             lessonBlockMap: ctx.lessonBlockMap, userPlacements: ctx.userPlacements,
           })
           if (cell.kind === 'fixed') {
-            return `<div style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
+            return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
           }
           if (cell.kind === 'lesson') {
             const pinIcon = cell.isPreAssigned ? '📌 ' : ''
-            return `<div style="${GRID_CELL_STYLE}background:#fff;align-items:center;text-align:center;">
-              <div style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${pinIcon}${cell.subjectName || ''}</div>
-              <div style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${cell.teacherName || ''}</div>
+            return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;align-items:center;text-align:center;">
+              <div class="vcell-title" style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${pinIcon}${cell.subjectName || ''}</div>
+              <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${cell.teacherName || ''}</div>
             </div>`
           }
           return buildEmptyCellHTML()
@@ -255,16 +255,16 @@ export function buildTeacherGridHTML(teacher, ctx) {
             subjectMap: ctx.subjectMap, classMap: ctx.classMap,
           })
           if (cell.kind === 'fixed') {
-            return `<div style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
+            return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
           }
           if (cell.kind === 'lessons') {
             const items = cell.slots.map((s) => {
               return `<div style="text-align:center;padding:1px 0;">
-                <div style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${s.className}</div>
-                <div style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${s.subjectName}</div>
+                <div class="vcell-title" style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${s.className}</div>
+                <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${s.subjectName}</div>
               </div>`
             }).join('')
-            return `<div style="${GRID_CELL_STYLE}background:#fff;align-items:center;justify-content:center;padding:3px 2px;">${items}</div>`
+            return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;align-items:center;justify-content:center;padding:3px 2px;">${items}</div>`
           }
           return buildEmptyCellHTML()
         })
@@ -307,10 +307,10 @@ export function buildFacilityGridHTML(room, ctx) {
             const subjName = subjectMap.get(s.subject_id)?.name || s.subject_id
             const teacherName = teacherMap.get(s.teacher_id)?.name || s.teacher_id
             const className = classMap.get(s.class_id)?.name || s.class_id
-            return `<div style="${GRID_CELL_STYLE}background:#eef2ff;align-items:center;text-align:center;">
-              <div style="font-weight:700;color:#3730a3;font-size:12px;line-height:1.15;">${className}</div>
-              <div style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${subjName}</div>
-              <div style="font-weight:400;color:#6b7280;font-size:10px;margin-top:0.5px;">${teacherName}</div>
+            return `<div class="vcell" style="${GRID_CELL_STYLE}background:#eef2ff;align-items:center;text-align:center;">
+              <div class="vcell-title" style="font-weight:700;color:#3730a3;font-size:12px;line-height:1.15;">${className}</div>
+              <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${subjName}</div>
+              <div class="vcell-sub" style="font-weight:400;color:#6b7280;font-size:10px;margin-top:0.5px;">${teacherName}</div>
             </div>`
           }
           return buildEmptyCellHTML()
