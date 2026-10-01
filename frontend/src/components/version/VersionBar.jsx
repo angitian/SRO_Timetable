@@ -284,7 +284,7 @@ export default function VersionBar() {
                     ? 'bg-green-600 text-white hover:bg-green-700'
                     : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                 title={isSnapshotDirty
-                  ? 'บันทึกทับเวอร์ชันปัจจุบัน'
+                  ? 'บันทึกทับเวอร์ชันปัจจุบันลงในเครื่องนี้ (ออฟไลน์)'
                   : 'ไม่มีการเปลี่ยนแปลงที่ต้องบันทึก'}
               >
                 <Save className="w-4 h-4" />
@@ -296,12 +296,16 @@ export default function VersionBar() {
               onClick={() => setShowSaveDialog(true)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-bold
                 bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm"
-              title="บันทึกเป็นเวอร์ชันใหม่"
+              title="บันทึกเป็นเวอร์ชันใหม่ในเครื่องนี้ (ออฟไลน์ — ใช้ได้เฉพาะเบราว์เซอร์นี้ อย่าลืมส่งออก .json เพื่อสำรอง)"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">บันทึกใหม่</span>
             </button>
           </div>
+          {/* Helper legend */}
+          <span className="hidden xl:inline text-[10px] text-slate-400 leading-tight">
+            💻 บันทึกในเครื่องนี้ · ☁️ บันทึกขึ้นคลาวด์
+          </span>
         </div>
 
         {/* ── Right: Cloud save + Import / Export JSON ─────────────── */}
@@ -316,7 +320,7 @@ export default function VersionBar() {
                 ? 'bg-purple-600 text-white hover:bg-purple-700 shadow-sm'
                 : 'bg-gray-100 text-gray-400 hover:bg-gray-200 border border-gray-200'}`}
             title={user
-              ? (activeCloudWorkspaceId ? 'บันทึกทับบนคลาวด์' : 'บันทึกขึ้นคลาวด์ (สร้างใหม่)')
+              ? (activeCloudWorkspaceId ? 'บันทึกทับบนคลาวด์ (เปิดจากเครื่องอื่นได้)' : 'บันทึกขึ้นคลาวด์ (เปิดจากเครื่องอื่นได้เมื่อเข้าสู่ระบบ)')
               : 'เข้าสู่ระบบด้วย Google เพื่อบันทึกขึ้นคลาวด์'}
           >
             {cloudSyncing ? (
@@ -325,7 +329,7 @@ export default function VersionBar() {
               <Cloud className="w-4 h-4 flex-shrink-0" />
             )}
             <span className="hidden sm:inline">
-              {activeCloudWorkspaceId ? 'อัปเดตคลาวด์' : 'บันทึกคลาวด์'}
+              {activeCloudWorkspaceId ? 'อัปเดตคลาวด์' : 'บันทึกขึ้นคลาวด์'}
             </span>
             {!user && (
               <span className="hidden sm:inline-flex items-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">

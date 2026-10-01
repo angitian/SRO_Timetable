@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Upload, Plus, Trash2, ArrowRight, ArrowLeft, FileSpreadsheet, X, Check,
-  Users, Layers, BookOpen, Download, FlaskConical,
+  Users, Layers, BookOpen, Download, FlaskConical, AlertCircle,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
+import useToast from '../hooks/useToast.js'
 import { ROOM_TYPES, getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
 import SpecialRoomsManager from '../components/rooms/SpecialRoomsManager.jsx'
 import LabPeriodSplitter from '../components/rooms/LabPeriodSplitter.jsx'
@@ -41,8 +42,15 @@ function gradeLevelToLabel(v) {
 }
 
 export default function DataIngestionStep() {
-  const { fixtureData, updateFixtureData, setStep } = useApp()
+  const { fixtureData, updateFixtureData, setStep, selectFixture } = useApp()
+  const { toast, showToast } = useToast()
   const [showExcelImport, setShowExcelImport] = useState(false)  // false | { file, mode } where mode = 'full' | 'minimum'
+
+  // Quick-start helpers for new users who don't have a file yet.
+  function handleLoadDemo() {
+    selectFixture('primary_mock')
+    showToast('ok', 'กำลังโหลดข้อมูลตัวอย่าง...')
+  }
 
   const classes = fixtureData?.classes || []
 
@@ -88,9 +96,31 @@ export default function DataIngestionStep() {
   return (
     <div className="space-y-6 pb-24">
       {/* Header */}
-      <div className="flex items-center gap-2">
-        <Users className="w-6 h-6 text-blue-600" />
-        <h2 className="text-xl font-bold text-gray-900">เตรียมข้อมูลห้องเรียน</h2>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Users className="w-6 h-6 text-blue-600" />
+          <h2 className="text-xl font-bold text-gray-900">เตรียมข้อมูลห้องเรียน</h2>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleLoadDemo}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold
+              bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors"
+            title="โหลดข้อมูลตัวอย่างเพื่อทดลองใช้งานทันที (ไม่ต้องมีไฟล์)"
+          >
+            <FlaskConical className="w-4 h-4" />
+            โหลดข้อมูลตัวอย่าง
+          </button>
+          <button
+            onClick={() => window.open(`${BASE_URL}/api/import/excel/template`, '_blank')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold
+              bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors"
+            title="ดาวน์โหลด Template Excel เพื่อกรอกข้อมูลโรงเรียนของคุณ"
+          >
+            <Download className="w-4 h-4" />
+            ดาวน์โหลด Excel Template
+          </button>
+        </div>
       </div>
 
       {/* Upload options */}
@@ -255,6 +285,16 @@ export default function DataIngestionStep() {
           onClose={() => setShowExcelImport(false)}
           onDone={() => setShowExcelImport(false)}
         />
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[110] px-6 py-3.5
+          rounded-xl shadow-lg text-base font-medium flex items-center gap-2.5
+          ${toast.type === 'ok' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
+          {toast.type === 'ok' ? <Check className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+          {toast.msg}
+        </div>
       )}
     </div>
   )

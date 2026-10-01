@@ -12,7 +12,7 @@ import {
   mergeGuestWorkspaces,
   getUserId,
 } from '../api/client.js'
-import { cacheTimetable, getCachedTimetable, clearCache } from '../utils/cache.js'
+import { cacheTimetable, getCachedTimetable, getCachedMeta, clearCache } from '../utils/cache.js'
 import { resolveSolverParams } from '../utils/scoreCalculator.js'
 import {
   listSnapshots,
@@ -40,6 +40,9 @@ const initialState = {
   gridFilter: { class: null, teacher: null },
   cacheKey: null,
   lastSync: null,
+  // Hint of the most recent cached timetable (IndexedDB) so the landing page
+  // can offer a "ทำงานต่อ" card WITHOUT auto-jumping the user to step 5.
+  cacheHint: null, // { cacheKey, lastCachedAt }
   optimizationMode: 'BALANCED',
   solverPreset: 'balanced',
   // userPlacements: { [lesson_block_id]: [{ day, period }] }
@@ -77,6 +80,7 @@ function reducer(state, action) {
         userPlacements: {},
         error: null,
         errorResponse: null,
+        cacheHint: null,
       }
     case 'SET_LOADING_FIXTURE':
       return { ...state, isLoadingFixture: action.payload }
@@ -110,6 +114,7 @@ function reducer(state, action) {
         errorResponse: null,
         cacheKey: null,
         lastSync: null,
+        cacheHint: null,
       }
     case 'UPDATE_FIXTURE_DATA':
       return { ...state, fixtureData: { ...state.fixtureData, ...action.payload }, isDirty: true }
@@ -306,6 +311,8 @@ function reducer(state, action) {
         isDirty: false,
         activeStep: 5,
       }
+    case 'SET_CACHE_HINT':
+      return { ...state, cacheHint: action.payload }
     // ── Snapshot versioning ──────────────────────────────────────────
     case 'SET_SNAPSHOTS':
       return { ...state, snapshots: action.payload }
@@ -326,6 +333,7 @@ function reducer(state, action) {
         lastSnapshotSaveAt: action.payload.updatedAt || Date.now(),
         error: null,
         errorResponse: null,
+        cacheHint: null,
         activeStep: 5,
       }
     case 'SET_ACTIVE_SNAPSHOT':
@@ -382,6 +390,7 @@ function reducer(state, action) {
         isDirty: false,
         error: null,
         errorResponse: null,
+        cacheHint: null,
         // Jump to step 5 if we have a result, else step 1
         activeStep: ws.result ? 5 : 1,
       }
@@ -653,43 +662,31 @@ export function AppProvider({ children }) {
 
   // Note: No auto-load fixture on mount — new flow starts from landing page
 
-  // Restore from cache on mount (page refresh)
-  // Only restore if cached data has schedule_blocks (new format)
+  // Read lightweight cache meta on mount (page refresh) and store a hint so
+  // the landing page can offer a "ทำงานต่อ" card. We deliberately do NOT
+  // auto-jump the user to step 5 — they choose whether to resume.
   // Guard: if the user starts a new session (create new / upload file) before
-  // the async cache restore completes, skip the restore to avoid overriding
-  // the new data with stale cache.
+  // the async meta read completes, skip it to avoid stale hints.
   const skipCacheRestoreRef = useRef(false)
   useEffect(() => {
     const CACHE_KEYS = ['timetable_custom', 'timetable_primary_mock', 'timetable_large', 'timetable_medium', 'timetable_small']
-    let restored = false
+    let best = null
     ;(async () => {
       for (const key of CACHE_KEYS) {
         try {
-          const cached = await getCachedTimetable(key)
           // Abort if user already started a new session while we were reading cache
-          if (skipCacheRestoreRef.current) {
-            restored = true
-            break
-          }
-          if (cached?.result && cached?.fixtureData && cached.fixtureData.schedule_blocks) {
-            const fixtureName = key.replace('timetable_', '')
-            dispatch({
-              type: 'RESTORE_FROM_CACHE',
-              payload: {
-                result: cached.result,
-                fixtureData: cached.fixtureData,
-                selectedFixture: fixtureName,
-                cacheKey: key,
-                lastSync: cached._cachedAt,
-              },
-            })
-            restored = true
-            break
+          if (skipCacheRestoreRef.current) break
+          const meta = await getCachedMeta(key)
+          if (meta?.lastSync && (!best || meta.lastSync > best.lastCachedAt)) {
+            best = { cacheKey: key, lastCachedAt: meta.lastSync }
           }
         } catch (e) {
           // Cache read failed — best-effort, continue to next cache key
-          console.warn('[AppContext] Cache restore failed for key:', e.message)
+          console.warn('[AppContext] Cache meta read failed:', e.message)
         }
+      }
+      if (best && !skipCacheRestoreRef.current) {
+        dispatch({ type: 'SET_CACHE_HINT', payload: best })
       }
     })()
   }, [])
@@ -742,6 +739,8 @@ export function AppProvider({ children }) {
       try {
         await cacheTimetable(cacheKey, { result, fixtureData: currentFixtureData, version: 1 })
         dispatch({ type: 'SET_CACHE_INFO', payload: { cacheKey, lastSync: Date.now() } })
+        // Keep the landing page "ทำงานต่อ" card fresh without needing a refresh
+        dispatch({ type: 'SET_CACHE_HINT', payload: { cacheKey, lastCachedAt: Date.now() } })
       } catch (e) {
         // Caching is best-effort — don't block the result on cache failure
         console.warn('[AppContext] Cache write failed:', e.message)
@@ -776,6 +775,34 @@ export function AppProvider({ children }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.selectedFixture, state.fixtureData, state.solverPreset])
+
+  // Resume the most recently cached workspace from IndexedDB (landing page
+  // "ทำงานต่อ" card). Loads the full payload and jumps to step 5.
+  const resumeFromCache = useCallback(async (cacheKey) => {
+    if (!cacheKey) return { ok: false, error: 'ไม่มีข้อมูลงานเก่า' }
+    try {
+      const cached = await getCachedTimetable(cacheKey)
+      if (!cached?.result || !cached?.fixtureData) {
+        return { ok: false, error: 'ไม่พบข้อมูลงานเก่าในเครื่องนี้' }
+      }
+      skipCacheRestoreRef.current = true
+      const fixtureName = cacheKey.replace('timetable_', '')
+      dispatch({
+        type: 'RESTORE_FROM_CACHE',
+        payload: {
+          result: cached.result,
+          fixtureData: cached.fixtureData,
+          selectedFixture: fixtureName,
+          cacheKey,
+          lastSync: cached._cachedAt,
+        },
+      })
+      return { ok: true }
+    } catch (e) {
+      console.warn('[AppContext] resumeFromCache failed:', e.message)
+      return { ok: false, error: 'อ่านข้อมูลจากเครื่องไม่สำเร็จ' }
+    }
+  }, [])
 
   const setStep = useCallback((step) => {
     dispatch({ type: 'SET_STEP', payload: step })
@@ -1193,6 +1220,7 @@ export function AppProvider({ children }) {
         ...state,
         selectFixture,
         runSolver,
+        resumeFromCache,
         setStep,
         setGridFilter,
         setOptimizationMode,

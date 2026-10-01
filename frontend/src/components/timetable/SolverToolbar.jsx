@@ -520,12 +520,12 @@ export default function SolverToolbar({
 
   return (
     <>
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch mb-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-stretch mb-3">
         {/* ════════════════════════════════════════════════════════════════
             Card 1: View & Status (มุมมองและสถานะ)
         ════════════════════════════════════════════════════════════════ */}
         <div className="bg-white p-2.5 rounded-xl border border-gray-200 shadow-sm
-          flex flex-col justify-between gap-2 min-w-0 md:col-span-3">
+          flex flex-col justify-between gap-2 min-w-0 lg:col-span-3">
           {/* Row 1: Segmented Tab — ตารางสอน / ภาระงานครู */}
           <div className="w-full grid grid-cols-2 rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-medium">
             <button
@@ -591,9 +591,9 @@ export default function SolverToolbar({
             Bottom: Export JSON + Export Excel (dropdown)
         ════════════════════════════════════════════════════════════════ */}
         <div className="bg-white p-2.5 rounded-xl border border-gray-200 shadow-sm
-          flex flex-col justify-between gap-2 min-w-0 md:col-span-4">
+          flex flex-col justify-between gap-2 min-w-0 lg:col-span-4">
           {/* Row 1: Version dropdown + Quick Save + Cloud Save */}
-          <div className="flex items-stretch gap-2">
+          <div className="flex items-stretch gap-2 flex-wrap">
             {/* Version snapshot dropdown — flexible width */}
             <div className="relative flex-1 min-w-0">
               <button
@@ -896,7 +896,7 @@ export default function SolverToolbar({
             Right: Large primary generate button (full height)
         ════════════════════════════════════════════════════════════════ */}
         <div className={`bg-white p-2.5 rounded-xl border border-gray-200 shadow-sm
-          grid grid-cols-[1.2fr_1fr] gap-2 min-w-0 md:col-span-3
+          grid grid-cols-[1.2fr_1fr] gap-2 min-w-0 lg:col-span-3
           ${isTeacherTab ? 'opacity-50 pointer-events-none' : ''}`}>
           {/* ── Left column: Controls (stacked) ── */}
           <div className="flex flex-col gap-1.5 justify-between min-w-0">
@@ -1127,7 +1127,7 @@ export default function SolverToolbar({
             rounded-xl font-bold text-sm shadow-md
             hover:from-slate-800 hover:to-black
             transition-all border border-slate-600
-            active:scale-[0.98] whitespace-nowrap min-w-0 md:col-span-2"
+            active:scale-[0.98] whitespace-nowrap min-w-0 lg:col-span-2"
           title="เปิดหน้า Print Studio เพื่อจัดพิมพ์และส่งออกเอกสาร"
         >
           <Printer className="w-5 h-5 shrink-0" />

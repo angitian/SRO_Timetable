@@ -9,7 +9,7 @@ export default function Layout({ children }) {
   // Step 0 (LandingPage) manages its own full-height layout — no padding
   const isLanding = activeStep === 0
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden max-w-full">
       <OfflineBanner cacheKey={cacheKey} />
       <Header />
       <main className={isLanding

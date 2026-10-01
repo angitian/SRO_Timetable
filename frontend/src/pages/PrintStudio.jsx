@@ -14,6 +14,14 @@ import {
   FileText,
   Link2,
   Copy,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  ChevronUp,
+  ChevronDown,
+  SlidersHorizontal,
+  Download,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import {
@@ -33,6 +41,17 @@ const SHORT_LINK_KEY = 'sro_print_saved_links'
 const MAX_SAVED_SLOTS = 5
 const SHORT_LINK_DEBOUNCE_MS = 800
 const KRU_PLATFORM_URL = 'https://kru-platform.com'
+
+// Panel collapse preferences persist across sessions so teachers collapse
+// once and it stays that way next time they open the print studio.
+const PANEL_PREF_KEY = 'sro_print_panels'
+function readPanelPref(key, fallback) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PANEL_PREF_KEY) || '{}')
+    if (typeof saved[key] === 'boolean') return saved[key]
+  } catch { /* corrupted pref — ignore */ }
+  return fallback
+}
 
 // FNV-1a 32-bit hash — compact schedule fingerprint for short-link caching.
 function hashString(str) {
@@ -433,6 +452,9 @@ export default function PrintStudio() {
   const [exportProgress, setExportProgress] = useState('')
   const [exportScope, setExportScope] = useState('current') // 'current' | 'tab' | 'all'
   const [sidebarTab, setSidebarTab] = useState('export') // 'header' | 'export'
+  // Collapsible side panels — start collapsed on narrow screens, persist choice.
+  const [leftCollapsed, setLeftCollapsed] = useState(() => readPanelPref('left', window.innerWidth < 1024))
+  const [rightCollapsed, setRightCollapsed] = useState(() => readPanelPref('right', window.innerWidth < 1024))
   const [toast, setToast] = useState(null)
   const [saving, setSaving] = useState(false)
   const [savedLinks, setSavedLinks] = useState([]) // [{ short_code, share_url, title }]
@@ -944,6 +966,13 @@ export default function PrintStudio() {
     setCurrentPage(0)
   }, [previewTab])
 
+  // Persist panel collapse preference across sessions
+  useEffect(() => {
+    try {
+      localStorage.setItem(PANEL_PREF_KEY, JSON.stringify({ left: leftCollapsed, right: rightCollapsed }))
+    } catch { /* storage full/blocked — ignore */ }
+  }, [leftCollapsed, rightCollapsed])
+
   // ── Build the full page HTML for preview ──────────────────────────────
   const previewHTML = useMemo(() => {
     if (!currentPageData) return ''
@@ -1386,17 +1415,72 @@ export default function PrintStudio() {
 
       <div className="flex gap-4" style={{ height: 'calc(100vh - 120px)', minHeight: '500px' }}>
         {/* ════════════════════════════════════════════════════════════════
-            Left Panel: Settings & Controls (w-80)
+            Left Panel: Settings & Controls (w-80, collapsible)
         ════════════════════════════════════════════════════════════════ */}
+        {leftCollapsed ? (
+          <div className="print-studio-left-panel w-12 shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col items-center py-3 gap-2">
+            <button
+              onClick={() => setLeftCollapsed(false)}
+              title="ขยายแถบตั้งค่า"
+              aria-label="ขยายแถบตั้งค่า"
+              className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+            >
+              <PanelLeftOpen className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => setStep(5)}
+              title="กลับไปจัดตาราง"
+              aria-label="กลับไปจัดตาราง"
+              className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => { setSidebarTab('header'); setLeftCollapsed(false) }}
+              title="ตั้งค่าหัวกระดาษ"
+              aria-label="ตั้งค่าหัวกระดาษ"
+              className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+            >
+              <SlidersHorizontal className="w-5 h-5" />
+            </button>
+            <button
+              onClick={handlePrint}
+              disabled={exporting}
+              title="สั่งพิมพ์ / บันทึก PDF"
+              aria-label="สั่งพิมพ์ / บันทึก PDF"
+              className="p-2 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Printer className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => { setSidebarTab('export'); setLeftCollapsed(false) }}
+              title="ส่งออกเอกสาร"
+              aria-label="ส่งออกเอกสาร"
+              className="p-2 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+            >
+              <Download className="w-5 h-5" />
+            </button>
+          </div>
+        ) : (
         <div className="print-studio-left-panel w-80 shrink-0 overflow-y-auto bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3">
           {/* Back button */}
-          <button
-            onClick={() => setStep(5)}
-            className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            กลับไปจัดตาราง
-          </button>
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setStep(5)}
+              className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              กลับไปจัดตาราง
+            </button>
+            <button
+              onClick={() => setLeftCollapsed(true)}
+              title="ย่อแถบตั้งค่า"
+              aria-label="ย่อแถบตั้งค่า"
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              <PanelLeftClose className="w-4 h-4" />
+            </button>
+          </div>
 
           {/* Tab Switcher — ตั้งค่าหัวกระดาษ / ส่งออกเอกสาร */}
           <div className="flex gap-1 bg-gray-100 rounded-lg p-1" role="tablist" aria-label="โหมดแผงด้านซ้าย">
@@ -1601,6 +1685,7 @@ export default function PrintStudio() {
           </div>
 
         </div>
+        )}
 
         {/* ════════════════════════════════════════════════════════════════
             Right Panel: Live A4 Preview Canvas (flex-1)
@@ -1635,6 +1720,62 @@ export default function PrintStudio() {
 
           {/* Right: vertical navigation rail with tab selector (mirrors Step 5) */}
           {pageCount > 0 && (
+            rightCollapsed ? (
+            <div className="w-11 shrink-0 border-l border-gray-200 bg-gray-50/50 flex flex-col items-center py-2 gap-1.5">
+              <button
+                onClick={() => setRightCollapsed(false)}
+                title="ขยายแถบเลือกหน้า"
+                aria-label="ขยายแถบเลือกหน้า"
+                className="p-1.5 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+              >
+                <PanelRightOpen className="w-4 h-4" />
+              </button>
+              <div className="w-full border-t border-gray-200 my-1" />
+              {[
+                { id: 'class', icon: '📋', label: `ห้องเรียน (${classPages.length})` },
+                { id: 'teacher', icon: '👤', label: `ครูผู้สอน (${teacherPages.length})` },
+                { id: 'facility', icon: '🔬', label: `ห้องพิเศษ (${facilityPages.length})` },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setPreviewTab(t.id)}
+                  title={t.label}
+                  aria-label={t.label}
+                  aria-pressed={previewTab === t.id}
+                  className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm transition-colors
+                    ${previewTab === t.id
+                      ? (t.id === 'facility'
+                          ? 'bg-indigo-50 ring-1 ring-indigo-400'
+                          : 'bg-blue-50 ring-1 ring-blue-400')
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                >
+                  <span aria-hidden="true">{t.icon}</span>
+                </button>
+              ))}
+              <div className="w-full border-t border-gray-200 my-1" />
+              <button
+                onClick={() => setCurrentPage(Math.max(0, safeCurrentPage - 1))}
+                title="หน้าก่อนหน้า"
+                aria-label="หน้าก่อนหน้า"
+                disabled={safeCurrentPage <= 0}
+                className="p-1.5 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronUp className="w-4 h-4" />
+              </button>
+              <span className="text-[10px] font-semibold text-gray-500 tabular-nums select-none" aria-live="polite">
+                {safeCurrentPage + 1}/{pageCount}
+              </span>
+              <button
+                onClick={() => setCurrentPage(Math.min(pageCount - 1, safeCurrentPage + 1))}
+                title="หน้าถัดไป"
+                aria-label="หน้าถัดไป"
+                disabled={safeCurrentPage >= pageCount - 1}
+                className="p-1.5 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
+            </div>
+            ) : (
             <div className="w-[160px] shrink-0 border-l border-gray-200 bg-gray-50/50 flex flex-col">
               {/* Tab selector (moved here from above preview) */}
               <div className="flex flex-col gap-1 p-2 border-b border-gray-200 bg-white">
@@ -1671,11 +1812,21 @@ export default function PrintStudio() {
               </div>
 
               {/* Column header */}
-              <div className="text-[11px] font-semibold text-gray-400 px-2 py-1 uppercase border-b border-gray-200">
-                {previewTab === 'class' ? 'ห้องเรียน' : previewTab === 'teacher' ? 'ครูผู้สอน' : 'ห้องพิเศษ'}
-                <span className="ml-1 text-gray-300 normal-case">
-                  {safeCurrentPage + 1}/{pageCount}
+              <div className="flex items-center justify-between text-[11px] font-semibold text-gray-400 px-2 py-1 uppercase border-b border-gray-200">
+                <span>
+                  {previewTab === 'class' ? 'ห้องเรียน' : previewTab === 'teacher' ? 'ครูผู้สอน' : 'ห้องพิเศษ'}
+                  <span className="ml-1 text-gray-300 normal-case">
+                    {safeCurrentPage + 1}/{pageCount}
+                  </span>
                 </span>
+                <button
+                  onClick={() => setRightCollapsed(true)}
+                  title="ย่อแถบเลือกหน้า"
+                  aria-label="ย่อแถบเลือกหน้า"
+                  className="p-1 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                >
+                  <PanelRightClose className="w-3.5 h-3.5" />
+                </button>
               </div>
 
               {/* Scrollable pill list */}
@@ -1726,6 +1877,7 @@ export default function PrintStudio() {
                 })}
               </div>
             </div>
+            )
           )}
         </div>
       </div>

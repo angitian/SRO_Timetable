@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { Calendar, AlertTriangle, ArrowRight, Rocket, CheckCircle, XCircle, FlaskConical, Table, LayoutGrid, Search, X } from 'lucide-react'
+import { Calendar, AlertTriangle, ArrowRight, Rocket, CheckCircle, XCircle, FlaskConical, Table, LayoutGrid, Search, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import TimetableGrid from '../components/grid/TimetableGrid.jsx'
 import TeacherLoadTable from '../components/load/TeacherLoadTable.jsx'
@@ -72,7 +72,9 @@ export default function TimetableView() {
   const [selectedTeacherIndex, setSelectedTeacherIndex] = useState(0)
   const [selectedFacilityIndex, setSelectedFacilityIndex] = useState(0)
   const [facilityViewMode, setFacilityViewMode] = useState('grid') // 'grid' | 'table'
-  const [drawerOpen, setDrawerOpen] = useState(true)
+  // Drawer starts closed on tablet/mobile (< 1024px) so the timetable grid
+  // keeps as much horizontal space as possible; on desktop it starts open.
+  const [drawerOpen, setDrawerOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1024)
   const [transitioning, setTransitioning] = useState(false)
   const [sidebarDragBlock, setSidebarDragBlock] = useState(null)
   const [showConstraintsModal, setShowConstraintsModal] = useState(false)
@@ -358,6 +360,16 @@ export default function TimetableView() {
       setDrawerOpen(false)
     }
   }, [unassignedCount, drawerOpen])
+
+  // Auto-close the drawer when resizing into tablet/mobile widths so the
+  // grid is never crushed by the 250px drawer (re-open is always possible).
+  useEffect(() => {
+    function handleResize() {
+      if (window.innerWidth < 1024) setDrawerOpen(false)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   // ── Selected class/teacher ────────────────────────────────────────
   const selectedClass = classes[selectedClassIndex] || classes[0] || null
@@ -700,8 +712,40 @@ export default function TimetableView() {
             {/* 2. Center: grid area — full remaining width */}
             <div
               ref={gridAreaRef}
-              className="flex-1 min-w-0 relative overflow-y-auto p-2"
+              className="flex-1 min-w-0 relative overflow-y-auto overflow-x-auto p-2"
             >
+              {/* Tablet/mobile switcher — mini rail is hidden below lg */}
+              <div className="lg:hidden flex items-center gap-2 mb-2">
+                <select
+                  value={viewMode === 'class'
+                    ? (selectedClass?.id || '')
+                    : (selectedTeacher?.id || '')}
+                  onChange={(e) => {
+                    if (viewMode === 'class') handleSelectClass(e.target.value)
+                    else handleSelectTeacher(e.target.value)
+                  }}
+                  className="flex-1 min-w-0 px-2.5 py-1.5 text-sm rounded-lg border border-gray-300 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400"
+                  title={viewMode === 'class' ? 'เลือกห้องเรียน' : 'เลือกครูผู้สอน'}
+                >
+                  {(viewMode === 'class' ? classes : teachers).map((it) => (
+                    <option key={it.id} value={it.id}>{it.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => navigatePage('prev')}
+                  className="p-1.5 rounded-lg border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 transition-colors shrink-0"
+                  title="ก่อนหน้า"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => navigatePage('next')}
+                  className="p-1.5 rounded-lg border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 transition-colors shrink-0"
+                  title="ถัดไป"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
               <div className={transitioning ? 'animate-fadeSlide' : ''}>
                 <TimetableGrid
                   slots={resultSlots}
@@ -748,8 +792,8 @@ export default function TimetableView() {
               </div>
             </div>
 
-            {/* 3. Right: mini navigation rail */}
-            <div className="w-[135px] shrink-0 border-l border-gray-200 bg-gray-50/50 flex flex-col">
+            {/* 3. Right: mini navigation rail (hidden below lg — replaced by the dropdown) */}
+            <div className="w-[135px] shrink-0 border-l border-gray-200 bg-gray-50/50 hidden lg:flex flex-col">
               {/* Column header */}
               <div className="text-[11px] font-semibold text-gray-400 px-2 py-1 uppercase border-b border-gray-200">
                 {viewMode === 'class' ? 'ห้องเรียน' : 'ครูผู้สอน'}

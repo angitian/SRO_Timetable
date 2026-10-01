@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, CheckCircle, AlertTriangle,
   Users, Layers, ClipboardCheck, Info,
-  Search, FlaskConical,
+  Search, FlaskConical, Copy, Check,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
@@ -194,6 +194,29 @@ export default function VerificationStep() {
 
   // Build readable diagnostics from the backend's 422 payload (if any).
   const diagnostics = errorResponse?.diagnostics || null
+  const [copied, setCopied] = useState(false)
+
+  // Copy the full error payload to the clipboard so the tester can send it
+  // straight to the dev team (pilot feedback channel).
+  async function handleCopyDiagnostics() {
+    const text = JSON.stringify(errorResponse, null, 2)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+    } catch {
+      // Fallback for browsers without async clipboard API
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopied(true)
+    }
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   // Helper: progress bar color based on percentage
   const progressColor = (pct) => {
@@ -444,6 +467,17 @@ export default function VerificationStep() {
               )}
             </div>
           )}
+          <button
+            onClick={handleCopyDiagnostics}
+            className={`mt-2 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors
+              ${copied
+                ? 'bg-green-100 text-green-700'
+                : 'bg-white border border-red-200 text-red-700 hover:bg-red-100'}`}
+            title="คัดลอกข้อมูลข้อขัดแย้งทั้งหมดเพื่อส่งให้ทีมพัฒนา"
+          >
+            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            {copied ? 'คัดลอกแล้ว!' : 'คัดลอกข้อมูลปัญหาส่งทีมพัฒนา'}
+          </button>
         </div>
       )}
 

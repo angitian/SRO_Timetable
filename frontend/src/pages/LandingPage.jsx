@@ -2,9 +2,12 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Plus, FolderOpen, Check, AlertCircle, Zap,
   Printer, ShieldCheck, Cloud, Loader2, Trash2,
+  History, Download, Rocket,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { BASE_URL } from '../api/config.js'
+import { formatSnapshotDate } from '../utils/versionManager.js'
+import { formatLastSync } from '../utils/cache.js'
 
 const FEATURES = [
   {
@@ -34,12 +37,27 @@ const ACCENT_STYLES = {
 }
 
 export default function LandingPage() {
-  const { setStep, setFixtureDataDirect, importSnapshot, selectFixture, user, listCloudWorkspaces, loadFromCloud, deleteFromCloud, cloudWorkspaces, cloudSyncing } = useApp()
+  const {
+    setStep, setFixtureDataDirect, importSnapshot, selectFixture,
+    user, listCloudWorkspaces, loadFromCloud, deleteFromCloud, cloudWorkspaces, cloudSyncing,
+    // Snapshot versioning (local)
+    snapshots, loadSnapshot, deleteSnapshot, exportSnapshot,
+    // Resume last session from IndexedDB cache
+    cacheHint, resumeFromCache,
+  } = useApp()
   const fileInputRef = useRef(null)
   const [toast, setToast] = useState(null) // { type: 'ok'|'err', msg }
   const [isDragOver, setIsDragOver] = useState(false)
   const [showCloudModal, setShowCloudModal] = useState(false)
   const [cloudLoading, setCloudLoading] = useState(false)
+
+  // Preload the cloud workspace list once when logged in so the landing page
+  // can show recent cloud timetables without requiring an extra click.
+  useEffect(() => {
+    if (user) {
+      listCloudWorkspaces().catch(() => {})
+    }
+  }, [user, listCloudWorkspaces])
 
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg })
@@ -152,6 +170,44 @@ export default function LandingPage() {
     }
   }
 
+  // ── Resume last session from IndexedDB cache ─────────────────────────
+  async function handleResume() {
+    if (!cacheHint) return
+    const result = await resumeFromCache(cacheHint.cacheKey)
+    if (result.ok) {
+      showToast('ok', 'โหลดงานล่าสุดแล้ว')
+    } else {
+      showToast('err', result.error || 'โหลดงานล่าสุดไม่สำเร็จ')
+    }
+  }
+
+  // ── Local snapshot version actions ────────────────────────────────────
+  function handleOpenSnapshot(id) {
+    const result = loadSnapshot(id)
+    if (result.ok) {
+      showToast('ok', 'เปิดเวอร์ชันแล้ว')
+    } else {
+      showToast('err', result.error || 'เปิดไม่สำเร็จ')
+    }
+  }
+
+  function handleExportSnapshot(id) {
+    exportSnapshot(id)
+    showToast('ok', 'ดาวน์โหลดไฟล์ .json สำรองแล้ว')
+  }
+
+  function handleDeleteSnapshot(id, label) {
+    if (!confirm(`ยืนยันการลบ "${label}"?`)) return
+    const ok = deleteSnapshot(id)
+    if (ok) {
+      showToast('ok', `ลบ "${label}" แล้ว`)
+    } else {
+      showToast('err', 'ลบไม่สำเร็จ')
+    }
+  }
+
+  const hasRecent = Boolean(cacheHint) || snapshots.length > 0 || (user && cloudWorkspaces.length > 0)
+
   return (
     <div
       className="min-h-[calc(100vh-3.5rem)] bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex flex-col"
@@ -251,6 +307,136 @@ export default function LandingPage() {
             ดาวน์โหลด Template Excel
           </button>
         </p>
+
+        {/* ── Recent Workspaces & Versions ───────────────────────────── */}
+        {hasRecent && (
+          <div className="w-full max-w-4xl mx-auto mb-10">
+            <h2 className="text-lg font-bold text-slate-800 mb-3 flex items-center gap-2">
+              <History className="w-5 h-5 text-slate-500" />
+              งานล่าสุดของฉัน
+            </h2>
+            <div className="space-y-3">
+              {/* Resume card — most recent IndexedDB cache */}
+              {cacheHint && (
+                <div className="flex items-center gap-3 p-4 rounded-xl border border-blue-200 bg-blue-50/70">
+                  <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
+                    <Rocket className="w-5 h-5 text-blue-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-blue-900">
+                      คุณมีงานที่ทำค้างไว้ล่าสุด
+                    </div>
+                    <div className="text-xs text-blue-600">
+                      แก้ไขล่าสุด {formatLastSync(cacheHint.lastCachedAt)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleResume}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-bold
+                      bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm whitespace-nowrap"
+                  >
+                    <Rocket className="w-4 h-4" />
+                    ทำงานต่อทันที
+                  </button>
+                </div>
+              )}
+
+              {/* Local snapshot versions */}
+              {snapshots.length > 0 && (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-500">
+                      เวอร์ชันที่บันทึกไว้ในเครื่องนี้ ({snapshots.length} รายการ)
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      💻 เก็บในเบราว์เซอร์นี้ — ส่งออก .json เพื่อสำรอง
+                    </span>
+                  </div>
+                  <ul className="divide-y divide-slate-100">
+                    {snapshots.map((snap) => (
+                      <li key={snap.id} className="flex items-center gap-2 px-4 py-2.5 hover:bg-slate-50/60 transition-colors">
+                        <button
+                          onClick={() => handleOpenSnapshot(snap.id)}
+                          className="flex-1 text-left min-w-0"
+                          title={`เปิด "${snap.label}"`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-slate-800 truncate">{snap.label}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0
+                              ${snap.status === 'final' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                              {snap.status === 'final' ? 'สมบูรณ์' : 'ร่าง'}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            {formatSnapshotDate(snap.updatedAt)}
+                            {snap.solverPreset ? ` · ${snap.solverPreset}` : ''}
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleExportSnapshot(snap.id)}
+                          className="p-2 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0"
+                          title="ส่งออกไฟล์ .json สำรอง"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSnapshot(snap.id, snap.label)}
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0"
+                          title="ลบเวอร์ชันนี้"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Cloud workspaces (only when logged in) */}
+              {user && cloudWorkspaces.length > 0 && (
+                <div className="bg-white rounded-xl border border-violet-200 shadow-sm overflow-hidden">
+                  <div className="px-4 py-2.5 bg-violet-50 border-b border-violet-100 flex items-center justify-between">
+                    <span className="text-xs font-bold text-violet-600">
+                      ตารางบนคลาวด์ ({cloudWorkspaces.length} รายการ)
+                    </span>
+                    <span className="text-[10px] text-violet-400">☁️ เปิดได้จากเครื่องอื่นเมื่อเข้าสู่ระบบ</span>
+                  </div>
+                  <ul className="divide-y divide-slate-100">
+                    {cloudWorkspaces.map((ws) => (
+                      <li key={ws.id} className="flex items-center gap-2 px-4 py-2.5 hover:bg-violet-50/30 transition-colors">
+                        <button
+                          onClick={() => handleLoadCloudWorkspace(ws.id)}
+                          disabled={cloudSyncing}
+                          className="flex-1 text-left min-w-0"
+                          title={`เปิด "${ws.title}"`}
+                        >
+                          <div className="text-sm font-semibold text-slate-800 truncate">{ws.title}</div>
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            {ws.updated_at
+                              ? new Date(ws.updated_at).toLocaleDateString('th-TH', {
+                                  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                                })
+                              : '—'}
+                            {' · '}
+                            ปีการศึกษา {ws.academic_year}/{ws.term}
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCloudWorkspace(ws.id, ws.title)}
+                          disabled={cloudSyncing}
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0"
+                          title="ลบจากคลาวด์"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ── Feature Highlight Grid ─────────────────────────────────── */}
         <div className="w-full max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-5 mb-10">

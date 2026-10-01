@@ -1,4 +1,4 @@
-import { Rocket, Loader2, Calendar, Check, Layers, Users, ClipboardCheck, Upload, Printer, BookOpen, Facebook, LogIn, LogOut, User as UserIcon } from 'lucide-react'
+import { Rocket, Loader2, Calendar, Check, Layers, Users, ClipboardCheck, Upload, Printer, BookOpen, Facebook, LogIn, LogOut, User as UserIcon, Home, AlertTriangle } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import UserManualModal from '../manual/UserManualModal.jsx'
@@ -77,8 +77,18 @@ function UserMenu() {
 }
 
 export default function Header() {
-  const { activeStep, setStep, isGenerating, result, isDirty } = useApp()
+  const { activeStep, setStep, isGenerating, result, isDirty, isSnapshotDirty, activeSnapshotId } = useApp()
   const [showManual, setShowManual] = useState(false)
+  const [showExitConfirm, setShowExitConfirm] = useState(false)
+
+  // Return to the landing page, guarding against losing unsaved work.
+  function handleGoHome() {
+    if (isDirty || isSnapshotDirty) {
+      setShowExitConfirm(true)
+    } else {
+      setStep(0)
+    }
+  }
 
   // Hide stepper on landing page (step 0) — manual + social links in navbar
   if (activeStep === 0) {
@@ -125,19 +135,23 @@ export default function Header() {
   return (
     <>
     <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
-          {/* Logo */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Logo — clickable, returns to landing/dashboard */}
+          <button
+            onClick={handleGoHome}
+            className="flex items-center gap-2 shrink-0"
+            title="กลับหน้าแรก (รายการตารางของคุณ)"
+          >
             <Calendar className="w-6 h-6 text-blue-600" />
             <span className="font-bold text-lg text-gray-900 hidden sm:inline">
               SRO Timetable
             </span>
             <span className="badge bg-blue-100 text-blue-700 ml-1">POC</span>
-          </div>
+          </button>
 
-          {/* Wizard Stepper */}
-          <nav className="flex items-center gap-1 sm:gap-2">
+          {/* Wizard Stepper — steps share the full header width (flex-1 each) so it never needs to scroll */}
+          <nav className="flex items-center min-w-0 flex-1 flex-nowrap">
             {STEPS.map((step, i) => {
               const Icon = step.icon
               const isActive = activeStep === step.id
@@ -146,11 +160,12 @@ export default function Header() {
               const canClick = !isDisabled
 
               return (
-                <div key={step.id} className="flex items-center">
+                <div key={step.id} className="flex-1 min-w-0 flex items-center">
                   <button
                     onClick={() => canClick && setStep(step.id)}
                     disabled={isDisabled}
-                    className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-sm font-medium transition-all
+                    title={step.label}
+                    className={`w-full min-w-0 flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-2 py-1.5 rounded-lg text-sm font-medium transition-all
                       ${isActive
                         ? 'bg-blue-50 text-blue-700'
                         : isPast
@@ -160,7 +175,7 @@ export default function Header() {
                       ${isDisabled ? 'opacity-40 cursor-not-allowed' : canClick ? 'cursor-pointer' : ''}
                     `}
                   >
-                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold
+                    <span className={`w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-xs font-bold
                       ${isActive
                         ? 'bg-blue-600 text-white'
                         : isPast
@@ -169,25 +184,33 @@ export default function Header() {
                       }`}>
                       {isPast ? <Check className="w-3.5 h-3.5" /> : step.id}
                     </span>
-                    <span className="hidden md:inline">{step.label}</span>
-                    <Icon className="w-4 h-4 md:hidden" />
+                    <span className="hidden lg:inline truncate">{step.label}</span>
+                    <Icon className="w-4 h-4 shrink-0 lg:hidden" />
                   </button>
                   {i < STEPS.length - 1 && (
-                    <div className={`w-4 sm:w-8 h-0.5 mx-0.5 ${isPast ? 'bg-green-300' : 'bg-gray-200'}`} />
+                    <div className={`w-2 sm:w-4 h-0.5 mx-0.5 shrink-0 ${isPast ? 'bg-green-300' : 'bg-gray-200'}`} />
                   )}
                 </div>
               )
             })}
           </nav>
 
-          {/* Right: Dirty indicator + Manual button + User menu */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Right: Dirty indicator + Home + Manual button + User menu */}
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {isDirty && (
               <span className="hidden sm:flex items-center gap-1 text-xs text-amber-600 font-medium" title="มีการเปลี่ยนแปลงข้อมูล กรุณากดจัดตารางใหม่">
                 <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
                 ข้อมูลเปลี่ยนแล้ว
               </span>
             )}
+            <button
+              onClick={handleGoHome}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100 hover:text-blue-700 transition-colors"
+              title="กลับหน้าแรก (รายการตารางของคุณ)"
+            >
+              <Home className="w-4 h-4" />
+              <span className="hidden lg:inline">หน้าแรก</span>
+            </button>
             <button
               onClick={() => setShowManual(true)}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100 hover:text-blue-700 transition-colors"
@@ -202,6 +225,38 @@ export default function Header() {
       </div>
     </header>
     {showManual && <UserManualModal onClose={() => setShowManual(false)} />}
+
+    {/* Exit-confirm guard — warns before leaving with unsaved changes */}
+    {showExitConfirm && (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/40" onClick={() => setShowExitConfirm(false)} />
+        <div className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+            <h3 className="text-lg font-bold text-gray-900">ข้อมูลยังไม่ถูกบันทึก</h3>
+          </div>
+          <p className="text-sm text-gray-600 mb-5 leading-relaxed">
+            {activeSnapshotId
+              ? 'ระบบจะบันทึกการเปลี่ยนแปลงให้อัตโนมัติภายในไม่กี่วินาที หากออกจากหน้านี้ทันที การเปลี่ยนแปลงครั้งล่าสุดอาจยังไม่ถูกบันทึก — แนะนำให้รอสักครู่หรือกด "บันทึก" ก่อนออก'
+              : 'คุณมีข้อมูลที่ยังไม่ได้บันทึกเป็นเวอร์ชัน หากออกจากหน้านี้ ข้อมูลที่ทำไว้อาจสูญหาย — แนะนำให้กด "บันทึกใหม่" ที่หน้าตารางสอนก่อนออกจากหน้า'}
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setShowExitConfirm(false)}
+              className="px-4 py-2 rounded-lg text-sm font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+            >
+              ยกเลิก
+            </button>
+            <button
+              onClick={() => { setShowExitConfirm(false); setStep(0) }}
+              className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+            >
+              ออกจากหน้านี้
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   )
 }

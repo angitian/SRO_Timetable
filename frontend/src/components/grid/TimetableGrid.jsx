@@ -421,8 +421,10 @@ export default function TimetableGrid({
 
     return (
       <div key={classGroup?.id || 'all'} className="space-y-2">
+        {/* min-w keeps the 8-period grid legible on tablets — the wrapper
+            scrolls horizontally instead of crushing the cells */}
         <div className="overflow-x-auto">
-          <div className="min-w-full">
+          <div className="min-w-[760px]">
             {/* Header: วัน | คาบ1 | คาบ2 | ... */}
             <GridHeader
               periodList={periodList}
@@ -532,7 +534,7 @@ export default function TimetableGrid({
     return (
       <div className="space-y-2">
         <div className="overflow-x-auto">
-          <div className="min-w-full">
+          <div className="min-w-[760px]">
             {/* Header */}
             <GridHeader
               periodList={periodList}
