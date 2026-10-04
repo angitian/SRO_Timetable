@@ -87,7 +87,32 @@ export default function ConstraintsOverviewModal({
                       ภาระงานและช่วงเวลาว่างของครู
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      กำหนดคาบสอนสูงสุดต่อวัน, วัน/คาบที่ไม่สะดวกสอน
+                      คาบสอนสูงสุด/ต่ำสุด, วัน/คาบที่ไม่สะดวกสอน, บทบาทพิเศษ,
+                      ห้ามสอนคาบแรก/สุดท้าย, เกลี่ยคาบว่าง (เช้า+บ่าย: ปิด/Soft/Hard), ครูผู้สอนร่วม
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleNavigate(3)}
+                    className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold
+                      text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 transition-colors"
+                  >
+                    <Pencil className="w-3 h-3" />
+                    ปรับในขั้นที่ 3
+                  </button>
+                </div>
+              </div>
+
+              {/* 1b. Global system conditions */}
+              <div className="border border-gray-200 rounded-lg p-3 bg-gray-50/50">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-gray-800">
+                      เงื่อนไขระดับระบบ (Global)
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      คาบติดสูงสุด, ไม่จัดวิชาเดิมติดวัน, วิชาหนักเน้นเช้า,
+                      เกลี่ยภาระงานข้ามวัน, รวมคาบว่างครู, ว่าง 1 คาบเช้า+บ่าย (Soft/Hard),
+                      วิชาเฉพาะช่วงเวลา (เลือกวิชา+เช้า/บ่าย)
                     </div>
                   </div>
                   <button

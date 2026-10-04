@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { Calendar, AlertTriangle, ArrowRight, Rocket, CheckCircle, XCircle, FlaskConical, Table, LayoutGrid, Search, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Calendar, AlertTriangle, ArrowRight, Rocket, CheckCircle, XCircle, FlaskConical, Table, LayoutGrid, Search, X, ChevronLeft, ChevronRight, CalendarClock } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import TimetableGrid from '../components/grid/TimetableGrid.jsx'
 import TeacherLoadTable from '../components/load/TeacherLoadTable.jsx'
@@ -9,6 +9,7 @@ import SolverToolbar from '../components/timetable/SolverToolbar.jsx'
 import StickyFooter from '../components/timetable/StickyFooter.jsx'
 import ConstraintsOverviewModal from '../components/modals/ConstraintsOverviewModal.jsx'
 import ExportExcelModal from '../components/timetable/ExportExcelModal.jsx'
+import SubstituteManagerModal from '../components/timetable/SubstituteManagerModal.jsx'
 import { FACILITY_TYPE_ICONS, FACILITY_TYPE_LABELS } from '../utils/roomTypes.js'
 import { exportQuickTemplateExcel, exportFullTemplateExcel } from '../utils/exportTemplateExcel.js'
 export default function TimetableView() {
@@ -42,6 +43,10 @@ export default function TimetableView() {
     removePlacement,
     lockSlot,
     unlockSlot,
+    // Substitute (สอนแทน)
+    substitutes,
+    setSubstitute,
+    removeSubstitute,
     // Special rooms
     changeSlotRoom,
     // Snapshot versioning
@@ -78,6 +83,7 @@ export default function TimetableView() {
   const [transitioning, setTransitioning] = useState(false)
   const [sidebarDragBlock, setSidebarDragBlock] = useState(null)
   const [showConstraintsModal, setShowConstraintsModal] = useState(false)
+  const [showSubstituteModal, setShowSubstituteModal] = useState(false)
   const [completionToast, setCompletionToast] = useState(null)
   const [railSearch, setRailSearch] = useState('')
   const [facilitySearch, setFacilitySearch] = useState('')
@@ -654,6 +660,7 @@ export default function TimetableView() {
         hasPlacements={hasPlacements}
         className={viewMode === 'class' ? selectedClass?.name : selectedTeacher?.name}
         onOpenConstraints={() => setShowConstraintsModal(true)}
+        onOpenSubstitutes={() => setShowSubstituteModal(true)}
         // Version / Save props
         snapshots={snapshots}
         activeSnapshotId={activeSnapshotId}
@@ -758,6 +765,7 @@ export default function TimetableView() {
                   lunchPeriods={gridConfig.lunchPeriods}
                   breakPeriods={gridConfig.breakPeriods}
                   fixedSlots={fixed_slots}
+                  substitutes={substitutes}
                   userPlacements={userPlacements}
                   onDropFromSidebar={handleDropFromSidebar}
                   lessonBlocks={lesson_blocks}
@@ -1172,6 +1180,23 @@ export default function TimetableView() {
         lunchPeriods={gridConfig.lunchPeriods}
         onNavigateStep={(step) => { setShowConstraintsModal(false); setStep(step) }}
         onClearPins={() => { clearPlacements(); setShowConstraintsModal(false) }}
+      />
+
+      {/* ── Substitute Manager Modal (สอนแทน) ──────────────────────── */}
+      <SubstituteManagerModal
+        isOpen={showSubstituteModal}
+        onClose={() => setShowSubstituteModal(false)}
+        teachers={teachers}
+        classes={classes}
+        subjects={subjects}
+        lessonBlocks={lesson_blocks}
+        slots={resultSlots}
+        userPlacements={userPlacements}
+        substitutes={substitutes}
+        days={gridConfig.daysPerWeek}
+        periods={gridConfig.periodsPerDay}
+        onSet={setSubstitute}
+        onRemove={removeSubstitute}
       />
 
       {/* ── Auto completion toast (bottom-right) ─────────────────────── */}

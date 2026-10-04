@@ -133,8 +133,8 @@ const SUBJECT_COLOR_FALLBACK = { bg: '#e0f2fe', border: '#7dd3fc', text: '#07598
  * Resolve display data for a single cell in a class grid.
  * Returns { kind, subjectName, teacherName, fixedName, isPreAssigned }
  */
-function resolveClassCell({ day, period, classId, slotMap, fixedMap, userPlacementMap, subjectMap, teacherMap, lessonBlockMap, userPlacements }) {
-  const fixed = fixedMap.get(`${day}-${period}`)
+function resolveClassCell({ day, period, classId, slotMap, fixedMap, getFixedSlotsFor, substituteMap, getSubstituteFor, userPlacementMap, subjectMap, teacherMap, lessonBlockMap, userPlacements }) {
+  const fixed = getFixedSlotsFor(day, period, classId)[0]
   if (fixed) return { kind: 'fixed', fixedName: fixed.name || 'กิจกรรมล็อก' }
 
   const slots = (slotMap.get(`${day}-${period}`) || []).filter((s) => s.class_id === classId)
@@ -144,11 +144,20 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, userPlaceme
   if (slot) {
     const subj = subjectMap.get(slot.subject_id)
     const teacher = teacherMap.get(slot.teacher_id)
+    const lb = lessonBlockMap.get(slot.lesson_block_id)
+    const coTeacherId = (lb && lb.co_teacher_id) || slot.co_teacher_id || null
+    const coTeacher = coTeacherId ? teacherMap.get(coTeacherId) : null
     const isPreAssigned = !!userPlacements[slot.lesson_block_id]
+    // Substitute (สอนแทน) overrides the displayed teacher
+    const sub = getSubstituteFor(day, period, classId)
+    const subTeacher = sub ? teacherMap.get(sub.substitute_teacher_id) : null
+    const subOriginal = sub ? (teacherMap.get(sub.original_teacher_id)?.name || sub.original_teacher_id) : null
     return {
       kind: 'lesson',
       subjectName: subj?.name || slot.subject_id,
-      teacherName: teacher?.name || '',
+      teacherName: subTeacher ? (subTeacher.name || subTeacher.id) : (teacher?.name || ''),
+      originalName: sub ? subOriginal : null,
+      isSubstitute: !!sub,
       isPreAssigned,
       subjectId: slot.subject_id,
     }
@@ -158,10 +167,16 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, userPlaceme
     const lb = userPlacement.lessonBlock
     const subj = subjectMap.get(lb.subject_id)
     const teacher = teacherMap.get(lb.teacher_id)
+    const coTeacher = lb.co_teacher_id ? teacherMap.get(lb.co_teacher_id) : null
+    const sub = getSubstituteFor(day, period, classId)
+    const subTeacher = sub ? teacherMap.get(sub.substitute_teacher_id) : null
+    const subOriginal = sub ? (teacherMap.get(sub.original_teacher_id)?.name || sub.original_teacher_id) : null
     return {
       kind: 'lesson',
       subjectName: subj?.name || lb.subject_id,
-      teacherName: teacher?.name || '',
+      teacherName: subTeacher ? (subTeacher.name || subTeacher.id) : (teacher?.name || ''),
+      originalName: sub ? subOriginal : null,
+      isSubstitute: !!sub,
       isPreAssigned: true,
       subjectId: lb.subject_id,
     }
@@ -174,21 +189,51 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, userPlaceme
  * Resolve display data for a single cell in a teacher grid.
  * Returns { kind, slots: [{ subjectName, className, classId }] }
  */
-function resolveTeacherCell({ day, period, teacherId, slotMap, fixedMap, subjectMap, classMap }) {
-  const fixed = fixedMap.get(`${day}-${period}`)
-  if (fixed) return { kind: 'fixed', fixedName: fixed.name || 'กิจกรรมล็อก' }
+function resolveTeacherCell({ day, period, teacherId, teacherClassIds, slotMap, fixedMap, getFixedSlotsFor, subjectMap, classMap, lessonBlockMap, substituteMap }) {
+  // Fixed slot applies if it targets ALL classes or any class this teacher teaches
+  const fixedTargets = [...(fixedMap.get(`${day}-${period}`) || [])]
+  for (const cid of teacherClassIds) {
+    fixedTargets.push(...(fixedMap.get(`${day}-${period}-${cid}`) || []))
+  }
+  if (fixedTargets.length > 0) {
+    return { kind: 'fixed', fixedName: fixedTargets[0].name || 'กิจกรรมล็อก' }
+  }
 
-  const slots = (slotMap.get(`${day}-${period}`) || []).filter((s) => s.teacher_id === teacherId)
-  if (slots.length === 0) return { kind: 'empty' }
+  // Include slots where the teacher is the main teacher OR the co-teacher
+  const slots = (slotMap.get(`${day}-${period}`) || []).filter((s) => {
+    if (s.teacher_id === teacherId) return true
+    const lb = lessonBlockMap.get(s.lesson_block_id)
+    if (lb && lb.co_teacher_id === teacherId) return true
+    return s.co_teacher_id === teacherId
+  })
+  const entries = slots.map((s) => ({
+    subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
+    className: classMap.get(s.class_id)?.name || s.class_id,
+    classId: s.class_id,
+    subjectId: s.subject_id,
+  }))
+  // Substitute duties (สอนแทน) for this teacher
+  for (const sub of substituteMap.values()) {
+    if (sub.day !== day || sub.period !== period) continue
+    if (sub.substitute_teacher_id === teacherId) {
+      const allAtSlot = slotMap.get(`${day}-${period}`) || []
+      const orig = allAtSlot.find((s) => s.class_id === sub.class_id)
+      if (orig) {
+        entries.push({
+          subjectName: subjectMap.get(sub.subject_id)?.name || sub.subject_id,
+          className: classMap.get(sub.class_id)?.name || sub.class_id,
+          classId: sub.class_id,
+          subjectId: sub.subject_id,
+          isSubstitute: true,
+        })
+      }
+    }
+  }
+  if (entries.length === 0) return { kind: 'empty' }
 
   return {
     kind: 'lessons',
-    slots: slots.map((s) => ({
-      subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
-      className: classMap.get(s.class_id)?.name || s.class_id,
-      classId: s.class_id,
-      subjectId: s.subject_id,
-    })),
+    slots: entries,
   }
 }
 
@@ -208,7 +253,8 @@ export function buildClassGridHTML(cls, ctx) {
           if (lunchBreak) return lunchBreak
           const cell = resolveClassCell({
             day: d, period: p, classId: cls.id,
-            slotMap: ctx.slotMap, fixedMap: ctx.fixedMap,
+            slotMap: ctx.slotMap, fixedMap: ctx.fixedMap, getFixedSlotsFor: ctx.getFixedSlotsFor,
+            substituteMap: ctx.substituteMap, getSubstituteFor: ctx.getSubstituteFor,
             userPlacementMap: ctx.userPlacementMap,
             subjectMap: ctx.subjectMap, teacherMap: ctx.teacherMap,
             lessonBlockMap: ctx.lessonBlockMap, userPlacements: ctx.userPlacements,
@@ -218,9 +264,14 @@ export function buildClassGridHTML(cls, ctx) {
           }
           if (cell.kind === 'lesson') {
             const pinIcon = cell.isPreAssigned ? '📌 ' : ''
+            const subName = cell.originalName ? ` (แทน ${cell.originalName})` : ''
+            const subBadge = cell.isSubstitute
+              ? `<span style="display:inline-block;font-size:9px;font-weight:700;color:#9a3412;background:#ffedd5;border:1px solid #fdba74;border-radius:4px;padding:0 3px;margin-top:2px;">🔁 สอนแทน</span>`
+              : ''
             return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;align-items:center;text-align:center;">
               <div class="vcell-title" style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${pinIcon}${cell.subjectName || ''}</div>
-              <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${cell.teacherName || ''}</div>
+              <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${cell.teacherName || ''}${subName}</div>
+              ${subBadge}
             </div>`
           }
           return buildEmptyCellHTML()
@@ -243,6 +294,27 @@ export function buildTeacherGridHTML(teacher, ctx) {
   const periodColsTemplate = buildPeriodColsTemplate(ctx.periodList, ctx.breakSet)
   const gridCtx = { ...ctx, periodColsTemplate }
 
+  // Classes this teacher teaches (main OR co-teacher) — for class-aware fixed slots
+  const teacherClassIds = new Set()
+  for (const s of ctx.allSlots) {
+    if (s.teacher_id === teacher.id) {
+      teacherClassIds.add(s.class_id)
+      continue
+    }
+    const lb = ctx.lessonBlockMap.get(s.lesson_block_id)
+    if (lb && lb.co_teacher_id === teacher.id) {
+      teacherClassIds.add(s.class_id)
+    } else if (s.co_teacher_id === teacher.id) {
+      teacherClassIds.add(s.class_id)
+    }
+  }
+  for (const [lbId, placements] of Object.entries(ctx.userPlacements)) {
+    const lb = ctx.lessonBlockMap.get(lbId)
+    if (lb && (lb.teacher_id === teacher.id || lb.co_teacher_id === teacher.id)) {
+      teacherClassIds.add(lb.class_id)
+    }
+  }
+
   const rows = ctx.dayList
     .map((d) => {
       const cells = ctx.periodList
@@ -250,18 +322,23 @@ export function buildTeacherGridHTML(teacher, ctx) {
           const lunchBreak = buildLunchBreakCellHTML(p, ctx)
           if (lunchBreak) return lunchBreak
           const cell = resolveTeacherCell({
-            day: d, period: p, teacherId: teacher.id,
-            slotMap: ctx.slotMap, fixedMap: ctx.fixedMap,
+            day: d, period: p, teacherId: teacher.id, teacherClassIds,
+            slotMap: ctx.slotMap, fixedMap: ctx.fixedMap, getFixedSlotsFor: ctx.getFixedSlotsFor,
             subjectMap: ctx.subjectMap, classMap: ctx.classMap,
+            lessonBlockMap: ctx.lessonBlockMap, substituteMap: ctx.substituteMap,
           })
           if (cell.kind === 'fixed') {
             return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
           }
           if (cell.kind === 'lessons') {
             const items = cell.slots.map((s) => {
+              const subTag = s.isSubstitute
+                ? `<div style="font-size:9px;font-weight:700;color:#9a3412;background:#ffedd5;border-radius:3px;display:inline-block;padding:0 3px;margin-top:1px;">🔁 สอนแทน</div>`
+                : ''
               return `<div style="text-align:center;padding:1px 0;">
                 <div class="vcell-title" style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${s.className}</div>
                 <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${s.subjectName}</div>
+                ${subTag}
               </div>`
             }).join('')
             return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;align-items:center;justify-content:center;padding:3px 2px;">${items}</div>`
@@ -342,8 +419,34 @@ export function buildExportContext(data) {
 
   const fixedMap = new Map()
   for (const fs of (fixedSlots || [])) {
-    fixedMap.set(`${fs.day}-${fs.period}`, fs)
+    const periods = (fs.periods && fs.periods.length > 0) ? [fs.period, ...fs.periods] : [fs.period]
+    for (const p of periods) {
+      const base = `${fs.day}-${p}`
+      const targets = (!fs.class_ids || fs.class_ids.length === 0)
+        ? [null]
+        : fs.class_ids
+      for (const cid of targets) {
+        const key = cid ? `${base}-${cid}` : base
+        if (!fixedMap.has(key)) fixedMap.set(key, [])
+        fixedMap.get(key).push(fs)
+      }
+    }
   }
+  // Class-aware fixed slot lookup: "d-p" (all classes) + "d-p-classId" (specific)
+  const getFixedSlotsFor = (d, p, classId) => {
+    const result = [...(fixedMap.get(`${d}-${p}`) || [])]
+    if (classId) {
+      result.push(...(fixedMap.get(`${d}-${p}-${classId}`) || []))
+    }
+    return result
+  }
+
+  // Substitute (สอนแทน) lookup: "day-period-classId" → substitute entry
+  const substituteMap = new Map()
+  for (const s of (data.substitutes || [])) {
+    substituteMap.set(`${s.day}-${s.period}-${s.class_id}`, s)
+  }
+  const getSubstituteFor = (d, p, classId) => substituteMap.get(`${d}-${p}-${classId}`) || null
 
   const slotMap = new Map()
   for (const s of (slots || [])) {
@@ -379,7 +482,8 @@ export function buildExportContext(data) {
     lessonBlocks: lessonBlocks || [],
     fixedSlots: fixedSlots || [],
     subjectMap, teacherMap, classMap, lessonBlockMap,
-    lunchSet, breakSet, fixedMap, slotMap, userPlacementMap,
+    lunchSet, breakSet, fixedMap, slotMap, userPlacementMap, getFixedSlotsFor,
+    substituteMap, getSubstituteFor,
     dayList, periodList,
     periodTimeMap: periodTimeMap || {},
     showPeriodTimes: showPeriodTimes !== false,

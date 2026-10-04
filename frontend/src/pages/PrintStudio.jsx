@@ -225,17 +225,41 @@ function buildQRSVGString(url, size = 128) {
  */
 function buildQRPayload(kind, item, ctx, gridConfig, fixedSlots, settings) {
   const filteredSlots = (ctx.allSlots || []).filter((s) =>
-    kind === 'class' ? s.class_id === item.id : s.teacher_id === item.id
+    kind === 'class'
+      ? s.class_id === item.id
+      : (() => {
+          if (s.teacher_id === item.id) return true
+          const lb = ctx.lessonBlockMap.get(s.lesson_block_id)
+          return !!(lb && lb.co_teacher_id === item.id)
+        })()
   )
   const subjectIds = new Set(filteredSlots.map((s) => s.subject_id))
   const teacherIds = new Set(filteredSlots.map((s) => s.teacher_id))
   const classIds = new Set(filteredSlots.map((s) => s.class_id))
+  // Include the co-teachers' names too (they show on the printed cell)
+  for (const s of filteredSlots) {
+    const lb = ctx.lessonBlockMap.get(s.lesson_block_id)
+    if (lb && lb.co_teacher_id) teacherIds.add(lb.co_teacher_id)
+  }
+  // For a teacher page, only embed fixed slots that affect their classes;
+  // for a class page, only slots that affect that class.
+  const relevantFixedSlots = (fixedSlots || []).filter((fs) => {
+    if (!fs.class_ids || fs.class_ids.length === 0) return true
+    if (kind === 'class') return fs.class_ids.includes(item.id)
+    const teacherClassIds = new Set()
+    for (const s of filteredSlots) teacherClassIds.add(s.class_id)
+    return fs.class_ids.some((cid) => teacherClassIds.has(cid))
+  })
 
   const payload = {
-    v: 3, // payload format version — see PublicViewerPage.decodePayload
+    v: 4, // payload format version — see PublicViewerPage.decodePayload
     kind,
     i: [item.id, item.name],
-    s: filteredSlots.map((sl) => [sl.day, sl.period, sl.subject_id, sl.teacher_id, sl.class_id]),
+    // v4 slot format: [day, period, subject_id, teacher_id, class_id, co_teacher_id]
+    s: filteredSlots.map((sl) => {
+      const lb = ctx.lessonBlockMap.get(sl.lesson_block_id)
+      return [sl.day, sl.period, sl.subject_id, sl.teacher_id, sl.class_id, lb?.co_teacher_id || null]
+    }),
     su: (ctx.subjects || []).filter((s) => subjectIds.has(s.id)).map((s) => [s.id, s.name]),
     t: (ctx.teachers || []).filter((t) => teacherIds.has(t.id)).map((t) => [t.id, t.name]),
     c: (ctx.classes || []).filter((c) => classIds.has(c.id)).map((c) => [c.id, c.name]),
@@ -246,7 +270,8 @@ function buildQRPayload(kind, item, ctx, gridConfig, fixedSlots, settings) {
       breakPeriods: gridConfig.breakPeriods || [],
       daysPerWeek: gridConfig.daysPerWeek,
     },
-    f: (fixedSlots || []).map((fs) => [fs.day, fs.period, fs.name]),
+    // v4 fixed slot format: [day, period, name, classIds ([] = all), periods]
+    f: relevantFixedSlots.map((fs) => [fs.day, fs.period, fs.name, fs.class_ids || [], fs.periods || []]),
     set: {
       schoolName: settings.schoolName,
       semester: settings.semester,
@@ -442,7 +467,7 @@ function buildFullPageHTML({ gridHTML, item, kind, ctx, settings, viewerUrl }) {
 
 // ── Main Component ───────────────────────────────────────────────────────
 export default function PrintStudio() {
-  const { fixtureData, result, userPlacements, activeSnapshotLabel, setStep } = useApp()
+  const { fixtureData, result, userPlacements, substitutes, activeSnapshotLabel, setStep } = useApp()
 
   // ── Settings state (with localStorage hydration) ──────────────────────
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
@@ -827,11 +852,12 @@ export default function PrintStudio() {
       userPlacements,
       lessonBlocks: lesson_blocks,
       fixedSlots: fixed_slots,
+      substitutes: substitutes || [],
       label: activeSnapshotLabel || 'ตารางสอน',
       periodTimeMap,
       showPeriodTimes: settings.showPeriodTimes,
     }),
-    [resultSlots, classes, subjects, teachers, fixtureData, gridConfig, userPlacements, lesson_blocks, fixed_slots, activeSnapshotLabel, periodTimeMap, settings.showPeriodTimes],
+    [resultSlots, classes, subjects, teachers, fixtureData, gridConfig, userPlacements, lesson_blocks, fixed_slots, substitutes, activeSnapshotLabel, periodTimeMap, settings.showPeriodTimes],
   )
 
   // ── Build export context (shared lookup maps) ─────────────────────────

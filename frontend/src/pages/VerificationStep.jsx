@@ -430,6 +430,7 @@ export default function VerificationStep() {
                         {t.reason === 'over_max' && ` (เกิน max ${t.max_periods_per_week})`}
                         {t.reason === 'over_available' && ` (ช่องว่างมีแค่ ${t.available_slots})`}
                         {t.reason === 'under_min' && ` (ต่ำกว่า min ${t.min_periods_per_week})`}
+                        {t.reason === 'am_pm_hard' && ` (โหมด Hard "ว่างเช้า+บ่าย": ต้องสำรองว่าง 2 คาบ/วัน — ลดภาระครู หรือเปลี่ยนเป็น Soft)`}
                       </li>
                     ))}
                   </ul>
@@ -456,6 +457,16 @@ export default function VerificationStep() {
                       <li key={i}>
                         {f.lesson_block_id} ที่ วัน{f.day}-คาบ{f.period}: {f.reason}
                       </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {diagnostics.hard_rule_issues?.length > 0 && (
+                <div>
+                  <div className="font-semibold underline">เงื่อนไข Hard ที่จัดไม่ได้:</div>
+                  <ul className="list-disc pl-5 mt-1">
+                    {diagnostics.hard_rule_issues.map((h, i) => (
+                      <li key={i}>{h}</li>
                     ))}
                   </ul>
                 </div>

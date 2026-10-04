@@ -45,7 +45,7 @@ export default function CellContextMenu({
 
   if (!menu) return null
 
-  const { x, y, cellType, slot, day, period } = menu
+  const { x, y, cellType, slot, day, period, classId } = menu
 
   // Adjust position to keep menu on screen
   const menuWidth = 220
@@ -89,7 +89,7 @@ export default function CellContextMenu({
       icon: Lock,
       label: 'ล็อกคาบนี้',
       desc: 'แปลงเป็นกิจกรรมล็อก 🔒',
-      onClick: () => handleAction(onLockSlot, day, period),
+      onClick: () => handleAction(onLockSlot, day, period, classId),
     })
   } else if (cellType === 'placement') {
     // 📌 User placement
@@ -121,7 +121,7 @@ export default function CellContextMenu({
       icon: Unlock,
       label: 'ปลดล็อก',
       desc: 'นำ 🔒 ออก ช่องนี้จะว่าง',
-      onClick: () => handleAction(onUnlockSlot, day, period),
+      onClick: () => handleAction(onUnlockSlot, day, period, classId),
     })
   } else if (cellType === 'empty') {
     // Empty cell
@@ -129,7 +129,7 @@ export default function CellContextMenu({
       icon: Lock,
       label: 'ล็อกคาบนี้',
       desc: 'เพิ่มกิจกรรมล็อก 🔒 ในช่องนี้',
-      onClick: () => handleAction(onLockSlot, day, period),
+      onClick: () => handleAction(onLockSlot, day, period, classId),
     })
   }
 

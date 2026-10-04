@@ -30,6 +30,9 @@ export default function GridCell({
   slots,
   subject,
   teacher,
+  coTeacher,        // second teacher (co-teaching, e.g. MEP Thai + foreign)
+  substitute,       // substitute teacher object (สอนแทน) — shows instead of teacher
+  substituteOriginalName, // original teacher name when substituted
   classGroup,
   classColorMap,
   colorMode = 'subject',
@@ -129,7 +132,9 @@ export default function GridCell({
               >
                 <div className={`text-xs sm:text-sm font-bold ${sColors.text} truncate w-full pr-4`}>
                   {s.isPreAssigned && <span className="mr-0.5">📌</span>}
+                  {s.isSubstitute && <span className="mr-0.5">🔁</span>}
                   {s.className || s.class_id} · {s.subjectName || s.subject_id}
+                  {s.isSubstitute && <span className="ml-1 text-[9px] text-orange-600 bg-orange-100 rounded px-1">สอนแทน</span>}
                 </div>
                 {onTogglePinSlot && (
                   <button
@@ -225,12 +230,25 @@ export default function GridCell({
       </div>
       <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
         <span className="text-xs sm:text-sm font-semibold text-slate-600 truncate">
-          {teacher?.name || slot.teacher_id}
+          {substitute ? (substitute.name || substitute.id) : (teacher?.name || slot.teacher_id)}
+          {!substitute && coTeacher && (
+            <span className="text-slate-500"> + {coTeacher.name || coTeacher.id}</span>
+          )}
+          {substitute && substituteOriginalName && (
+            <span className="text-slate-400 font-normal"> (แทน {substituteOriginalName})</span>
+          )}
         </span>
         <span className="text-xs sm:text-sm text-slate-500 truncate ml-auto shrink-0">
           {classGroup?.name || slot.class_id}
         </span>
       </div>
+      {substitute && (
+        <div className="mt-0.5">
+          <span className="inline-block text-[10px] text-orange-700 bg-orange-100 px-1 py-0.5 rounded font-bold border border-orange-200">
+            🔁 สอนแทน
+          </span>
+        </div>
+      )}
       {/* 🔬 Special room badge (if slot uses a special room, not default classroom) */}
       {roomName && (
         <div className="mt-0.5">
@@ -282,7 +300,10 @@ export default function GridCell({
           bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap shadow-lg
           pointer-events-none">
           <div>{subject?.name || slot.subject_id}</div>
-          <div className="text-gray-300">{teacher?.name || slot.teacher_id}</div>
+          <div className="text-gray-300">
+            {teacher?.name || slot.teacher_id}
+            {coTeacher && <span> + {coTeacher.name || coTeacher.id}</span>}
+          </div>
           <div className="text-gray-300">{classGroup?.name || slot.class_id}</div>
           {roomName && (
             <div className="text-indigo-300 mt-0.5">🔬 {roomName}</div>

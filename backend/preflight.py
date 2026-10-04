@@ -48,18 +48,124 @@ def _build_class_to_block(request: TimetableRequest) -> dict[str, str]:
     return mapping
 
 
+def _days_per_week(request: TimetableRequest) -> int:
+    if request.schedule_blocks:
+        return request.schedule_blocks[0].days_per_week
+    return request.schedule_config.days_per_week
+
+
+def _study_periods_per_day(request: TimetableRequest) -> int:
+    """Count STUDY periods in a single day (per-block aware, multi-block mode)."""
+    if request.schedule_blocks:
+        total: set[int] = set()
+        for blk in request.schedule_blocks:
+            periods = filter_study_periods(get_periods_for_block_on_day(blk, 1))
+            total.update(p.period_no for p in periods)
+        return len(total) or request.schedule_config.periods_per_day
+    lunch_set = set(request.schedule_config.lunch_periods)
+    all_periods = list(range(1, request.schedule_config.periods_per_day + 1))
+    return len([p for p in all_periods if p not in lunch_set])
+
+
+def _effective_am_pm_mode(teacher: Teacher, request: TimetableRequest) -> str:
+    """Mirror TimetableSolver._effective_am_pm_mode: global mode applies to all
+    teachers; per-teacher spread_free_periods opts into soft when global is off."""
+    global_mode = getattr(request.schedule_config, "am_pm_free_mode", "off")
+    if global_mode in ("soft", "hard"):
+        return global_mode
+    if teacher.spread_free_periods:
+        return "soft"
+    return "off"
+
+
+def _rule_mode_preflight(request: TimetableRequest, mode_field: str, legacy_bool: str | None = None) -> str:
+    """Mirror TimetableSolver._rule_mode: prefer the mode field, fall back to
+    the legacy bool field (True → soft, False → off)."""
+    v = getattr(request.schedule_config, mode_field, None)
+    if v in ("soft", "hard", "off"):
+        return v
+    if legacy_bool is not None:
+        b = getattr(request.schedule_config, legacy_bool, True)
+        return "soft" if b else "off"
+    return "soft"
+
+
+def _half_period_counts(request: TimetableRequest) -> tuple[int, int]:
+    """Approximate (morning, afternoon) STUDY-period counts per day using the
+    lunch split (periods before first lunch = morning, after last = afternoon)."""
+    if request.schedule_blocks:
+        blk = request.schedule_blocks[0]
+        day_periods = get_periods_for_block_on_day(blk, 1)
+        study = sorted(p.period_no for p in day_periods if p.type == PeriodType.STUDY)
+        lunch = sorted(p.period_no for p in day_periods if p.type == PeriodType.LUNCH)
+    else:
+        lunch_set = set(request.schedule_config.lunch_periods)
+        study = [p for p in range(1, request.schedule_config.periods_per_day + 1) if p not in lunch_set]
+        lunch = sorted(request.schedule_config.lunch_periods)
+    if lunch:
+        morning = [p for p in study if p < lunch[0]]
+        afternoon = [p for p in study if p > lunch[-1]]
+    else:
+        mid = len(study) // 2
+        morning = study[:mid]
+        afternoon = study[mid:]
+    return len(morning), len(afternoon)
+
+
+def _check_hard_rule_feasibility(request: TimetableRequest, report: DiagnosticsReport) -> None:
+    """Flag HARD global rules that are provably impossible (blocking).
+
+    These are added to hard_rule_issues (blocking) so the user gets an
+    immediate, human-readable INFEASIBLE instead of a slow solver run that
+    returns a generic failure.
+    """
+    days = _days_per_week(request)
+    morning_size, afternoon_size = _half_period_counts(request)
+
+    if _rule_mode_preflight(request, "heavy_morning_mode", "enable_heavy_morning") == "hard":
+        heavy_ids = {s.id for s in request.subjects if s.is_heavy}
+        heavy_total = sum(
+            lb.periods_per_week for lb in request.lesson_blocks if lb.subject_id in heavy_ids
+        )
+        capacity = days * morning_size
+        if heavy_total > capacity:
+            report.hard_rule_issues.append(
+                f"โหมด Hard 'วิชาหนักเน้นเช้า': วิชาหนักรวม {heavy_total} คาบ/สัปดาห์ "
+                f"เกินช่องเช้า {capacity} คาบ — ลดวิชาหนัก หรือเปลี่ยนเป็น Soft"
+            )
+
+    for r in getattr(request.schedule_config, "subject_time_rules", None) or []:
+        if r.mode != "hard":
+            continue
+        subj_total = sum(
+            lb.periods_per_week for lb in request.lesson_blocks if lb.subject_id == r.subject_id
+        )
+        capacity = days * (morning_size if r.preference == "morning" else afternoon_size)
+        subj_name = next((s.name for s in request.subjects if s.id == r.subject_id), r.subject_id)
+        if subj_total > capacity:
+            report.hard_rule_issues.append(
+                f"โหมด Hard วิชา '{subj_name}' เน้น{r.preference}: รวม {subj_total} คาบ/สัปดาห์ "
+                f"เกินช่อง{r.preference} {capacity} คาบ — ลดคาบวิชานี้ หรือเปลี่ยนเป็น Soft"
+            )
+
+
 def _build_assembly_and_class_blocks(
     request: TimetableRequest,
 ) -> tuple[set[tuple[int, int]], dict[str, set[tuple[int, int]]]]:
-    """Return (assembly_set, fixed_slots_per_class) from request.fixed_slots."""
+    """Return (assembly_set, fixed_slots_per_class) from request.fixed_slots.
+
+    Multi-period fixed slots (fs.periods) are expanded to every effective period.
+    """
     assembly_set: set[tuple[int, int]] = set()
     fixed_slots_per_class: dict[str, set[tuple[int, int]]] = {}
     for fs in request.fixed_slots:
         if not fs.class_ids:
-            assembly_set.add((fs.day, fs.period))
+            for p in fs.effective_periods():
+                assembly_set.add((fs.day, p))
         else:
             for cid in fs.class_ids:
-                fixed_slots_per_class.setdefault(cid, set()).add((fs.day, fs.period))
+                for p in fs.effective_periods():
+                    fixed_slots_per_class.setdefault(cid, set()).add((fs.day, p))
     return assembly_set, fixed_slots_per_class
 
 
@@ -114,10 +220,11 @@ def _count_teacher_available_slots(
     Lunch guarantee (multi-block): reserve >= 1 lunch slot per day in the
     11:00-13:30 window for each block the teacher teaches in.
     """
-    # Classes this teacher teaches (so we know which fixed slots apply)
+    # Classes this teacher teaches (main OR co-teacher, so we know which
+    # fixed slots / blocks apply to them)
     taught_class_ids: set[str] = set()
     for lb in request.lesson_blocks:
-        if lb.teacher_id == teacher.id:
+        if lb.teacher_id == teacher.id or lb.co_teacher_id == teacher.id:
             taught_class_ids.add(lb.class_id)
 
     unavailable = set(teacher.unavailable_slots)
@@ -234,6 +341,7 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
         request, report, teacher_by_id, class_to_block, block_by_id,
         assembly_set, fixed_slots_per_class,
     )
+    _check_hard_rule_feasibility(request, report)
 
     return report
 
@@ -298,6 +406,9 @@ def _check_teacher_overloads(
     teacher_needed: dict[str, int] = {}
     for lb in request.lesson_blocks:
         teacher_needed[lb.teacher_id] = teacher_needed.get(lb.teacher_id, 0) + lb.periods_per_week
+        # Co-taught periods count toward the co-teacher's workload too
+        if lb.co_teacher_id:
+            teacher_needed[lb.co_teacher_id] = teacher_needed.get(lb.co_teacher_id, 0) + lb.periods_per_week
 
     for teacher in request.teachers:
         needed = teacher_needed.get(teacher.id, 0)
@@ -313,6 +424,14 @@ def _check_teacher_overloads(
             reason = "over_available"
         elif teacher.min_periods_per_week > 0 and needed < teacher.min_periods_per_week:
             reason = "under_min"
+        # Hard am/pm-free mode: every day needs 2 reserved free periods
+        # (1 morning + 1 afternoon) → weekly capacity = days * (study_per_day - 2)
+        elif _effective_am_pm_mode(teacher, request) == "hard":
+            study_per_day = _study_periods_per_day(request)
+            days = _days_per_week(request)
+            hard_capacity = days * max(0, study_per_day - 2)
+            if needed > hard_capacity:
+                reason = "am_pm_hard"
         if reason:
             report.teacher_overloads.append(
                 TeacherOverload(

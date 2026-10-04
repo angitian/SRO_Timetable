@@ -165,15 +165,22 @@ class TimetableSolver:
         self.valid_periods = [p for p in all_periods if p not in self.lunch_set]
 
     def _build_fixed_slot_maps(self, request: TimetableRequest) -> None:
-        """Build assembly_set and fixed_slots_per_class from request.fixed_slots."""
+        """Build assembly_set and fixed_slots_per_class from request.fixed_slots.
+
+        Supports multi-period fixed slots (fs.periods) — every effective period
+        is registered. Class-specific slots (class_ids non-empty) are mapped per
+        class; empty class_ids block ALL classes (assembly-style).
+        """
         self.assembly_set: set[tuple[int, int]] = set()
         for fs in request.fixed_slots:
             if not fs.class_ids:
-                self.assembly_set.add((fs.day, fs.period))
+                for p in fs.effective_periods():
+                    self.assembly_set.add((fs.day, p))
         self.fixed_slots_per_class: dict[str, set[tuple[int, int]]] = {}
         for fs in request.fixed_slots:
             for cid in fs.class_ids:
-                self.fixed_slots_per_class.setdefault(cid, set()).add((fs.day, fs.period))
+                for p in fs.effective_periods():
+                    self.fixed_slots_per_class.setdefault(cid, set()).add((fs.day, p))
 
     def _build_pe_hot_set(self, request: TimetableRequest) -> None:
         """Build pe_hot_set from schedule_config (legacy mode only)."""
@@ -186,6 +193,17 @@ class TimetableSolver:
                     self.pe_hot_set.add((d, p))
 
     # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _build_teacher_lb_map(self) -> dict[str, list[int]]:
+        """Map every teacher (main teacher_id AND co_teacher_id) to the lesson
+        block indices they participate in. Co-taught blocks appear under both
+        teachers so clashes, workload bounds, and load summaries count both."""
+        teacher_lbs: dict[str, list[int]] = {}
+        for i, lb in enumerate(self.lb_list):
+            teacher_lbs.setdefault(lb.teacher_id, []).append(i)
+            if lb.co_teacher_id:
+                teacher_lbs.setdefault(lb.co_teacher_id, []).append(i)
+        return teacher_lbs
 
     def _is_blocked_for_class(self, class_id: str, d: int, p: int) -> bool:
         if (d, p) in self.assembly_set:
@@ -230,18 +248,27 @@ class TimetableSolver:
             return False
         return p == max(day_periods)
 
+    def _is_teacher_hard_blocked(self, teacher_id: str, d: int, p: int) -> bool:
+        """Hard availability filters for one teacher: unavailable/admin-free
+        slots plus no_first_period / no_last_period preferences."""
+        if self._is_teacher_unavailable(teacher_id, d, p):
+            return True
+        if self._is_first_period_blocked(teacher_id, p):
+            return True
+        if self._is_last_period_blocked(teacher_id, d, p):
+            return True
+        return False
+
     def _is_valid_slot(self, lb_idx: int, d: int, p: int) -> bool:
         lb = self.lb_list[lb_idx]
         if self._is_blocked_for_class(lb.class_id, d, p):
             return False
-        if self._is_teacher_unavailable(lb.teacher_id, d, p):
+        # Main teacher AND co-teacher must both be available
+        if self._is_teacher_hard_blocked(lb.teacher_id, d, p):
+            return False
+        if lb.co_teacher_id and self._is_teacher_hard_blocked(lb.co_teacher_id, d, p):
             return False
         if self._is_pe_hot(lb_idx, d, p):
-            return False
-        # Hard filter: no_first_period / no_last_period
-        if self._is_first_period_blocked(lb.teacher_id, p):
-            return False
-        if self._is_last_period_blocked(lb.teacher_id, d, p):
             return False
         return True
 
@@ -310,11 +337,12 @@ class TimetableSolver:
     def _add_h1_teacher_clash(self) -> None:
         """No teacher teaches two lesson blocks at the same (day, period).
 
+        Co-taught blocks count for both the main teacher and the co-teacher,
+        so neither can be double-booked at the same real time.
+
         In multi-block mode, checks real time interval overlap across blocks.
         """
-        teacher_lbs: dict[str, list[int]] = {}
-        for i, lb in enumerate(self.lb_list):
-            teacher_lbs.setdefault(lb.teacher_id, []).append(i)
+        teacher_lbs = self._build_teacher_lb_map()
 
         if not self.use_blocks:
             # Legacy: same day-period check (uses shared clash helper)
@@ -496,17 +524,16 @@ class TimetableSolver:
     def _add_teaching_load_bounds(self) -> None:
         """Teacher total assigned periods within [min, max].
 
-        max_periods_per_week is a SOFT constraint: the solver prefers to stay
-        within the limit but will exceed it (with a heavy penalty) when the
-        teacher's total lesson load makes it unavoidable. This keeps the
-        timetable feasible even when a teacher is over-assigned, while still
-        surfacing a warning via TeacherLoadSummary.load_status == "over".
+        max_periods_per_week is a WARNING ceiling (soft, low weight 10): the
+        solver places ALL of the teacher's lessons even when the total exceeds
+        the ceiling, then flags load_status == "over" so the user sees the
+        warning. It never silently drops lessons to stay under the ceiling.
 
         min_periods_per_week remains a hard constraint (a guaranteed minimum).
+
+        Co-taught lesson blocks count toward BOTH teachers' bounds.
         """
-        teacher_lbs: dict[str, list[int]] = {}
-        for i, lb in enumerate(self.lb_list):
-            teacher_lbs.setdefault(lb.teacher_id, []).append(i)
+        teacher_lbs = self._build_teacher_lb_map()
 
         for teacher in self.req.teachers:
             lb_indices = teacher_lbs.get(teacher.id, [])
@@ -524,15 +551,17 @@ class TimetableSolver:
                 continue
             total = sum(terms)
             if teacher.max_periods_per_week > 0:
-                # Soft max: allow overflow with a heavy penalty so the solver
-                # still places the teacher's lessons instead of going INFEASIBLE.
+                # max_periods_per_week is a WARNING ceiling, NOT a lesson cutter:
+                # overflow carries a small penalty (10) that is always cheaper
+                # than under-assigning a period (50), so the solver places ALL
+                # of the teacher's lessons first and only then prefers staying
+                # within the ceiling. load_status == "over" warns the user.
                 overflow = self.model.NewIntVar(
                     0, 50, f"teacher_over_{teacher.id}"
                 )
                 self.model.Add(total <= teacher.max_periods_per_week + overflow)
                 self._num_constraints += 1
-                # High weight: discourage overflow but don't forbid it.
-                self._penalty_terms.append((overflow, 100))
+                self._penalty_terms.append((overflow, 10))
             if teacher.min_periods_per_week > 0:
                 self.model.Add(total >= teacher.min_periods_per_week)
                 self._num_constraints += 1
@@ -582,9 +611,7 @@ class TimetableSolver:
         if not lunch_periods_by_block and not lunch_periods_by_block_day:
             return
 
-        teacher_lbs: dict[str, list[int]] = {}
-        for i, lb in enumerate(self.lb_list):
-            teacher_lbs.setdefault(lb.teacher_id, []).append(i)
+        teacher_lbs = self._build_teacher_lb_map()
 
         for teacher_id, lb_indices in teacher_lbs.items():
             for d in self.days:
@@ -638,18 +665,25 @@ class TimetableSolver:
                 self._num_constraints += 1
 
     def _add_s3_max_consecutive_teaching(self) -> None:
-        """Soft constraint: penalize teacher teaching more than N consecutive periods.
+        """Max consecutive teaching constraint.
 
         Per-teacher configuration: uses teacher.max_consecutive_teaching if > 0,
-        otherwise falls back to global schedule_config.max_consecutive_teaching.
-        Skips teachers with enable_consecutive_limit == False.
-        Penalty weight = 100 per excess period (high-penalty safety-net).
+        otherwise falls back to global schedule_config.max_consecutive_teaching
+        (in BOTH legacy and multi-block modes).
+        mode:
+          - off: skip entirely
+          - soft: penalize excess (weight 100) — skips teachers with
+                  enable_consecutive_limit == False
+          - hard: hard constraint — no teacher teaches more than N consecutive
+                  periods
         """
-        global_max_consec = self.req.schedule_config.max_consecutive_teaching if not self.use_blocks else 4
+        mode = self._rule_mode("max_consecutive_mode")
+        if mode == "off":
+            return
+        is_hard = mode == "hard"
+        global_max_consec = self.req.schedule_config.max_consecutive_teaching
 
-        teacher_lbs: dict[str, list[int]] = {}
-        for i, lb in enumerate(self.lb_list):
-            teacher_lbs.setdefault(lb.teacher_id, []).append(i)
+        teacher_lbs = self._build_teacher_lb_map()
 
         PENALTY = 100
 
@@ -658,8 +692,8 @@ class TimetableSolver:
                 teacher = self.teacher_by_id.get(teacher_id)
                 if not teacher:
                     continue
-                # Skip if consecutive limit is disabled for this teacher
-                if not teacher.enable_consecutive_limit:
+                # In soft mode, respect per-teacher opt-out
+                if not is_hard and not teacher.enable_consecutive_limit:
                     continue
                 # Determine per-teacher max consecutive
                 max_consec = teacher.max_consecutive_teaching if teacher.max_consecutive_teaching > 0 else global_max_consec
@@ -689,12 +723,24 @@ class TimetableSolver:
                     window = sorted_periods[idx: idx + max_consec + 1]
                     if all(window[j + 1] == window[j] + 1 for j in range(len(window) - 1)):
                         window_sum = sum(sum(period_indicators[p]) for p in window)
-                        excess = self.model.NewIntVar(0, max_consec + 1, f"excess_{teacher_id}_{d}_{idx}")
-                        self.model.Add(window_sum <= max_consec + excess)
-                        self._penalty_terms.append((excess, PENALTY))
+                        if is_hard:
+                            self.model.Add(window_sum <= max_consec)
+                            self._num_constraints += 1
+                        else:
+                            excess = self.model.NewIntVar(0, max_consec + 1, f"excess_{teacher_id}_{d}_{idx}")
+                            self.model.Add(window_sum <= max_consec + excess)
+                            self._penalty_terms.append((excess, PENALTY))
 
     def _add_s1_subject_day_spacing(self) -> None:
-        """S1: Prefer not scheduling same lesson block on consecutive days."""
+        """S1: Prefer not scheduling same lesson block on consecutive days.
+
+        soft: penalty; hard: hard constraint (same subject never at the same
+        period on consecutive days); off: skip.
+        """
+        mode = self._rule_mode("subject_day_spacing_mode", "enable_subject_day_spacing")
+        if mode == "off":
+            return
+        is_hard = mode == "hard"
         PENALTY = 5
         for i, lb in enumerate(self.lb_list):
             if lb.periods_per_week < 2:
@@ -706,11 +752,15 @@ class TimetableSolver:
                     v1 = self.x.get((i, d1, p))
                     v2 = self.x.get((i, d2, p))
                     if v1 is not None and v2 is not None:
-                        # Penalize both being active on consecutive days same period
-                        both = self.model.NewBoolVar(f"s1_{i}_{d1}_{d2}_{p}")
-                        self.model.AddBoolAnd([v1, v2]).OnlyEnforceIf(both)
-                        self.model.AddBoolOr([v1.Not(), v2.Not()]).OnlyEnforceIf(both.Not())
-                        self._penalty_terms.append((both, PENALTY))
+                        if is_hard:
+                            self.model.Add(v1 + v2 <= 1)
+                            self._num_constraints += 1
+                        else:
+                            # Penalize both being active on consecutive days same period
+                            both = self.model.NewBoolVar(f"s1_{i}_{d1}_{d2}_{p}")
+                            self.model.AddBoolAnd([v1, v2]).OnlyEnforceIf(both)
+                            self.model.AddBoolOr([v1.Not(), v2.Not()]).OnlyEnforceIf(both.Not())
+                            self._penalty_terms.append((both, PENALTY))
 
     def _add_elastic_workload_balance(self) -> None:
         """Elastic Daily Workload Balancing: spread teaching load evenly across days.
@@ -719,13 +769,13 @@ class TimetableSolver:
         Target range = [floor(avg - 1), ceil(avg + 1)].
         Penalize days where total teaching periods fall outside this range.
         """
+        if self._rule_mode("workload_balance_mode", "enable_workload_balance") == "off":
+            return
         days_per_week = len(self.days)
         if days_per_week <= 1:
             return
 
-        teacher_lbs: dict[str, list[int]] = {}
-        for i, lb in enumerate(self.lb_list):
-            teacher_lbs.setdefault(lb.teacher_id, []).append(i)
+        teacher_lbs = self._build_teacher_lb_map()
 
         PENALTY = 5
 
@@ -778,10 +828,13 @@ class TimetableSolver:
     def _add_s2_cognitive_load_morning(self) -> None:
         """S2: Prefer heavy subjects in morning periods (1-3).
 
-        Penalty weight is mode-aware:
-          - BALANCED: 1 (light nudge, avoids starving last period)
-          - DEEP: 10 (stronger push toward morning for better pedagogical quality)
+        soft: penalty (mode-aware weight); hard: heavy subjects must be in the
+        morning (afternoon vars forced to 0); off: skip.
         """
+        mode = self._rule_mode("heavy_morning_mode", "enable_heavy_morning")
+        if mode == "off":
+            return
+        is_hard = mode == "hard"
         from models import OptimizationMode
         is_deep = self.req.optimization_mode == OptimizationMode.DEEP
         morning_periods = {p for p in self.valid_periods if p <= 3}
@@ -795,13 +848,24 @@ class TimetableSolver:
             subj = self.subject_by_id.get(lb.subject_id)
             if not subj or not subj.is_heavy:
                 continue
-            # Penalize heavy subjects in afternoon
-            for (ii, d, p), v in self.x.items():
-                if ii == i and p in afternoon_periods:
-                    self._penalty_terms.append((v, PENALTY))
-            for (ii, d, p), v in self.pair.items():
-                if ii == i and p in afternoon_periods:
-                    self._penalty_terms.append((v, PENALTY))
+            if is_hard:
+                # Force heavy subjects into morning only
+                for (ii, d, p), v in self.x.items():
+                    if ii == i and p in afternoon_periods:
+                        self.model.Add(v == 0)
+                        self._num_constraints += 1
+                for (ii, d, p), v in self.pair.items():
+                    if ii == i and p in afternoon_periods:
+                        self.model.Add(v == 0)
+                        self._num_constraints += 1
+            else:
+                # Penalize heavy subjects in afternoon
+                for (ii, d, p), v in self.x.items():
+                    if ii == i and p in afternoon_periods:
+                        self._penalty_terms.append((v, PENALTY))
+                for (ii, d, p), v in self.pair.items():
+                    if ii == i and p in afternoon_periods:
+                        self._penalty_terms.append((v, PENALTY))
 
     def _add_soft_spread_preference(self) -> None:
         """Soft: prefer not scheduling lesson blocks in the last period of the day.
@@ -826,14 +890,14 @@ class TimetableSolver:
 
         Penalty weight = 3 per transition.
         """
+        if self._rule_mode("gap_clustering_mode", "enable_gap_clustering") == "off":
+            return
         from models import OptimizationMode
         if self.req.optimization_mode != OptimizationMode.DEEP:
             return
 
         PENALTY = 3
-        teacher_lbs: dict[str, list[int]] = {}
-        for i, lb in enumerate(self.lb_list):
-            teacher_lbs.setdefault(lb.teacher_id, []).append(i)
+        teacher_lbs = self._build_teacher_lb_map()
 
         for d in self.days:
             day_periods = self._get_valid_periods_for_day(d)
@@ -887,6 +951,165 @@ class TimetableSolver:
                     self.model.AddAbsEquality(transition, teaches1 - teaches2)
                     self._penalty_terms.append((transition, PENALTY))
 
+    def _effective_am_pm_mode(self, teacher) -> str:
+        """Resolve the am/pm-free mode for a teacher.
+
+        Global schedule_config.am_pm_free_mode ('off'|'soft'|'hard') applies to
+        ALL teachers; when global is 'off', per-teacher spread_free_periods
+        opts that teacher into SOFT mode (backward compat).
+        """
+        global_mode = getattr(self.req.schedule_config, "am_pm_free_mode", "off")
+        if global_mode in ("soft", "hard"):
+            return global_mode
+        if teacher and teacher.spread_free_periods:
+            return "soft"
+        return "off"
+
+    def _rule_mode(self, mode_field: str, legacy_bool: str | None = None) -> str:
+        """Resolve a per-rule mode ('off'|'soft'|'hard') from schedule_config.
+
+        Prefers the new mode field; falls back to the legacy bool field
+        (True → soft, False → off) for backward compat with old fixtures/UI.
+        """
+        v = getattr(self.req.schedule_config, mode_field, None)
+        if v in ("soft", "hard", "off"):
+            return v
+        if legacy_bool is not None:
+            b = getattr(self.req.schedule_config, legacy_bool, True)
+            return "soft" if b else "off"
+        return "soft"
+
+    def _add_am_pm_free(self) -> None:
+        """Global/per-teacher '1 free morning + 1 free afternoon' per day.
+
+        Morning/afternoon are split by the lunch period(s) of that day
+        (periods before the first lunch = morning, after the last lunch =
+        afternoon). Falls back to splitting study periods in half when a day
+        has no lunch period.
+
+        soft mode: penalty (50) when a half has zero free periods — never
+                  makes the model infeasible.
+        hard mode: hard constraint that each half has >=1 free period; a busy
+                  teacher that cannot spare 2 free periods/day will make the
+                  model infeasible (pre-flight reports who).
+        """
+        PENALTY = 50
+        teacher_lbs = self._build_teacher_lb_map()
+
+        for d in self.days:
+            day_periods = sorted(self._get_valid_periods_for_day(d))
+            if len(day_periods) < 2:
+                continue
+            lunch_ps = sorted(
+                self.lunch_set_by_day.get(d, set())
+                if self.lunch_set_by_day else self.lunch_set
+            )
+            if lunch_ps:
+                morning = [p for p in day_periods if p < lunch_ps[0]]
+                afternoon = [p for p in day_periods if p > lunch_ps[-1]]
+            else:
+                mid = len(day_periods) // 2
+                morning = day_periods[:mid]
+                afternoon = day_periods[mid:]
+            if not morning or not afternoon:
+                continue
+
+            for teacher_id, lb_indices in teacher_lbs.items():
+                teacher = self.teacher_by_id.get(teacher_id)
+                if not teacher:
+                    continue
+                mode = self._effective_am_pm_mode(teacher)
+                if mode == "off":
+                    continue
+                is_hard = mode == "hard"
+                for half_key, half_periods in (("am", morning), ("pm", afternoon)):
+                    teaches: list[cp_model.BoolVar] = []
+                    for p in half_periods:
+                        vars_at_p = []
+                        for i in lb_indices:
+                            vars_at_p.extend(self._get_vars_for_lb_at_slot(i, d, p))
+                        if vars_at_p:
+                            teach_p = self.model.NewBoolVar(f"{half_key}_{teacher_id}_{d}_{p}")
+                            self.model.AddBoolOr(vars_at_p).OnlyEnforceIf(teach_p)
+                            self.model.AddBoolAnd([v.Not() for v in vars_at_p]).OnlyEnforceIf(teach_p.Not())
+                            teaches.append(teach_p)
+                    if not teaches:
+                        continue  # no teaching possible in this half → nothing to enforce
+                    if is_hard:
+                        # At least one free period in this half (not all taught)
+                        self.model.Add(sum(teaches) <= len(teaches) - 1)
+                        self._num_constraints += 1
+                    else:
+                        # Penalize when every period in this half is taught
+                        all_taught = self.model.NewBoolVar(f"{half_key}_all_{teacher_id}_{d}")
+                        self.model.AddBoolAnd(teaches).OnlyEnforceIf(all_taught)
+                        self.model.AddBoolOr([t.Not() for t in teaches]).OnlyEnforceIf(all_taught.Not())
+                        self._penalty_terms.append((all_taught, PENALTY))
+
+    def _add_subject_time_preference(self) -> None:
+        """Soft/hard: honor subject time preferences.
+
+        Primary source: schedule_config.subject_time_rules (วิชาเฉพาะช่วงเวลา):
+          { subject_id, preference: morning|afternoon, mode: soft|hard|off }
+        soft → penalty when scheduled in the disfavored half;
+        hard → subject can only be scheduled in the preferred half.
+
+        Fallback (rules empty, backward compat): subject.time_preference
+        field on the Subject model, treated as soft.
+        """
+        PENALTY = 8
+        rules = getattr(self.req.schedule_config, "subject_time_rules", None) or []
+        if rules:
+            effective: list[tuple[str, str, str]] = []
+            for r in rules:
+                if r.mode in ("soft", "hard"):
+                    effective.append((r.subject_id, r.preference, r.mode))
+        else:
+            # Legacy: derive from subject.time_preference (soft)
+            effective = []
+            for subj in self.req.subjects:
+                pref = getattr(subj, "time_preference", "any")
+                if pref in ("morning", "afternoon"):
+                    effective.append((subj.id, pref, "soft"))
+        if not effective:
+            return
+
+        for (subj_id, pref, mode) in effective:
+            is_hard = mode == "hard"
+            for i, lb in enumerate(self.lb_list):
+                if lb.subject_id != subj_id:
+                    continue
+                for d in self.days:
+                    day_periods = sorted(self._get_valid_periods_for_day(d))
+                    if len(day_periods) < 2:
+                        continue
+                    lunch_ps = sorted(
+                        self.lunch_set_by_day.get(d, set())
+                        if self.lunch_set_by_day else self.lunch_set
+                    )
+                    if lunch_ps:
+                        morning = set(p for p in day_periods if p < lunch_ps[0])
+                        afternoon = set(p for p in day_periods if p > lunch_ps[-1])
+                    else:
+                        mid = len(day_periods) // 2
+                        morning = set(day_periods[:mid])
+                        afternoon = set(day_periods[mid:])
+                    disfavored = afternoon if pref == "morning" else morning
+                    for (ii, dd, p), v in self.x.items():
+                        if ii == i and dd == d and p in disfavored:
+                            if is_hard:
+                                self.model.Add(v == 0)
+                                self._num_constraints += 1
+                            else:
+                                self._penalty_terms.append((v, PENALTY))
+                    for (ii, dd, p), v in self.pair.items():
+                        if ii == i and dd == d and p in disfavored:
+                            if is_hard:
+                                self.model.Add(v == 0)
+                                self._num_constraints += 1
+                            else:
+                                self._penalty_terms.append((v, PENALTY))
+
     # ── Objective ──────────────────────────────────────────────────────────
 
     def _add_objective(self) -> None:
@@ -897,6 +1120,8 @@ class TimetableSolver:
         self._add_s3_max_consecutive_teaching()
         self._add_elastic_workload_balance()
         self._add_teacher_gap_penalty()
+        self._add_am_pm_free()
+        self._add_subject_time_preference()
 
         if self._penalty_terms:
             obj = sum(expr * weight for expr, weight in self._penalty_terms)
@@ -976,10 +1201,12 @@ class TimetableSolver:
 
         # If solver still returned INFEASIBLE despite passing pre-flight,
         # attach a fallback diagnostics note so the user gets a hint.
+        # Merge any pre-flight notes (e.g. hard-rule hints) so they surface.
         post_diagnostics: DiagnosticsReport | None = None
         if status_str == "INFEASIBLE":
+            preflight_notes = list(diagnostics.notes or [])
             post_diagnostics = DiagnosticsReport(
-                notes=[
+                notes=preflight_notes + [
                     "Pre-flight ไม่พบสาเหตุชัด แต่ solver ยังคืน INFEASIBLE — "
                     "อาจเป็นความขัดแย้งซับซ้อนระหว่าง hard constraints "
                     "(เช่น ครูหลายคนแยกกันดูพอ แต่รวมในวันเดียวกันแล้วไม่พอ) "
@@ -1025,9 +1252,15 @@ class TimetableSolver:
         return slots
 
     def _compute_teacher_loads(self, slots: list[ScheduledSlot]) -> list[TeacherLoadSummary]:
+        # Count each slot for the main teacher AND the co-teacher (if any), so
+        # co-taught periods (e.g. MEP Thai+foreign) count toward both workloads.
+        lb_by_id = {lb.id: lb for lb in self.lb_list}
         counts: dict[str, int] = {}
         for s in slots:
             counts[s.teacher_id] = counts.get(s.teacher_id, 0) + 1
+            lb = lb_by_id.get(s.lesson_block_id)
+            if lb and lb.co_teacher_id:
+                counts[lb.co_teacher_id] = counts.get(lb.co_teacher_id, 0) + 1
 
         result: list[TeacherLoadSummary] = []
         for teacher in self.req.teachers:

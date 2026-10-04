@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   Gauge,
   Calendar,
+  CalendarClock,
   Users,
   FlaskConical,
   FileSpreadsheet,
@@ -270,6 +271,7 @@ export default function SolverToolbar({
   hasPlacements = false,
   className: selectedClassName,
   onOpenConstraints,
+  onOpenSubstitutes,
   // ── Version / Save props ──
   snapshots = [],
   activeSnapshotId = null,
@@ -581,6 +583,18 @@ export default function SolverToolbar({
                   {constraintCount}
                 </span>
               )}
+            </button>
+
+            <button
+              onClick={onOpenSubstitutes}
+              disabled={!hasResult}
+              className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold
+                text-orange-700 bg-orange-50 border border-orange-300 hover:bg-orange-100 hover:border-orange-400
+                transition-colors whitespace-nowrap min-w-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="จัดการคาบสอนแทน (ครูที่ลา)"
+            >
+              <CalendarClock className="w-3.5 h-3.5 shrink-0" />
+              สอนแทน
             </button>
           </div>
         </div>

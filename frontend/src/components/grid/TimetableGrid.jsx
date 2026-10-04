@@ -20,6 +20,8 @@ export default function TimetableGrid({
   // BREAK period numbers (decimals like 3.5) — rendered as narrow cells.
   breakPeriods = [],
   fixedSlots,
+  // Manual substitute overrides (สอนแทน): [{ day, period, class_id, subject_id, original_teacher_id, substitute_teacher_id }]
+  substitutes = [],
   filterClass,
   filterTeacher,
   onSlotSwap,
@@ -102,13 +104,68 @@ export default function TimetableGrid({
     return specialRoomMap.get(slot.room_id) || null
   }
 
-  // Build fixed slot lookup: { "day-period": FixedSlot }
-  const fixedSlotMap = new Map()
-  if (fixedSlots) {
-    for (const fs of fixedSlots) {
-      fixedSlotMap.set(`${fs.day}-${fs.period}`, fs)
+  // Build fixed slot lookup — CLASS-AWARE + multi-period.
+  // Key formats:
+  //   "d-p"          → fixed slot applies to ALL classes (empty class_ids)
+  //   "d-p-classId"  → fixed slot applies to that specific class only
+  const fixedSlotMap = useMemo(() => {
+    const map = new Map()
+    if (!fixedSlots) return map
+    const add = (key, fs) => {
+      if (!map.has(key)) map.set(key, [])
+      map.get(key).push(fs)
     }
+    for (const fs of fixedSlots) {
+      const periods = (fs.periods && fs.periods.length > 0)
+        ? [fs.period, ...fs.periods]
+        : [fs.period]
+      for (const p of periods) {
+        const base = `${fs.day}-${p}`
+        if (!fs.class_ids || fs.class_ids.length === 0) {
+          add(base, fs)
+        } else {
+          for (const cid of fs.class_ids) {
+            add(`${base}-${cid}`, fs)
+          }
+        }
+      }
+    }
+    return map
+  }, [fixedSlots])
+
+  // All fixed slots applying to (day, period, classId) — classId null = all-class slots only
+  function getFixedSlotsFor(d, p, classId) {
+    const result = [...(fixedSlotMap.get(`${d}-${p}`) || [])]
+    if (classId) {
+      result.push(...(fixedSlotMap.get(`${d}-${p}-${classId}`) || []))
+    }
+    return result
   }
+
+  function getFixedSlotFor(d, p, classId) {
+    return getFixedSlotsFor(d, p, classId)[0] || null
+  }
+
+  // Fixed slots that apply to this teacher's classes at (day, period)
+  function getFixedSlotsForTeacher(d, p) {
+    const result = [...(fixedSlotMap.get(`${d}-${p}`) || [])]
+    if (activeTeacherId) {
+      for (const cid of teacherClassIds) {
+        result.push(...(fixedSlotMap.get(`${d}-${p}-${cid}`) || []))
+      }
+    }
+    const seen = new Set()
+    return result.filter((fs) => (seen.has(fs.id) ? false : (seen.add(fs.id), true)))
+  }
+
+  // Substitute lookup: "day-period-classId" → substitute entry (สอนแทน)
+  const substituteMap = useMemo(() => {
+    const map = new Map()
+    for (const s of substitutes || []) {
+      map.set(`${s.day}-${s.period}-${s.class_id}`, s)
+    }
+    return map
+  }, [substitutes])
 
   // Build user placement lookup: { "day-period-classId": { lessonBlock, day, period } }
   const userPlacementMap = useMemo(() => {
@@ -136,23 +193,34 @@ export default function TimetableGrid({
   const activeTeacherId = selectedTeacher || filterTeacher
 
   // Teacher mode: compute teacher's classes and class color map
+  // (includes classes where the teacher is the co-teacher)
   const teacherClasses = useMemo(() => {
     if (!activeTeacherId) return []
     const classIds = new Set()
     for (const s of localSlots) {
       if (s.teacher_id === activeTeacherId) {
         classIds.add(s.class_id)
+        continue
+      }
+      const lb = lessonBlockMap.get(s.lesson_block_id)
+      if (lb && lb.co_teacher_id === activeTeacherId) {
+        classIds.add(s.class_id)
       }
     }
     // Also include user placements for this teacher
     for (const [lbId, placements] of Object.entries(userPlacements)) {
       const lb = lessonBlockMap.get(lbId)
-      if (lb && lb.teacher_id === activeTeacherId) {
+      if (lb && (lb.teacher_id === activeTeacherId || lb.co_teacher_id === activeTeacherId)) {
         classIds.add(lb.class_id)
       }
     }
     return classes.filter((c) => classIds.has(c.id))
   }, [activeTeacherId, localSlots, classes, userPlacements, lessonBlockMap])
+
+  const teacherClassIds = useMemo(
+    () => new Set(teacherClasses.map((c) => c.id)),
+    [teacherClasses],
+  )
 
   const classColorMap = useMemo(() => {
     const map = {}
@@ -165,10 +233,20 @@ export default function TimetableGrid({
     const conflicts = []
     const sameSlotSlots = slotMap.get(`${targetDay}-${targetPeriod}`) || []
 
-    // H1: Teacher clash — same teacher already teaching at this day-period
+    // H1: Teacher clash — same teacher (main OR co) already teaching at this day-period
     for (const s of sameSlotSlots) {
       if (s.lesson_block_id !== slot.lesson_block_id) {
-        if (s.teacher_id === slot.teacher_id) {
+        const slotLb = lessonBlockMap.get(slot.lesson_block_id)
+        const otherLb = lessonBlockMap.get(s.lesson_block_id)
+        const slotTeachers = new Set([
+          slot.teacher_id,
+          ...(slotLb && slotLb.co_teacher_id ? [slotLb.co_teacher_id] : []),
+        ])
+        const otherTeachers = new Set([
+          s.teacher_id,
+          ...(otherLb && otherLb.co_teacher_id ? [otherLb.co_teacher_id] : []),
+        ])
+        if ([...slotTeachers].some((tid) => otherTeachers.has(tid))) {
           conflicts.push('H1: ครูสอนซ้ำเวลา')
         }
         // H2: Class clash — same class already has a lesson at this day-period
@@ -178,7 +256,7 @@ export default function TimetableGrid({
       }
     }
     return conflicts
-  }, [slotMap])
+  }, [slotMap, lessonBlockMap])
 
   // Detect conflicts for all displayed slots
   function getSlotConflicts(slot, classId) {
@@ -195,21 +273,47 @@ export default function TimetableGrid({
     })
   }
 
-  // Teacher mode: get all slots for this teacher at day-period, enriched with names
+  // Teacher mode: get all slots for this teacher at day-period, enriched with names.
+  // Includes slots where the teacher is the co-teacher, plus substitute (สอนแทน)
+  // duties where the teacher is covering another teacher's slot.
   function getTeacherSlots(d, p) {
     const all = slotMap.get(`${d}-${p}`) || []
-    return all
-      .filter((s) => s.teacher_id === activeTeacherId)
-      .map((s) => ({
-        ...s,
-        className: classMap.get(s.class_id)?.name || s.class_id,
-        subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
-        subjectCategory: subjectMap.get(s.subject_id)?.category,
-        isPreAssigned: (() => {
-          const placements = userPlacements[s.lesson_block_id]
-          return !!(placements && placements.some((pp) => pp.day === s.day && pp.period === s.period))
-        })(),
-      }))
+    const mapped = all
+      .filter((s) => {
+        if (s.teacher_id === activeTeacherId) return true
+        const lb = lessonBlockMap.get(s.lesson_block_id)
+        return !!(lb && lb.co_teacher_id === activeTeacherId)
+      })
+      .map((s) => {
+        const lb = lessonBlockMap.get(s.lesson_block_id)
+        return {
+          ...s,
+          className: classMap.get(s.class_id)?.name || s.class_id,
+          subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
+          subjectCategory: subjectMap.get(s.subject_id)?.category,
+          coTeacherId: lb?.co_teacher_id || null,
+          isPreAssigned: (() => {
+            const placements = userPlacements[s.lesson_block_id]
+            return !!(placements && placements.some((pp) => pp.day === s.day && pp.period === s.period))
+          })(),
+        }
+      })
+    // Substitute duties for this teacher at (d, p)
+    for (const sub of substitutes || []) {
+      if (sub.day !== d || sub.period !== p || sub.substitute_teacher_id !== activeTeacherId) continue
+      const orig = all.find((s) => s.class_id === sub.class_id)
+      if (orig) {
+        mapped.push({
+          ...orig,
+          className: classMap.get(sub.class_id)?.name || sub.class_id,
+          subjectName: subjectMap.get(sub.subject_id)?.name || sub.subject_id,
+          subjectCategory: subjectMap.get(sub.subject_id)?.category,
+          isSubstitute: true,
+          isPreAssigned: false,
+        })
+      }
+    }
+    return mapped
   }
 
   const dayList = Array.from({ length: days }, (_, i) => i + 1)
@@ -256,9 +360,11 @@ export default function TimetableGrid({
     if (lunchSet.has(p)) return { valid: false, reason: 'คาบพักเที่ยง' }
     // 1b. Short break (inserted BREAK with decimal period_no)
     if (breakSet.has(p)) return { valid: false, reason: 'คาบพักสั้น' }
-    // 2. Fixed slot
-    if (fixedSlotMap.has(`${d}-${p}`)) {
-      const fs = fixedSlotMap.get(`${d}-${p}`)
+    // 2. Fixed slot (class-aware — only blocks classes in fs.class_ids)
+    const effClassId = classId || lb?.class_id || null
+    const fixedSlotsAtCell = getFixedSlotsFor(d, p, effClassId)
+    if (fixedSlotsAtCell.length > 0) {
+      const fs = fixedSlotsAtCell[0]
       return { valid: false, reason: `🔒 ${fs.name || 'กิจกรรมล็อก'}` }
     }
     // 3. Class mismatch (in class view)
@@ -280,13 +386,28 @@ export default function TimetableGrid({
     // 5. Already occupied by user placement
     if (classId && userPlacementMap.has(`${d}-${p}-${classId}`))
       return { valid: false, reason: 'มีวิชาอื่นวางด้วยมืออยู่แล้ว' }
-    // 6. Teacher double-booked at same day+period
-    const teacherBusyInSlots = localSlots.some(
-      (s) => s.teacher_id === lb.teacher_id && s.day === d && s.period === p,
-    )
-    const teacherBusyInPlacements = [...userPlacementMap.values()].some(
-      (up) => up.lessonBlock.teacher_id === lb.teacher_id && up.day === d && up.period === p,
-    )
+    // 6. Teacher double-booked at same day+period (main OR co-teacher)
+    const lbTeachers = new Set([
+      lb.teacher_id,
+      ...(lb.co_teacher_id ? [lb.co_teacher_id] : []),
+    ])
+    const teacherBusyInSlots = localSlots.some((s) => {
+      if (s.day !== d || s.period !== p || s.lesson_block_id === lb.id) return false
+      const otherLb = lessonBlockMap.get(s.lesson_block_id)
+      const otherTeachers = new Set([
+        s.teacher_id,
+        ...(otherLb && otherLb.co_teacher_id ? [otherLb.co_teacher_id] : []),
+      ])
+      return [...lbTeachers].some((tid) => otherTeachers.has(tid))
+    })
+    const teacherBusyInPlacements = [...userPlacementMap.values()].some((up) => {
+      if (up.day !== d || up.period !== p || up.lessonBlock.id === lb.id) return false
+      const otherTeachers = new Set([
+        up.lessonBlock.teacher_id,
+        ...(up.lessonBlock.co_teacher_id ? [up.lessonBlock.co_teacher_id] : []),
+      ])
+      return [...lbTeachers].some((tid) => otherTeachers.has(tid))
+    })
     if (teacherBusyInSlots || teacherBusyInPlacements)
       return { valid: false, reason: 'ครูติดสอนห้องอื่นในคาบนี้' }
     // 7. Block already fully placed (total placements >= periods_per_week)
@@ -325,7 +446,8 @@ export default function TimetableGrid({
     }
     // Internal grid drag
     e.dataTransfer.dropEffect = 'move'
-    if (lunchSet.has(p) || breakSet.has(p) || fixedSlotMap.has(`${d}-${p}`)) return
+    const effClassId = classId || dragSource?.classId || null
+    if (lunchSet.has(p) || breakSet.has(p) || getFixedSlotsFor(d, p, effClassId).length > 0) return
     setDragTarget({ day: d, period: p, classId, valid: true, reason: null })
   }
 
@@ -342,7 +464,8 @@ export default function TimetableGrid({
       }
       return
     }
-    if (lunchSet.has(p) || breakSet.has(p) || fixedSlotMap.has(`${d}-${p}`)) return
+    const effClassId = classId || dragSource?.classId || null
+    if (lunchSet.has(p) || breakSet.has(p) || getFixedSlotsFor(d, p, effClassId).length > 0) return
 
     // Find the slot being dragged
     const sourceSlots = slotMap.get(`${dragSource.day}-${dragSource.period}`) || []
@@ -446,7 +569,7 @@ export default function TimetableGrid({
                 {periodList.map((p) => {
                   const isLunch = lunchSet.has(p)
                   const isBreak = breakSet.has(p)
-                  const fixedSlot = fixedSlotMap.get(`${d}-${p}`)
+                  const fixedSlot = getFixedSlotFor(d, p, classId)
                   const isFixed = !!fixedSlot
                   const userPlacement = userPlacementMap.get(`${d}-${p}-${classId}`)
                   const matchedSlots = isFixed || isLunch || isBreak ? [] : getFilteredSlots(d, p, classId)
@@ -459,8 +582,17 @@ export default function TimetableGrid({
                   let displaySlot = slot
                   let displaySubject = slot ? subjectMap.get(slot.subject_id) : null
                   let displayTeacher = slot ? teacherMap.get(slot.teacher_id) : null
+                  let displayCoTeacher = null
                   let displayClass = slot ? classMap.get(slot.class_id) : null
                   let isPreAssigned = false
+
+                  // Resolve co-teacher name from the lesson block (if any)
+                  const resolveCoTeacher = (lb) => {
+                    if (lb && lb.co_teacher_id) {
+                      return teacherMap.get(lb.co_teacher_id) || null
+                    }
+                    return null
+                  }
 
                   if (!slot && userPlacement) {
                     const lb = userPlacement.lessonBlock
@@ -475,15 +607,27 @@ export default function TimetableGrid({
                     }
                     displaySubject = subjectMap.get(lb.subject_id)
                     displayTeacher = teacherMap.get(lb.teacher_id)
+                    displayCoTeacher = resolveCoTeacher(lb)
                     displayClass = classMap.get(lb.class_id)
                     isPreAssigned = true
                   } else if (slot) {
                     // Solver slot that also has a user placement at this exact (day, period) → pinned
+                    const lb = lessonBlockMap.get(slot.lesson_block_id)
+                    displayCoTeacher = resolveCoTeacher(lb)
                     const placements = userPlacements[slot.lesson_block_id]
                     if (placements && placements.some((p) => p.day === slot.day && p.period === slot.period)) {
                       isPreAssigned = true
                     }
                   }
+
+                  // Substitute (สอนแทน) for this class slot
+                  const substituteEntry = (isFixed || isLunch || isBreak) ? null : substituteMap.get(`${d}-${p}-${classId}`)
+                  const displaySubstitute = substituteEntry
+                    ? teacherMap.get(substituteEntry.substitute_teacher_id) || null
+                    : null
+                  const substituteOriginalName = substituteEntry
+                    ? (teacherMap.get(substituteEntry.original_teacher_id)?.name || substituteEntry.original_teacher_id)
+                    : null
 
                   return (
                     <GridCell
@@ -514,6 +658,9 @@ export default function TimetableGrid({
                       )}
                       subject={displaySubject}
                       teacher={displayTeacher}
+                      coTeacher={displayCoTeacher}
+                      substitute={displaySubstitute}
+                      substituteOriginalName={substituteOriginalName}
                       classGroup={displayClass}
                       roomName={getSpecialRoomName(displaySlot)}
                       onRemoveSlot={displaySlot && !isFixed ? () => onRemoveSlot?.(displaySlot.lesson_block_id, isPreAssigned, d, p) : undefined}
@@ -556,7 +703,7 @@ export default function TimetableGrid({
                 {periodList.map((p) => {
                   const isLunch = lunchSet.has(p)
                   const isBreak = breakSet.has(p)
-                  const fixedSlot = fixedSlotMap.get(`${d}-${p}`)
+                  const fixedSlot = getFixedSlotsForTeacher(d, p)[0] || null
                   const isFixed = !!fixedSlot
                   const teacherSlots = isFixed || isLunch || isBreak ? [] : getTeacherSlots(d, p)
                   const isTarget = dragTarget?.day === d && dragTarget?.period === p

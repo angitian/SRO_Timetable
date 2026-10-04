@@ -160,10 +160,11 @@ function ExcelImportPanel({ setFixtureDataDirect, clearResult, onDone }) {
       setImportResult(data)
       clearResult()
 
+      const currentDefault = fixtureData?.schedule_config?.default_max_periods_per_week || 22
       const teachers = (data.teachers || []).map((t) => ({
         id: t.id,
         name: t.name,
-        max_periods_per_week: t.max_periods_per_week || 22,
+        max_periods_per_week: t.max_periods_per_week || currentDefault,
         min_periods_per_week: t.min_periods_per_week || 0,
         unavailable_slots: t.unavailable_slots || [],
         admin_role: t.admin_role || 'none',
@@ -179,7 +180,7 @@ function ExcelImportPanel({ setFixtureDataDirect, clearResult, onDone }) {
         ? data.rooms
         : [...classRooms, ...specialRooms]
 
-      const fixtureData = {
+      const newFixtureData = {
         teachers,
         rooms,
         special_rooms: specialRooms,
@@ -195,16 +196,17 @@ function ExcelImportPanel({ setFixtureDataDirect, clearResult, onDone }) {
           assembly_slots: [],
           max_consecutive_teaching: 4,
           pe_hot_periods: [],
+          default_max_periods_per_week: currentDefault,
         },
         solver_time_limit_seconds: 5.0,
       }
-      setFixtureDataDirect(fixtureData)
+      setFixtureDataDirect(newFixtureData)
       setStep('done')
     } catch (err) {
       setError(err.message)
     }
     setLoading(false)
-  }, [file, mapping, clearResult, setFixtureDataDirect])
+  }, [file, mapping, clearResult, setFixtureDataDirect, fixtureData])
 
   function updateMapping(field, header) {
     setMapping((prev) => ({ ...prev, [field]: header || null }))

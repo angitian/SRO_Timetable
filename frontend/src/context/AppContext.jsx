@@ -48,6 +48,9 @@ const initialState = {
   // userPlacements: { [lesson_block_id]: [{ day, period }] }
   // Tracks lesson blocks the user manually dragged onto the grid (📌 pre-assigned).
   userPlacements: {},
+  // substitutes: [{ id, day, period, class_id, subject_id, original_teacher_id, substitute_teacher_id }]
+  // Manual "สอนแทน" overrides applied AFTER generation (display-level only).
+  substitutes: [],
   // ── Snapshot versioning ──
   snapshots: [], // metadata list for dropdown
   activeSnapshotId: null, // currently loaded snapshot id
@@ -78,6 +81,7 @@ function reducer(state, action) {
         // ล้าง result/placements เก่าเมื่อเปลี่ยน fixture
         result: null,
         userPlacements: {},
+        substitutes: [],
         error: null,
         errorResponse: null,
         cacheHint: null,
@@ -110,6 +114,7 @@ function reducer(state, action) {
         // ล้าง state เก่าทั้งหมดเมื่ออัปโหลดไฟล์ใหม่/สร้างใหม่
         result: null,
         userPlacements: {},
+        substitutes: [],
         error: null,
         errorResponse: null,
         cacheKey: null,
@@ -168,6 +173,32 @@ function reducer(state, action) {
     }
     case 'CLEAR_PLACEMENTS':
       return { ...state, userPlacements: {} }
+    case 'SET_SUBSTITUTE': {
+      // payload: { day, period, class_id, subject_id, original_teacher_id, substitute_teacher_id }
+      // Upsert per (day, period, class_id) — one substitute per slot.
+      const subs = state.substitutes || []
+      const existingIdx = subs.findIndex(
+        (s) => s.day === action.payload.day && s.period === action.payload.period && s.class_id === action.payload.class_id
+      )
+      const entry = {
+        id: existingIdx >= 0 ? subs[existingIdx].id : `SUB_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        ...action.payload,
+      }
+      const next = existingIdx >= 0
+        ? subs.map((s, i) => (i === existingIdx ? entry : s))
+        : [...subs, entry]
+      return { ...state, substitutes: next, isSnapshotDirty: true }
+    }
+    case 'REMOVE_SUBSTITUTE':
+      return {
+        ...state,
+        substitutes: (state.substitutes || []).filter((s) => s.id !== action.payload.id),
+        isSnapshotDirty: true,
+      }
+    case 'CLEAR_SUBSTITUTES':
+      return { ...state, substitutes: [], isSnapshotDirty: true }
+    case 'RESTORE_SUBSTITUTES':
+      return { ...state, substitutes: Array.isArray(action.payload) ? action.payload : [] }
     case 'CLEAR_RESULT':
       return { ...state, result: null, error: null, errorResponse: null, cacheKey: null, lastSync: null }
     case 'RESTORE_PLACEMENTS': {
@@ -324,6 +355,7 @@ function reducer(state, action) {
           : null,
         result: action.payload.result,
         userPlacements: action.payload.userPlacements || {},
+        substitutes: action.payload.substitutes || [],
         selectedFixture: action.payload.fixtureName || 'custom',
         solverPreset: action.payload.solverPreset || state.solverPreset,
         activeSnapshotId: action.payload.id,
@@ -381,6 +413,7 @@ function reducer(state, action) {
         fixtureData: ws.fixtureData || null,
         result: ws.result || null,
         userPlacements: ws.userPlacements || {},
+        substitutes: ws.substitutes || [],
         solverPreset: ws.solverPreset || 'balanced',
         activeCloudWorkspaceId: action.payload._cloudId || null,
         // Reset local snapshot tracking — cloud workspace is separate
@@ -437,12 +470,25 @@ function reducer(state, action) {
       }
     }
     case 'LOCK_SLOT': {
-      // payload: { day, period, name } — add to fixed_slots
+      // payload: { day, period, name, classId } — add to fixed_slots
+      // classId present → lock only that class; absent → lock for all classes
       if (!state.fixtureData) return state
       const existing = state.fixtureData.fixed_slots || []
-      const exists = existing.some((fs) => fs.day === action.payload.day && fs.period === action.payload.period)
+      const class_ids = action.payload.classId ? [action.payload.classId] : []
+      const exists = existing.some((fs) =>
+        fs.day === action.payload.day &&
+        fs.period === action.payload.period &&
+        (class_ids.length === 0
+          ? (!fs.class_ids || fs.class_ids.length === 0)
+          : (fs.class_ids || []).some((c) => class_ids.includes(c)))
+      )
       if (exists) return state
-      const newFixed = [...existing, { day: action.payload.day, period: action.payload.period, name: action.payload.name || 'ล็อกคาบ' }]
+      const newFixed = [...existing, {
+        day: action.payload.day,
+        period: action.payload.period,
+        name: action.payload.name || 'ล็อกคาบ',
+        ...(class_ids.length > 0 ? { class_ids } : {}),
+      }]
       return {
         ...state,
         fixtureData: { ...state.fixtureData, fixed_slots: newFixed },
@@ -451,10 +497,15 @@ function reducer(state, action) {
       }
     }
     case 'UNLOCK_SLOT': {
-      // payload: { day, period } — remove from fixed_slots
+      // payload: { day, period, classId } — remove matching fixed_slots
+      // classId present → remove only the lock for that class; absent → all-class locks
       if (!state.fixtureData?.fixed_slots) return state
+      const class_ids = action.payload.classId ? [action.payload.classId] : []
       const newFixed = state.fixtureData.fixed_slots.filter(
-        (fs) => !(fs.day === action.payload.day && fs.period === action.payload.period),
+        (fs) => !(fs.day === action.payload.day && fs.period === action.payload.period &&
+          (class_ids.length === 0
+            ? (!fs.class_ids || fs.class_ids.length === 0)
+            : (fs.class_ids || []).some((c) => class_ids.includes(c))))
       )
       return {
         ...state,
@@ -928,12 +979,23 @@ export function AppProvider({ children }) {
     dispatch({ type: 'DELETE_SLOT', payload: { lessonBlockId, day, period } })
   }, [])
 
-  const lockSlot = useCallback((day, period, name) => {
-    dispatch({ type: 'LOCK_SLOT', payload: { day, period, name } })
+  const lockSlot = useCallback((day, period, name, classId) => {
+    dispatch({ type: 'LOCK_SLOT', payload: { day, period, name, classId } })
   }, [])
 
-  const unlockSlot = useCallback((day, period) => {
-    dispatch({ type: 'UNLOCK_SLOT', payload: { day, period } })
+  const unlockSlot = useCallback((day, period, classId) => {
+    dispatch({ type: 'UNLOCK_SLOT', payload: { day, period, classId } })
+  }, [])
+
+  // ── Substitute (สอนแทน) actions ──────────────────────────────────
+  const setSubstitute = useCallback((data) => {
+    dispatch({ type: 'SET_SUBSTITUTE', payload: data })
+  }, [])
+  const removeSubstitute = useCallback((id) => {
+    dispatch({ type: 'REMOVE_SUBSTITUTE', payload: { id } })
+  }, [])
+  const clearSubstitutes = useCallback(() => {
+    dispatch({ type: 'CLEAR_SUBSTITUTES' })
   }, [])
 
   // ── Special rooms (facilities) actions ──────────────────────────
@@ -976,6 +1038,7 @@ export function AppProvider({ children }) {
       fixtureData: state.fixtureData,
       result: state.result,
       userPlacements: state.userPlacements,
+      substitutes: state.substitutes,
       solverPreset: state.solverPreset,
       description: opts.description || '',
     })
@@ -990,7 +1053,7 @@ export function AppProvider({ children }) {
       dispatch({ type: 'SET_ACTIVE_SNAPSHOT', payload: { id: snap.id, label: snap.label } })
     }
     return result
-  }, [state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.solverPreset, state.snapshots.length, state.activeSnapshotId, state.lastSnapshotSaveAt])
+  }, [state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.snapshots.length, state.activeSnapshotId, state.lastSnapshotSaveAt])
 
   const doLoadSnapshot = useCallback((id) => {
     const snap = loadSnapshot(id)
@@ -1012,11 +1075,12 @@ export function AppProvider({ children }) {
       fixtureData: state.fixtureData,
       result: state.result,
       userPlacements: state.userPlacements,
+      substitutes: state.substitutes,
       solverPreset: state.solverPreset,
     })
     if (!snap) return
     exportToFile(snap)
-  }, [state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.solverPreset])
+  }, [state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset])
 
   const doImportSnapshot = useCallback(async (file) => {
     try {
@@ -1061,6 +1125,7 @@ export function AppProvider({ children }) {
         fixtureData: state.fixtureData,
         result: state.result,
         userPlacements: state.userPlacements,
+      substitutes: state.substitutes,
         solverPreset: state.solverPreset,
       })
       snap.id = state.activeSnapshotId
@@ -1073,7 +1138,7 @@ export function AppProvider({ children }) {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     }
-  }, [state.isSnapshotDirty, state.activeSnapshotId, state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.solverPreset, state.lastSnapshotSaveAt])
+  }, [state.isSnapshotDirty, state.activeSnapshotId, state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.lastSnapshotSaveAt])
 
   // Persist userPlacements to localStorage
   useEffect(() => {
@@ -1103,6 +1168,37 @@ export function AppProvider({ children }) {
         }
       } catch (e) {
         console.warn('[AppContext] placements restore failed:', e.message)
+      }
+    }
+  }, [state.fixtureData?.schedule_blocks, state.selectedFixture])
+
+  // Persist substitutes (สอนแทน) to localStorage
+  useEffect(() => {
+    if (state.fixtureData && state.selectedFixture) {
+      const key = `substitutes_${state.selectedFixture}`
+      try {
+        if (state.substitutes && state.substitutes.length > 0) {
+          localStorage.setItem(key, JSON.stringify(state.substitutes))
+        } else {
+          localStorage.removeItem(key)
+        }
+      } catch (e) {
+        console.warn('[AppContext] substitutes persist failed:', e.message)
+      }
+    }
+  }, [state.substitutes, state.selectedFixture, state.fixtureData])
+
+  // Restore substitutes when fixture loads
+  useEffect(() => {
+    if (state.fixtureData && state.selectedFixture) {
+      const key = `substitutes_${state.selectedFixture}`
+      try {
+        const saved = localStorage.getItem(key)
+        if (saved) {
+          dispatch({ type: 'RESTORE_SUBSTITUTES', payload: JSON.parse(saved) })
+        }
+      } catch (e) {
+        console.warn('[AppContext] substitutes restore failed:', e.message)
       }
     }
   }, [state.fixtureData?.schedule_blocks, state.selectedFixture])
@@ -1168,6 +1264,7 @@ export function AppProvider({ children }) {
         fixtureData: state.fixtureData,
         result: state.result,
         userPlacements: state.userPlacements,
+      substitutes: state.substitutes,
         solverPreset: state.solverPreset,
         optimizationMode: state.optimizationMode,
       }
@@ -1185,7 +1282,7 @@ export function AppProvider({ children }) {
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
       return { ok: false, error: e.message }
     }
-  }, [state.fixtureData, state.result, state.userPlacements, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotLabel, doListCloudWorkspaces])
+  }, [state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotLabel, doListCloudWorkspaces])
 
   const doLoadFromCloud = useCallback(async (id) => {
     dispatch({ type: 'SET_CLOUD_SYNCING', payload: true })
@@ -1248,6 +1345,10 @@ export function AppProvider({ children }) {
         deleteSlot,
         lockSlot,
         unlockSlot,
+        // Substitute (สอนแทน)
+        setSubstitute,
+        removeSubstitute,
+        clearSubstitutes,
         // Special rooms (facilities)
         addSpecialRoom,
         updateSpecialRoom,

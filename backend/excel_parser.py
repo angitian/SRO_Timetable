@@ -27,6 +27,12 @@ KNOWN_LABELS: dict[str, list[str]] = {
         "ชื่อครู", "ครู", "ผู้สอน", "อาจารย์", "ครูผู้สอน", "ชื่อผู้สอน",
         "teacher name", "teacher_name", "teacher", "instructor", "ชื่อครูผู้สอน",
     ],
+    "co_teacher_name": [
+        "ครูที่ 2", "ครูผู้สอนร่วม", "ผู้สอนร่วม", "ครูร่วมสอน", "ครูที่สอง",
+        "ผู้ช่วยสอน", "ครูต่างชาติ", "ครูชาวต่างชาติ",
+        "co-teacher", "co teacher", "co_teacher", "second teacher", "teacher 2",
+        "co teacher name", "co_teacher_name", "teacher assistant",
+    ],
     "subject": [
         "วิชา", "รายวิชา", "กลุ่มสาระ", "สาระ", "วิชาเรียน", "ชื่อวิชา",
         "subject name", "subject", "course", "course name", "subject_name",
@@ -278,6 +284,7 @@ def import_with_mapping(
             continue
 
         teacher_name = get_val(row, "teacher_name")
+        co_teacher_name = get_val(row, "co_teacher_name")
         subject_name = get_val(row, "subject")
         class_name = get_val(row, "class_name")
         ppw_str = get_val(row, "periods_per_week")
@@ -300,6 +307,20 @@ def import_with_mapping(
                 "unavailable_slots": [],
                 "admin_role": "none",
             }
+
+        # Resolve co-teacher (create a teacher record if the name is new)
+        co_tid = None
+        if co_teacher_name and co_teacher_name != teacher_name:
+            if co_teacher_name not in teachers_map:
+                teachers_map[co_teacher_name] = {
+                    "id": f"T{len(teachers_map) + 1}",
+                    "name": co_teacher_name,
+                    "max_periods_per_week": 22,
+                    "min_periods_per_week": 0,
+                    "unavailable_slots": [],
+                    "admin_role": "none",
+                }
+            co_tid = teachers_map[co_teacher_name]["id"]
 
         # Deduplicate subjects
         if subject_name not in subjects_map:
@@ -352,6 +373,7 @@ def import_with_mapping(
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": f"R_{class_id}",
                 "periods_per_week": normal_periods,
@@ -366,6 +388,7 @@ def import_with_mapping(
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": lab_room_id,
                 "periods_per_week": lab_periods,
@@ -382,6 +405,7 @@ def import_with_mapping(
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": room_id,
                 "periods_per_week": ppw,
@@ -543,6 +567,30 @@ def _parse_unavailable_slots(raw: str) -> list[str]:
     return slots
 
 
+def _parse_period_list(raw: str) -> list[int]:
+    """Parse a multi-period string like '5,6' or '5-6' or '5, 7' into a sorted
+    list of period numbers. Falls back to [] when nothing parseable."""
+    if not raw:
+        return []
+    out: list[int] = []
+    for part in str(raw).replace("และ", ",").replace(" ", "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            try:
+                a, b = part.split("-", 1)
+                lo, hi = int(a), int(b)
+                out.extend(range(min(lo, hi), max(lo, hi) + 1))
+            except ValueError:
+                continue
+        else:
+            m = re.search(r"\d+", part)
+            if m:
+                out.append(int(m.group()))
+    return sorted(set(out))
+
+
 def _parse_class_ids(raw: str, classes_map: dict[str, dict]) -> list[str]:
     """Parse comma-separated class names or IDs → list of class IDs.
 
@@ -607,6 +655,7 @@ def import_multi_sheet(
 
     for row in data_rows:
         teacher_name = get_val(row, "teacher_name")
+        co_teacher_name = get_val(row, "co_teacher_name")
         subject_name = get_val(row, "subject")
         class_name = get_val(row, "class_name")
         ppw_str = get_val(row, "periods_per_week")
@@ -628,6 +677,20 @@ def import_multi_sheet(
                 "unavailable_slots": [],
                 "admin_role": "none",
             }
+
+        # Resolve co-teacher (create a teacher record if the name is new)
+        co_tid = None
+        if co_teacher_name and co_teacher_name != teacher_name:
+            if co_teacher_name not in teachers_map:
+                teachers_map[co_teacher_name] = {
+                    "id": f"T{len(teachers_map) + 1}",
+                    "name": co_teacher_name,
+                    "max_periods_per_week": 22,
+                    "min_periods_per_week": 0,
+                    "unavailable_slots": [],
+                    "admin_role": "none",
+                }
+            co_tid = teachers_map[co_teacher_name]["id"]
 
         if subject_name not in subjects_map:
             sid = f"S{len(subjects_map) + 1}"
@@ -678,6 +741,7 @@ def import_multi_sheet(
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": f"R_{class_id}",
                 "periods_per_week": normal_periods,
@@ -692,6 +756,7 @@ def import_multi_sheet(
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": lab_room_id,
                 "periods_per_week": lab_periods,
@@ -708,6 +773,7 @@ def import_multi_sheet(
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": room_id,
                 "periods_per_week": ppw,
@@ -816,6 +882,9 @@ def import_multi_sheet(
 
             day = _parse_day(day_str, default=1)
             period = safe_extract_int(period_str, default=1)
+            # Multi-period support: "5,6" or "5-6" → additional periods
+            all_periods = _parse_period_list(period_str)
+            periods = [p for p in all_periods if p != period]
 
             slot_type = "activity"
             if slot_type_raw:
@@ -841,6 +910,7 @@ def import_multi_sheet(
                 "slot_type": slot_type,
                 "day": day,
                 "period": period,
+                "periods": periods,
                 "class_ids": class_ids,
             })
 
@@ -880,12 +950,13 @@ def import_multi_sheet(
 
 # ── Minimum Template: Generation & Import ───────────────────────────────────
 
-MIN_TEMPLATE_HEADERS = ["ชื่อครู", "วิชา", "ห้องเรียน", "คาบ/สัปดาห์", "คาบคู่ (ใช่/ไม่ใช่)", "ห้องปฏิบัติการ", "คาบแล็บ"]
+MIN_TEMPLATE_HEADERS = ["ชื่อครู", "ครูผู้สอนร่วม", "วิชา", "ห้องเรียน", "คาบ/สัปดาห์", "คาบคู่ (ใช่/ไม่ใช่)", "ห้องปฏิบัติการ", "คาบแล็บ"]
 
 MIN_TEMPLATE_EXAMPLES = [
-    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/1", "5", "ไม่ใช่", "", ""],
-    ["อ.สมหญิง รักเรียน", "ภาษาไทย", "ป.1/1", "5", "ไม่ใช่", "", ""],
-    ["อ.วิชัย สอนเก่ง", "วิทยาศาสตร์", "ป.1/2", "5", "ไม่ใช่", "ห้องวิทยาศาสตร์", "2"],
+    ["อ.สมชาย ใจดี", "", "คณิตศาสตร์", "ป.1/1", "5", "ไม่ใช่", "", ""],
+    ["อ.สมหญิง รักเรียน", "", "ภาษาไทย", "ป.1/1", "5", "ไม่ใช่", "", ""],
+    ["อ.วิชัย สอนเก่ง", "", "วิทยาศาสตร์", "ป.1/2", "5", "ไม่ใช่", "ห้องวิทยาศาสตร์", "2"],
+    ["อ.สมชาย ใจดี", "Mr. Smith", "ภาษาอังกฤษ (MEP)", "ป.1/1", "5", "ไม่ใช่", "", ""],
 ]
 
 
@@ -937,7 +1008,8 @@ def _extract_grade_level(class_name: str) -> int:
 def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
     """Import a minimum-data Excel template (1 sheet flat table).
 
-    Columns: ชื่อครู, วิชา, ห้องเรียน, คาบ/สัปดาห์, คาบคู่ (ใช่/ไม่ใช่)
+    Columns: ชื่อครู, ครูผู้สอนร่วม (ถ้ามี), วิชา, ห้องเรียน, คาบ/สัปดาห์,
+    คาบคู่ (ใช่/ไม่ใช่), ห้องปฏิบัติการ, คาบแล็บ
 
     Graceful handling: rows with empty วิชา or ห้องเรียน still import the teacher.
     """
@@ -956,6 +1028,7 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
 
     # Find columns by matching against known labels
     teacher_col = _find_header_idx(header_idx, KNOWN_LABELS["teacher_name"])
+    co_teacher_col = _find_header_idx(header_idx, KNOWN_LABELS["co_teacher_name"])
     subject_col = _find_header_idx(header_idx, KNOWN_LABELS["subject"])
     class_col = _find_header_idx(header_idx, KNOWN_LABELS["class_name"])
     ppw_col = _find_header_idx(header_idx, KNOWN_LABELS["periods_per_week"])
@@ -982,6 +1055,7 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
             return str(val).strip() if val is not None else ""
 
         teacher_name = get_val(teacher_col)
+        co_teacher_name = get_val(co_teacher_col)
         subject_name = get_val(subject_col)
         class_name = get_val(class_col)
         ppw_str = get_val(ppw_col)
@@ -1003,6 +1077,20 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
                 "unavailable_slots": [],
                 "admin_role": "none",
             }
+
+        # Resolve co-teacher (create a teacher record if the name is new)
+        co_tid = None
+        if co_teacher_name and co_teacher_name != teacher_name:
+            if co_teacher_name not in teachers_map:
+                teachers_map[co_teacher_name] = {
+                    "id": f"T{len(teachers_map) + 1}",
+                    "name": co_teacher_name,
+                    "max_periods_per_week": 22,
+                    "min_periods_per_week": 0,
+                    "unavailable_slots": [],
+                    "admin_role": "none",
+                }
+            co_tid = teachers_map[co_teacher_name]["id"]
 
         # Skip lesson_block creation if subject or class is empty
         if not subject_name or not class_name:
@@ -1054,6 +1142,7 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": f"R_{class_id}",
                 "periods_per_week": normal_periods,
@@ -1068,6 +1157,7 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": lab_room_id,
                 "periods_per_week": lab_periods,
@@ -1085,6 +1175,7 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
                 "id": f"LB{lb_counter}",
                 "subject_id": sid,
                 "teacher_id": tid,
+                "co_teacher_id": co_tid,
                 "class_id": class_id,
                 "room_id": room_id,
                 "periods_per_week": ppw,
@@ -1151,12 +1242,13 @@ def _find_header_idx(header_idx: dict[str, int], labels: list[str]) -> int | Non
 
 # ── Full Multi-Sheet Template Generation ─────────────────────────────────────
 
-FULL_COURSE_HEADERS = ["ชื่อครู", "วิชา", "ห้องเรียน", "คาบ/สัปดาห์", "คาบคู่ (ใช่/ไม่ใช่)", "ห้องปฏิบัติการ", "คาบแล็บ"]
+FULL_COURSE_HEADERS = ["ชื่อครู", "ครูผู้สอนร่วม", "วิชา", "ห้องเรียน", "คาบ/สัปดาห์", "คาบคู่ (ใช่/ไม่ใช่)", "ห้องปฏิบัติการ", "คาบแล็บ"]
 FULL_COURSE_EXAMPLES = [
-    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/1", "5", "ไม่ใช่", "", ""],
-    ["อ.สมหญิง รักเรียน", "ภาษาไทย", "ป.1/1", "5", "ไม่ใช่", "", ""],
-    ["อ.วิชัย สอนเก่ง", "วิทยาศาสตร์", "ป.1/2", "5", "ไม่ใช่", "ห้องวิทยาศาสตร์", "2"],
-    ["อ.สมชาย ใจดี", "คณิตศาสตร์", "ป.1/2", "5", "ไม่ใช่", "", ""],
+    ["อ.สมชาย ใจดี", "", "คณิตศาสตร์", "ป.1/1", "5", "ไม่ใช่", "", ""],
+    ["อ.สมหญิง รักเรียน", "", "ภาษาไทย", "ป.1/1", "5", "ไม่ใช่", "", ""],
+    ["อ.วิชัย สอนเก่ง", "", "วิทยาศาสตร์", "ป.1/2", "5", "ไม่ใช่", "ห้องวิทยาศาสตร์", "2"],
+    ["อ.สมชาย ใจดี", "", "คณิตศาสตร์", "ป.1/2", "5", "ไม่ใช่", "", ""],
+    ["อ.สมชาย ใจดี", "Mr. Smith", "ภาษาอังกฤษ (MEP)", "ป.1/1", "5", "ไม่ใช่", "", ""],
 ]
 
 FULL_CONSTRAINT_HEADERS = ["ชื่อครู", "ภาระงานสูงสุด", "ภาระงานขั้นต่ำ", "ห้ามสอน", "บทบาทพิเศษ"]
@@ -1168,7 +1260,8 @@ FULL_CONSTRAINT_EXAMPLES = [
 FULL_FIXED_HEADERS = ["ชื่อกิจกรรม", "วัน", "คาบที่", "ห้องที่เกี่ยวข้อง", "ประเภท"]
 FULL_FIXED_EXAMPLES = [
     ["เคารพธงชาติ", "1", "1", "", "assembly"],
-    ["ลูกเสือ-เนตรนารี", "3", "6", "ป.1, ป.2, ป.3", "scout"],
+    ["ลูกเสือ-เนตรนารี (ป.1-3)", "3", "5", "ป.1, ป.2, ป.3", "scout"],
+    ["ลูกเสือ-เนตรนารี (ป.4-6)", "3", "6-7", "ป.4, ป.5, ป.6", "scout"],
 ]
 
 

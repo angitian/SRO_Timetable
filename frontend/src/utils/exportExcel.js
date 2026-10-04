@@ -35,7 +35,7 @@ const THIN_BORDER = {
  * Build a lookup map for a single class: "day-period" → { subjectName, teacherName, isFixed, fixedName }
  */
 function buildClassCellMap(cls, ctx) {
-  const { slotMap, fixedMap, userPlacementMap, subjectMap, teacherMap, userPlacements, lessonBlockMap } = ctx
+  const { slotMap, fixedMap, getFixedSlotsFor, getSubstituteFor, userPlacementMap, subjectMap, teacherMap, userPlacements, lessonBlockMap } = ctx
   const map = new Map()
 
   // Solver slots for this class
@@ -44,9 +44,18 @@ function buildClassCellMap(cls, ctx) {
     if (!slot) continue
     const subj = subjectMap.get(slot.subject_id)
     const teacher = teacherMap.get(slot.teacher_id)
+    const lb = lessonBlockMap.get(slot.lesson_block_id)
+    const coTeacher = (lb && lb.co_teacher_id) ? teacherMap.get(lb.co_teacher_id) : null
+    const [d, p] = key.split('-').map(Number)
+    const sub = getSubstituteFor(d, p, cls.id)
+    const subTeacher = sub ? teacherMap.get(sub.substitute_teacher_id) : null
+    const subOriginal = sub ? (teacherMap.get(sub.original_teacher_id)?.name || sub.original_teacher_id) : null
     map.set(key, {
       subjectName: subj?.name || slot.subject_id,
-      teacherName: teacher?.name || '',
+      teacherName: subTeacher ? (subTeacher.name || subTeacher.id) : (teacher?.name || ''),
+      originalName: sub ? subOriginal : null,
+      isSubstitute: !!sub,
+      ...(!sub && coTeacher ? { coTeacherName: coTeacher.name || coTeacher.id } : {}),
     })
   }
 
@@ -59,17 +68,31 @@ function buildClassCellMap(cls, ctx) {
       if (!map.has(key)) {
         const subj = subjectMap.get(lb.subject_id)
         const teacher = teacherMap.get(lb.teacher_id)
+        const coTeacher = lb.co_teacher_id ? teacherMap.get(lb.co_teacher_id) : null
+        const sub = getSubstituteFor(p.day, p.period, cls.id)
+        const subTeacher = sub ? teacherMap.get(sub.substitute_teacher_id) : null
+        const subOriginal = sub ? (teacherMap.get(sub.original_teacher_id)?.name || sub.original_teacher_id) : null
         map.set(key, {
           subjectName: subj?.name || lb.subject_id,
-          teacherName: teacher?.name || '',
+          teacherName: subTeacher ? (subTeacher.name || subTeacher.id) : (teacher?.name || ''),
+          originalName: sub ? subOriginal : null,
+          isSubstitute: !!sub,
+          ...(!sub && coTeacher ? { coTeacherName: coTeacher.name || coTeacher.id } : {}),
         })
       }
     }
   }
 
-  // Fixed slots (override everything)
-  for (const [key, fixed] of fixedMap.entries()) {
-    map.set(key, { isFixed: true, fixedName: fixed.name || 'กิจกรรมล็อก' })
+  // Fixed slots (override everything) — class-aware only
+  const days = ctx.dayList || []
+  const periods = ctx.periodList || []
+  for (const d of days) {
+    for (const p of periods) {
+      const fixed = getFixedSlotsFor(d, p, cls.id)[0]
+      if (fixed) {
+        map.set(`${d}-${p}`, { isFixed: true, fixedName: fixed.name || 'กิจกรรมล็อก' })
+      }
+    }
   }
 
   return map
@@ -79,12 +102,32 @@ function buildClassCellMap(cls, ctx) {
  * Build a lookup map for a single teacher: "day-period" → [{ subjectName, className }]
  */
 function buildTeacherCellMap(teacher, ctx) {
-  const { slotMap, fixedMap, subjectMap, classMap, userPlacements, lessonBlockMap } = ctx
+  const { slotMap, fixedMap, getFixedSlotsFor, substituteMap, subjectMap, classMap, userPlacements, lessonBlockMap } = ctx
   const map = new Map()
 
-  // Solver slots for this teacher
+  // Classes this teacher teaches (main OR co-teacher) — for class-aware fixed slots
+  const teacherClassIds = new Set()
   for (const [key, slots] of slotMap.entries()) {
-    const teacherSlots = slots.filter((s) => s.teacher_id === teacher.id)
+    for (const s of slots) {
+      if (s.teacher_id === teacher.id) teacherClassIds.add(s.class_id)
+      const lb = lessonBlockMap.get(s.lesson_block_id)
+      if (lb && lb.co_teacher_id === teacher.id) teacherClassIds.add(s.class_id)
+    }
+  }
+  for (const [lbId] of Object.entries(userPlacements || {})) {
+    const lb = lessonBlockMap.get(lbId)
+    if (lb && (lb.teacher_id === teacher.id || lb.co_teacher_id === teacher.id)) {
+      teacherClassIds.add(lb.class_id)
+    }
+  }
+
+  // Solver slots for this teacher (includes co-taught)
+  for (const [key, slots] of slotMap.entries()) {
+    const teacherSlots = slots.filter((s) => {
+      if (s.teacher_id === teacher.id) return true
+      const lb = lessonBlockMap.get(s.lesson_block_id)
+      return !!(lb && lb.co_teacher_id === teacher.id)
+    })
     if (teacherSlots.length === 0) continue
     map.set(key, teacherSlots.map((s) => ({
       subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
@@ -95,7 +138,7 @@ function buildTeacherCellMap(teacher, ctx) {
   // User placements for this teacher (only fill empty cells)
   for (const [lbId, placements] of Object.entries(userPlacements || {})) {
     const lb = lessonBlockMap.get(lbId)
-    if (!lb || lb.teacher_id !== teacher.id) continue
+    if (!lb || (lb.teacher_id !== teacher.id && lb.co_teacher_id !== teacher.id)) continue
     for (const p of placements) {
       const key = `${p.day}-${p.period}`
       if (!map.has(key)) {
@@ -107,9 +150,31 @@ function buildTeacherCellMap(teacher, ctx) {
     }
   }
 
-  // Fixed slots (override)
-  for (const [key, fixed] of fixedMap.entries()) {
-    map.set(key, { isFixed: true, fixedName: fixed.name || 'กิจกรรมล็อก' })
+  // Substitute duties (สอนแทน) for this teacher
+  for (const sub of substituteMap.values()) {
+    if (sub.substitute_teacher_id !== teacher.id) continue
+    const key = `${sub.day}-${sub.period}`
+    const entries = map.get(key) || []
+    entries.push({
+      subjectName: subjectMap.get(sub.subject_id)?.name || sub.subject_id,
+      className: classMap.get(sub.class_id)?.name || sub.class_id,
+      isSubstitute: true,
+    })
+    map.set(key, entries)
+  }
+
+  // Fixed slots (override) — class-aware for this teacher's classes
+  const days = ctx.dayList || []
+  const periods = ctx.periodList || []
+  for (const d of days) {
+    for (const p of periods) {
+      const allClassFixed = getFixedSlotsFor(d, p, null)[0]
+      const classFixed = [...teacherClassIds].map((cid) => getFixedSlotsFor(d, p, cid)[0]).find(Boolean)
+      const fixed = allClassFixed || classFixed
+      if (fixed) {
+        map.set(`${d}-${p}`, { isFixed: true, fixedName: fixed.name || 'กิจกรรมล็อก' })
+      }
+    }
   }
 
   return map
@@ -123,7 +188,12 @@ function formatClassCell(entry, isLunch) {
   if (isLunch) return 'พักเที่ยง'
   if (!entry) return ''
   if (entry.isFixed) return `🔒 ${entry.fixedName}`
-  const parts = [entry.subjectName, entry.teacherName].filter(Boolean)
+  const teacherName = entry.isSubstitute
+    ? `${entry.teacherName}${entry.originalName ? ` (แทน ${entry.originalName})` : ''}`
+    : entry.coTeacherName
+      ? `${entry.teacherName} + ${entry.coTeacherName}`
+      : entry.teacherName
+  const parts = [entry.subjectName, teacherName, entry.isSubstitute ? '🔁 สอนแทน' : ''].filter(Boolean)
   return parts.join('\n')
 }
 
@@ -136,7 +206,7 @@ function formatTeacherCell(entry, isLunch) {
   if (!entry) return ''
   if (entry.isFixed) return `🔒 ${entry.fixedName}`
   // entry is an array of { subjectName, className }
-  return entry.map((s) => `${s.subjectName}\n${s.className}`).join('\n\n')
+  return entry.map((s) => `${s.subjectName}\n${s.className}${s.isSubstitute ? '\n🔁 สอนแทน' : ''}`).join('\n\n')
 }
 
 /**
@@ -387,8 +457,31 @@ function buildExportContext(data) {
 
   const fixedMap = new Map()
   for (const fs of (fixedSlots || [])) {
-    fixedMap.set(`${fs.day}-${fs.period}`, fs)
+    const periods = (fs.periods && fs.periods.length > 0) ? [fs.period, ...fs.periods] : [fs.period]
+    for (const p of periods) {
+      const base = `${fs.day}-${p}`
+      const targets = (!fs.class_ids || fs.class_ids.length === 0) ? [null] : fs.class_ids
+      for (const cid of targets) {
+        const key = cid ? `${base}-${cid}` : base
+        if (!fixedMap.has(key)) fixedMap.set(key, [])
+        fixedMap.get(key).push(fs)
+      }
+    }
   }
+  // Class-aware fixed slot lookup: "d-p" (all classes) + "d-p-classId" (specific)
+  const getFixedSlotsFor = (d, p, classId) => {
+    const result = [...(fixedMap.get(`${d}-${p}`) || [])]
+    if (classId) {
+      result.push(...(fixedMap.get(`${d}-${p}-${classId}`) || []))
+    }
+    return result
+  }
+  // Substitute (สอนแทน) lookup
+  const substituteMap = new Map()
+  for (const s of (data.substitutes || [])) {
+    substituteMap.set(`${s.day}-${s.period}-${s.class_id}`, s)
+  }
+  const getSubstituteFor = (d, p, classId) => substituteMap.get(`${d}-${p}-${classId}`) || null
 
   const slotMap = new Map()
   for (const s of (slots || [])) {
@@ -410,7 +503,7 @@ function buildExportContext(data) {
     specialRooms: specialRooms || [],
     userPlacements: userPlacements || {},
     subjectMap, teacherMap, classMap, lessonBlockMap,
-    lunchSet, breakSet, fixedMap, slotMap,
+    lunchSet, breakSet, fixedMap, slotMap, getFixedSlotsFor, substituteMap, getSubstituteFor,
     dayList, periodList,
   }
 }

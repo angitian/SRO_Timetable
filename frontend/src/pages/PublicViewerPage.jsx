@@ -50,21 +50,29 @@ function decodePayload(encoded) {
 }
 
 /**
- * Expand a compact v2 payload back into the shape expected by buildExportContext.
+ * Expand a compact payload back into the shape expected by buildExportContext.
+ * Supports v2/v3 (slot: [day, period, subject, teacher, class]; fixed: [day, period, name])
+ * and v4 (slot: [..., co_teacher_id]; fixed: [day, period, name, classIds, periods]).
  */
 function expandCompactPayload(p) {
-  if (!p || (p.v !== 2 && p.v !== 3)) throw new Error('payload format ไม่รองรับ')
+  if (!p || (p.v !== 2 && p.v !== 3 && p.v !== 4)) throw new Error('payload format ไม่รองรับ')
+  const isV4 = p.v === 4
   return {
     kind: p.kind,
     item: { id: p.i[0], name: p.i[1] },
-    slots: (p.s || []).map(([day, period, subject_id, teacher_id, class_id]) => ({
+    slots: (p.s || []).map(([day, period, subject_id, teacher_id, class_id, co_teacher_id]) => ({
       day, period, subject_id, teacher_id, class_id,
+      ...(isV4 && co_teacher_id ? { co_teacher_id } : {}),
     })),
     subjects: (p.su || []).map(([id, name]) => ({ id, name })),
     teachers: (p.t || []).map(([id, name]) => ({ id, name })),
     classes: (p.c || []).map(([id, name]) => ({ id, name })),
     gridConfig: p.g,
-    fixedSlots: (p.f || []).map(([day, period, name]) => ({ day, period, name })),
+    fixedSlots: (p.f || []).map(([day, period, name, classIds, periods]) => ({
+      day, period, name,
+      ...(isV4 && classIds ? { class_ids: classIds } : {}),
+      ...(isV4 && periods ? { periods } : {}),
+    })),
     settings: p.set || {},
   }
 }
@@ -116,6 +124,7 @@ function recordToPayload(record, viewMode, selectedClassId, selectedTeacherId) {
   const result = record?.result || {}
   const classes = (config.classes || []).map((c) => ({ id: c.id, name: c.name }))
   const teachers = (config.teachers || []).map((t) => ({ id: t.id, name: t.name }))
+  const lessonBlockMap = new Map((config.lesson_blocks || []).map((lb) => [lb.id, lb]))
   const isTeacher = viewMode === 'teacher' && teachers.length > 0
   const cls = classes.find((c) => c.id === selectedClassId) || classes[0] || null
   const teacher = teachers.find((t) => t.id === selectedTeacherId) || teachers[0] || null
@@ -125,13 +134,18 @@ function recordToPayload(record, viewMode, selectedClassId, selectedTeacherId) {
   return {
     kind: isTeacher ? 'teacher' : 'class',
     item,
-    slots: result.slots || [],
+    slots: (result.slots || []).map((s) => {
+      const lb = lessonBlockMap.get(s.lesson_block_id)
+      return lb && lb.co_teacher_id ? { ...s, co_teacher_id: lb.co_teacher_id } : s
+    }),
     subjects: (config.subjects || []).map((s) => ({ id: s.id, name: s.name })),
     teachers,
     classes,
     gridConfig: deriveGridConfig(config),
     fixedSlots: (config.fixed_slots || []).map((fs) => ({
       day: fs.day, period: fs.period, name: fs.name,
+      ...(fs.class_ids ? { class_ids: fs.class_ids } : {}),
+      ...(fs.periods ? { periods: fs.periods } : {}),
     })),
     settings: {
       schoolName: record.title || '',

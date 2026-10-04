@@ -15,6 +15,25 @@ const PERIOD_TYPE_CONFIG = {
 
 const DAY_NAMES = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์']
 
+/**
+ * Keep schedule_config in sync with the schedule blocks so components that
+ * read schedule_config (teacher unavailable grid, smart defaults, facility
+ * grid) reflect the block structure the user actually built.
+ */
+function syncScheduleConfigFromBlocks(blocks, cfg) {
+  const ref = blocks?.[0]
+  if (!ref) return cfg
+  const dayPeriods = ref.periods || []
+  const maxPeriod = Math.max(1, ...dayPeriods.map((p) => Math.floor(p.period_no)))
+  const lunch = dayPeriods.filter((p) => p.type === 'LUNCH').map((p) => Math.floor(p.period_no))
+  return {
+    ...(cfg || {}),
+    periods_per_day: maxPeriod,
+    lunch_periods: lunch.length ? lunch : (cfg?.lunch_periods || [4]),
+    days_per_week: ref.days_per_week || cfg?.days_per_week || 5,
+  }
+}
+
 function recalculateTimes(periods, startTime, periodDuration, breakDuration, lunchDuration) {
   const [h, m] = startTime.split(':').map(Number)
   let currentMin = h * 60 + m
@@ -71,21 +90,31 @@ export default function ScheduleBlocksStep() {
       lunchPeriodNos: [4],
       totalPeriods: periodsPerDay,
     })
-    updateFixtureData({ schedule_blocks: [...scheduleBlocks, newBlock] })
+    const nextBlocks = [...scheduleBlocks, newBlock]
+    updateFixtureData({
+      schedule_blocks: nextBlocks,
+      schedule_config: syncScheduleConfigFromBlocks(nextBlocks, fixtureData?.schedule_config),
+    })
     setActiveBlockId(newId)
   }
 
   function updateBlock(blockId, updates) {
-    const updated = scheduleBlocks.map((b) =>
+    const nextBlocks = scheduleBlocks.map((b) =>
       b.id === blockId ? { ...b, ...updates } : b
     )
-    updateFixtureData({ schedule_blocks: updated })
+    updateFixtureData({
+      schedule_blocks: nextBlocks,
+      schedule_config: syncScheduleConfigFromBlocks(nextBlocks, fixtureData?.schedule_config),
+    })
   }
 
   function removeBlock(blockId) {
     const idx = scheduleBlocks.findIndex((b) => b.id === blockId)
     const remaining = scheduleBlocks.filter((b) => b.id !== blockId)
-    updateFixtureData({ schedule_blocks: remaining })
+    updateFixtureData({
+      schedule_blocks: remaining,
+      schedule_config: syncScheduleConfigFromBlocks(remaining, fixtureData?.schedule_config),
+    })
     // Select a new active block if we're removing the active one
     if (blockId === activeBlockId) {
       if (remaining.length === 0) {
@@ -482,9 +511,9 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
           />
         </div>
         <div>
-          <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
+          <label className="font-medium text-gray-600 mb-1 flex items-center gap-1" title="จำนวนคาบเรียนต่อวัน (ไม่รวมพักเที่ยง)">
             <BookOpen className="w-3.5 h-3.5 text-blue-600" />
-            คาบเรียน (คาบ)
+            คาบเรียน/วัน
           </label>
           <input
             type="number" min="1" max="15"
@@ -497,7 +526,9 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
               regenerateFromStudyCount(studyCount)
             }}
             className="w-full border border-gray-300 rounded-lg px-2 py-1.5"
+            title="จำนวนคาบเรียนต่อวัน (ไม่รวมพักเที่ยง)"
           />
+          <p className="text-[10px] text-gray-400 mt-0.5">ไม่รวมพักเที่ยง</p>
         </div>
         <div>
           <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
@@ -885,7 +916,46 @@ function SpecialActivitiesSection() {
   const [slotType, setSlotType] = useState('assembly')
   const [targetGrades, setTargetGrades] = useState([])
   const [fixedDay, setFixedDay] = useState(1)
-  const [fixedPeriod, setFixedPeriod] = useState(6)
+  const [fixedPeriod, setFixedPeriod] = useState(6)      // first period of the range
+  const [periodCount, setPeriodCount] = useState(1)      // number of consecutive periods
+  const [extraPeriods, setExtraPeriods] = useState([])   // additional non-consecutive periods
+
+  // Effective periods for the form: contiguous range + extra selections
+  function getEffectivePeriods() {
+    const range = []
+    for (let i = 0; i < periodCount; i++) range.push(fixedPeriod + i)
+    return [...new Set([...range, ...extraPeriods])].sort((a, b) => a - b)
+  }
+
+  // Convert a saved activity's periods back into form state (range + extras)
+  function periodsToForm(first, periods) {
+    const sorted = (periods || []).slice().sort((a, b) => a - b)
+    let count = 1
+    while (sorted.includes(first + count)) count++
+    const inRange = new Set(Array.from({ length: count }, (_, i) => first + i))
+    const extra = sorted.filter((p) => !inRange.has(p) && p !== first)
+    return { count, extra }
+  }
+
+  function formatPeriodsText(periods) {
+    const sorted = periods.slice().sort((a, b) => a - b)
+    if (sorted.length === 1) return `คาบที่ ${sorted[0]}`
+    const parts = []
+    let start = sorted[0]
+    let prev = sorted[0]
+    for (let i = 1; i <= sorted.length; i++) {
+      if (i < sorted.length && sorted[i] === prev + 1) {
+        prev = sorted[i]
+        continue
+      }
+      parts.push(start === prev ? `${start}` : `${start}-${prev}`)
+      if (i < sorted.length) {
+        start = sorted[i]
+        prev = sorted[i]
+      }
+    }
+    return `คาบที่ ${parts.join(', ')}`
+  }
 
   // Merge built-in + custom presets (custom first so they're easy to find)
   const allPresets = [...customPresets, ...ACTIVITY_PRESETS]
@@ -913,6 +983,8 @@ function SpecialActivitiesSection() {
     setTargetGrades([])
     setFixedDay(1)
     setFixedPeriod(6)
+    setPeriodCount(1)
+    setExtraPeriods([])
     setEditingId(null)
     setShowForm(false)
   }
@@ -942,12 +1014,15 @@ function SpecialActivitiesSection() {
 
   function handleSave() {
     if (!name.trim()) return
+    const effective = getEffectivePeriods()
+    if (effective.length === 0) return
     const slot = {
       id: editingId || `FS_${Date.now()}`,
       name: name.trim(),
       slot_type: slotType,
       day: fixedDay,
-      period: fixedPeriod,
+      period: effective[0],
+      periods: effective.slice(1),
       class_ids: gradesToClassIds(targetGrades),
     }
     if (editingId) {
@@ -961,12 +1036,15 @@ function SpecialActivitiesSection() {
   }
 
   function handleEdit(act) {
+    const { count, extra } = periodsToForm(act.period, act.periods)
     setEditingId(act.id)
     setName(act.name)
     setSlotType(act.slot_type || 'assembly')
     setTargetGrades(classIdsToGradeLabels(act.class_ids))
     setFixedDay(act.day || 1)
     setFixedPeriod(act.period || 6)
+    setPeriodCount(count)
+    setExtraPeriods(extra)
     setShowForm(true)
   }
 
@@ -1095,8 +1173,8 @@ function SpecialActivitiesSection() {
             </div>
           </div>
 
-          {/* Day + Period */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Day + Period(s) */}
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="font-medium text-gray-600 mb-1 block">วัน</label>
               <select
@@ -1110,7 +1188,7 @@ function SpecialActivitiesSection() {
               </select>
             </div>
             <div>
-              <label className="font-medium text-gray-600 mb-1 block">คาบที่</label>
+              <label className="font-medium text-gray-600 mb-1 block">คาบเริ่ม</label>
               <input
                 type="number" min="1" max="10"
                 value={fixedPeriod}
@@ -1118,6 +1196,53 @@ function SpecialActivitiesSection() {
                 className="w-full border border-gray-300 rounded-lg px-2 py-1.5"
               />
             </div>
+            <div>
+              <label className="font-medium text-gray-600 mb-1 block">จำนวนคาบติด</label>
+              <input
+                type="number" min="1" max="10"
+                value={periodCount}
+                onChange={(e) => setPeriodCount(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-full border border-gray-300 rounded-lg px-2 py-1.5"
+              />
+            </div>
+          </div>
+
+          {/* Non-consecutive extra periods */}
+          <div>
+            <label className="font-medium text-gray-600 mb-1 block flex items-center gap-1.5">
+              เพิ่มคาบเฉพาะ (ไม่ติดกัน)
+              <span className="text-xs font-normal text-gray-400">— ติ๊กเพิ่มคาบอื่นในวันเดียวกัน</span>
+            </label>
+            <div className="flex gap-1 flex-wrap">
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((p) => {
+                const inRange = p >= fixedPeriod && p < fixedPeriod + periodCount
+                const isSelected = extraPeriods.includes(p)
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    disabled={inRange}
+                    onClick={() => {
+                      setExtraPeriods((prev) =>
+                        isSelected ? prev.filter((x) => x !== p) : [...prev, p].sort((a, b) => a - b)
+                      )
+                    }}
+                    className={`px-2 py-1 rounded-md font-medium border transition-all
+                      ${inRange
+                        ? 'bg-gray-100 text-gray-300 border-gray-100 cursor-not-allowed'
+                        : isSelected
+                          ? 'bg-purple-600 text-white border-purple-600'
+                          : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
+                      }`}
+                  >
+                    คาบ {p}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              กิจกรรมนี้จะล็อกทั้งหมด {getEffectivePeriods().length} คาบ: {formatPeriodsText(getEffectivePeriods())}
+            </p>
           </div>
 
           {/* Actions */}
@@ -1150,7 +1275,7 @@ function SpecialActivitiesSection() {
                     {SLOT_TYPE_LABELS[act.slot_type] || act.slot_type}
                   </span>
                   <div className="text-gray-500">
-                    {DAY_NAMES[(act.day || 1) - 1]} คาบที่ {act.period}
+                    {DAY_NAMES[(act.day || 1) - 1]} {formatPeriodsText([act.period, ...(act.periods || [])])}
                   </div>
                   {grades.length > 0 ? (
                     <div className="flex gap-1">

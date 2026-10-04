@@ -595,7 +595,7 @@ function ExcelDropZone({ onFile, label = 'ลากไฟล์ Excel มาว�
 // ── Excel Import Modal ──────────────────────────────────────────────────────
 
 function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
-  const { setFixtureDataDirect, clearResult } = useApp()
+  const { setFixtureDataDirect, clearResult, fixtureData } = useApp()
   const [step, setStep] = useState('upload')
   const [file, setFile] = useState(null)
   const [detectResult, setDetectResult] = useState(null)
@@ -663,9 +663,10 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
       setImportResult(data)
       clearResult()
 
+      const defaultMax = fixtureData?.schedule_config?.default_max_periods_per_week || 22
       const teachers = (data.teachers || []).map((t) => ({
         id: t.id, name: t.name,
-        max_periods_per_week: t.max_periods_per_week || 22,
+        max_periods_per_week: t.max_periods_per_week || defaultMax,
         min_periods_per_week: t.min_periods_per_week || 0,
         unavailable_slots: t.unavailable_slots || [],
         admin_role: t.admin_role || 'none',
@@ -689,6 +690,7 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
         schedule_config: {
           days_per_week: 5, periods_per_day: 8, lunch_periods: [4],
           assembly_slots: [], max_consecutive_teaching: 4, pe_hot_periods: [],
+          default_max_periods_per_week: defaultMax,
         },
         solver_time_limit_seconds: 5.0,
       })
@@ -716,9 +718,10 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
       setImportResult(data)
       clearResult()
 
+      const defaultMax = fixtureData?.schedule_config?.default_max_periods_per_week || 22
       const teachers = (data.teachers || []).map((t) => ({
         id: t.id, name: t.name,
-        max_periods_per_week: t.max_periods_per_week || 22,
+        max_periods_per_week: t.max_periods_per_week || defaultMax,
         min_periods_per_week: t.min_periods_per_week || 0,
         unavailable_slots: t.unavailable_slots || [],
         admin_role: t.admin_role || 'none',
@@ -742,6 +745,7 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
         schedule_config: {
           days_per_week: 5, periods_per_day: 8, lunch_periods: [4],
           assembly_slots: [], max_consecutive_teaching: 4, pe_hot_periods: [],
+          default_max_periods_per_week: defaultMax,
         },
         solver_time_limit_seconds: 5.0,
       })

@@ -52,6 +52,10 @@ class OptimizationMode(str, Enum):
 class Teacher(BaseModel):
     id: str
     name: str
+    teacher_type: str = Field(
+        default="regular",
+        description="Type of teacher: 'regular' | 'special' | 'foreign' | 'trainee' (นศ.ฝึกสอน). Display-only — solver treats all equally.",
+    )
     max_periods_per_week: int = Field(default=30, ge=0)
     min_periods_per_week: int = Field(default=0, ge=0)
     unavailable_slots: list[str] = Field(
@@ -88,6 +92,10 @@ class Teacher(BaseModel):
         default=False,
         description="Flag: True if user manually selected N (otherwise smart default is used)",
     )
+    spread_free_periods: bool = Field(
+        default=False,
+        description="Soft constraint: teacher should have >=1 free period in the morning AND >=1 free period in the afternoon each day (opt-in)",
+    )
 
 
 class Room(BaseModel):
@@ -103,6 +111,10 @@ class Subject(BaseModel):
     is_heavy: bool = Field(
         default=False,
         description="S2: Heavy subjects (math, physics, English) preferred in morning slots",
+    )
+    time_preference: str = Field(
+        default="any",
+        description="Soft preference for scheduling time: 'any' | 'morning' | 'afternoon'",
     )
 
 
@@ -127,6 +139,10 @@ class LessonBlock(BaseModel):
     id: str
     subject_id: str
     teacher_id: str
+    co_teacher_id: Optional[str] = Field(
+        default=None,
+        description="Co-teacher (second teacher) teaching simultaneously, e.g. MEP Thai+foreign teacher",
+    )
     class_id: str
     room_id: Optional[str] = None
     periods_per_week: int = Field(ge=1, le=10)
@@ -147,10 +163,28 @@ class FixedSlot(BaseModel):
     slot_type: FixedSlotType
     day: int = Field(ge=1, le=5)
     period: int = Field(ge=1, le=10)
+    periods: list[int] = Field(
+        default_factory=list,
+        description="Additional consecutive/specific periods in the same day (period stays as the first period for backward compat). Effective periods = sorted(union([period] + periods)).",
+    )
     class_ids: list[str] = Field(
         default_factory=list,
         description="Empty list = all classes",
     )
+
+    def effective_periods(self) -> list[int]:
+        """Return the sorted list of all periods this fixed slot occupies."""
+        return sorted(set([self.period, *self.periods]))
+
+
+class SubjectTimeRule(BaseModel):
+    """A user-defined rule pinning a specific subject to a half of the day.
+
+    Used by the 'วิชาเฉพาะช่วงเวลา' section of the Global Conditions UI.
+    """
+    subject_id: str
+    preference: str = Field(default="morning", description="'morning' | 'afternoon' — the half this subject should be scheduled in")
+    mode: str = Field(default="soft", description="'soft' (penalty) | 'hard' (constraint) | 'off' (disabled)")
 
 
 class ScheduleConfig(BaseModel):
@@ -170,9 +204,60 @@ class ScheduleConfig(BaseModel):
         le=8,
         description="Soft constraint: max consecutive periods a teacher can teach",
     )
+    default_max_periods_per_week: int = Field(
+        default=22,
+        ge=0,
+        le=60,
+        description="Default max_periods_per_week used for NEW teachers / imports / fallbacks (editable in Global Conditions UI)",
+    )
     pe_hot_periods: list[str] = Field(
         default_factory=list,
         description="List of 'day-period' strings where PE should not be scheduled (hot periods)",
+    )
+    am_pm_free_mode: str = Field(
+        default="off",
+        description="Global '1 free morning + 1 free afternoon' per day: 'off' | 'soft' | 'hard'. Applies to all teachers; per-teacher spread_free_periods is used only when this is 'off'.",
+    )
+    max_consecutive_mode: str = Field(
+        default="soft",
+        description="Max consecutive teaching mode: 'off' | 'soft' | 'hard'",
+    )
+    subject_day_spacing_mode: str = Field(
+        default="soft",
+        description="S1 mode: 'off' | 'soft' | 'hard' (legacy bool enable_subject_day_spacing = soft when True, off when False)",
+    )
+    heavy_morning_mode: str = Field(
+        default="soft",
+        description="S2 mode: 'off' | 'soft' | 'hard' (legacy bool enable_heavy_morning = soft when True, off when False)",
+    )
+    workload_balance_mode: str = Field(
+        default="soft",
+        description="Elastic workload balance mode: 'off' | 'soft' (legacy bool enable_workload_balance)",
+    )
+    gap_clustering_mode: str = Field(
+        default="soft",
+        description="Teacher gap clustering mode (DEEP): 'off' | 'soft' (legacy bool enable_gap_clustering)",
+    )
+    # Legacy bool fields (kept for backward compat with old fixtures/UI)
+    enable_subject_day_spacing: bool = Field(
+        default=True,
+        description="LEGACY: prefer not scheduling the same lesson block on consecutive days",
+    )
+    enable_heavy_morning: bool = Field(
+        default=True,
+        description="LEGACY: prefer heavy subjects in morning periods",
+    )
+    enable_workload_balance: bool = Field(
+        default=True,
+        description="LEGACY: spread a teacher's daily load evenly across days",
+    )
+    enable_gap_clustering: bool = Field(
+        default=True,
+        description="LEGACY: DEEP — cluster a teacher's periods to minimize idle gaps",
+    )
+    subject_time_rules: list[SubjectTimeRule] = Field(
+        default_factory=list,
+        description="User-defined subject time preference rules (วิชาเฉพาะช่วงเวลา)",
     )
 
 
@@ -329,6 +414,10 @@ class DiagnosticsReport(BaseModel):
     room_overloads: list[RoomOverload] = Field(default_factory=list)
     fixed_slot_conflicts: list[FixedSlotConflict] = Field(default_factory=list)
     class_capacity_issues: list[ClassCapacityIssue] = Field(default_factory=list)
+    hard_rule_issues: list[str] = Field(
+        default_factory=list,
+        description="Human-readable reasons why a HARD global rule is provably impossible",
+    )
     notes: list[str] = Field(default_factory=list)
 
     def has_blocking_issues(self) -> bool:
@@ -349,6 +438,7 @@ class DiagnosticsReport(BaseModel):
             blocking_teacher_overloads
             or self.room_overloads
             or self.fixed_slot_conflicts
+            or self.hard_rule_issues
         )
 
 

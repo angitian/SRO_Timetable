@@ -13,7 +13,7 @@ const FIELDS = [
 ]
 
 export default function ExcelImportPage() {
-  const { setFixtureDataDirect, setView, clearResult } = useApp()
+  const { fixtureData, setFixtureDataDirect, setView, clearResult } = useApp()
   const [step, setStep] = useState('upload') // upload → mapping → preview → done
   const [file, setFile] = useState(null)
   const [detectResult, setDetectResult] = useState(null)
@@ -66,10 +66,11 @@ export default function ExcelImportPage() {
 
       // Build fixtureData from import result and set in context
       // Ensure teachers have all required fields
+      const currentDefault = fixtureData?.schedule_config?.default_max_periods_per_week || 22
       const teachers = (data.teachers || []).map((t) => ({
         id: t.id,
         name: t.name,
-        max_periods_per_week: t.max_periods_per_week || 22,
+        max_periods_per_week: t.max_periods_per_week || currentDefault,
         min_periods_per_week: t.min_periods_per_week || 0,
         unavailable_slots: t.unavailable_slots || [],
         admin_role: t.admin_role || 'none',
@@ -84,7 +85,7 @@ export default function ExcelImportPage() {
       const specialRooms = data.special_rooms || []
       const rooms = (data.rooms || []).length > 0 ? data.rooms : [...classRooms, ...specialRooms]
 
-      const fixtureData = {
+      const newFixtureData = {
         teachers,
         rooms,
         special_rooms: specialRooms,
@@ -99,17 +100,18 @@ export default function ExcelImportPage() {
           assembly_slots: [],
           max_consecutive_teaching: 4,
           pe_hot_periods: [],
+          default_max_periods_per_week: currentDefault,
         },
         solver_time_limit_seconds: 5.0,
       }
-      setFixtureDataDirect(fixtureData)
+      setFixtureDataDirect(newFixtureData)
 
       setStep('done')
     } catch (err) {
       setError(err.message)
     }
     setLoading(false)
-  }, [file, mapping, clearResult])
+  }, [file, mapping, clearResult, fixtureData])
 
   function updateMapping(field, header) {
     setMapping((prev) => ({ ...prev, [field]: header || null }))
