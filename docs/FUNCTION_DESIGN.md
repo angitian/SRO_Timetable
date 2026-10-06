@@ -25,6 +25,7 @@
 13. [แนวทางการรวมกับระบบหลัก (Integration Guide)](#13-แนวทางการรวมกับระบบหลัก)
 14. [การ Deploy และการตั้งค่า](#14-การ-deploy-และการตั้งค่า)
 15. [ระบบสอนแทนรายวัน (Daily Substitute Schedule)](#15-ระบบสอนแทนรายวัน-daily-substitute-schedule)
+16. [Co-teaching แบบยืดหยุ่นไม่จำกัดบุคลากร (N-Teacher Co-teaching)](#16-co-teaching-แบบยืดหยุ่นไม่จำกัดบุคลากร-n-teacher-co-teaching)
 
 ---
 
@@ -869,4 +870,118 @@ CREATE INDEX idx_dsa_original_teacher ON daily_substitute_assignments(original_t
 5. **ซิงก์ข้ามเครื่อง**: ระดับ 1 เป็น per-browser — ระดับ 2 ต้องบันทึกผ่าน API ฝั่งหลัก
 6. **กันครูซ้ำเวลาเดียวกัน**: ครูรับสอนแทนแล้ว 1 คาบเวลา → ไม่โผล่ในรายชื่อครูว่างคาบนั้นอีก (บังคับใน
    `computeFreeTeachers`)
+
+---
+
+## 16. Co-teaching แบบยืดหยุ่นไม่จำกัดบุคลากร (N-Teacher Co-teaching)
+
+> พิมพ์เขียวข้อกำหนดและแนวทางพัฒนาสำหรับ**ระบบหลัก (Main System)** — เพิ่มในรอบงานล่าสุด (2026-10-06)
+> เนื้อหาในหัวข้อนี้เป็นการวิเคราะห์เทียบกับโค้ดจริงของ POC (สถานะปัจจุบันรองรับ co-teacher ได้ **คนเดียว**)
+> เพื่อใช้เป็นข้อมูลอ้างอิงในการขยายเป็น **N คนต่อ 1 ก้อนวิชา** และนำไปบรรจุลงแผนงาน `features/timetable.md`
+> ของระบบหลัก
+
+### 16.1 ภาพรวม (Feature Overview)
+
+รองรับการผูก**ครูผู้สอนร่วมไม่จำกัดจำนวนต่อ 1 ก้อนวิชา (Lesson Block)** ครอบคลุมบริบทจริงของโรงเรียนไทย
+โดยเฉพาะห้องเรียนพิเศษ EP/MEP/ห้องเรียนขยายโอกาส เช่น 1 คาบเรียนมี ครูไทยหลัก + ครูต่างชาติ Native +
+นศ.ฝึกสอน 1–2 คน เข้าสอนพร้อมกัน — โดยไม่เพิ่มมิติตัวแปรในระดับ solver (ประสิทธิภาพคงเดิม)
+
+**สถานะปัจจุบันใน POC**: `LessonBlock.co_teacher_id` รองรับครูร่วมได้ 1 คน (main + co) — ครบทุกชั้น
+(solver/preflight/parser/UI) แต่วางสายต่อแบบ hard-coded ไว้ที่ 2 คน
+
+### 16.2 ข้อกำหนดเชิงฟังก์ชัน (Functional Requirements)
+
+**FR1 — N-Teacher Co-teaching per Block**: 1 ก้อนวิชามี `teacher_ids: list[str]` ได้ไม่จำกัด
+(ใช้งานจริง 2–4 คน) — ครูทุกคนในลิสต์ "สอนพร้อมกัน" ที่ (วัน, คาบ) เดียวกัน
+
+**FR2 — Dual Ingestion (นำเข้าข้อมูล 2 ช่องทาง)**:
+1. **Excel Batch Ingestion (รอบแรก)**: ช่องรหัสครูในชีต `Course_Mapping` ใส่รหัสหลายคนคั่นด้วยจุลภาค
+   ได้ทันที เช่น `T01, T_ENG_02, TR_003`
+2. **Interactive UI Drag & Drop (รอบปรับแต่ง)**: หน้าจัดวิชา → เลือกก้อนวิชา → ลากชิปรายชื่อครูจาก
+   **Teacher Pool** (แยกแท็บตาม กลุ่มสาระ / ต่างชาติ / นศ.ฝึกสอน) มาหยอดใส่การ์ดวิชา
+
+**FR3 — Zero Configuration Hell**: ไม่ต้อง Dropdown ซ้อนหลายชั้น — ระบบแสดง **Visual Warning** ทันที
+เมื่อลากครูที่**ไม่มีช่วงเวลาว่างตรงกันเลย** (Intersection of Free Slots ว่าง) มาก่อนกดจัดตาราง
+
+### 16.3 การวิเคราะห์ผลกระทบทางเทคนิค (เทียบโค้ดจริงของ POC)
+
+| # | ส่วน | สถานะเดิมใน POC (โค้ดจริง) | การปรับปรุงในระบบหลัก | ระดับผลกระทบ |
+|---|---|---|---|---|
+| 1 | **Data Contract** — `backend/models.py` | `LessonBlock.teacher_id: str` + `co_teacher_id: Optional[str]` (บรรทัด 138–145) | เพิ่ม `teacher_ids: list[str] = Field(default_factory=list)`; คง `teacher_id` ไว้เป็น **primary** สำหรับ backward compat; **Pydantic validator** คอยซิงก์: ถ้า `teacher_ids` ว่าง → derive จาก `teacher_id`+`co_teacher_id`; ถ้ามีค่า → `teacher_id` = ตัวแรกเสมอ, dedupe/trim | 🟡 ต่ำ–ปานกลาง |
+| 2 | **Excel Parser** — `backend/excel_parser.py` | คอลัมน์ `co_teacher_name` ตัวเดียว (บรรทัด ~30–34, 287, 313) resolution แบบ **name → auto-id**; ยังไม่มี `identity_factory` | แยกคอลัมน์ครูด้วย `.split(',')` + strip (pattern มีอยู่แล้วใน `_parse_unavailable_slots`/`_parse_period_list`); resolution ผ่าน `identity_factory` (ต้องออกแบบใหม่ — รับรหัสครู/ชื่อ → entity ที่มีอยู่หรือสร้างใหม่); อัปเดต `generate_full_template` ให้มีคอลัมน์รองรับหลายรหัส | 🟢 ต่ำ |
+| 3 | **Solver Engine** — `backend/solver.py` | `_build_teacher_lb_map` (บรรทัด 197–206) ใส่ main+co; `_is_valid_slot` (262–273) เช็ค main+co; `_compute_teacher_loads` (1254–1263) นับ main+co | วนลูปสมาชิก**ทุกคน**ใน `teacher_ids`: map/lb, เช็ค unavailable, นับภาระ — ตัวแปรตัดสินใจ `x[(lb_idx, d, p)]` ยังผูกกับ `lb` **ไม่เพิ่มมิติ** → ความเร็ว solver คงเดิม (sub-second) | 🟢 ต่ำ |
+| 4 | **Pre-flight Check** — `backend/preflight.py` | `_count_teacher_available_slots` (205–232) นับ taught classes แบบ main OR co; `_check_teacher_overloads` (410–415) นับภาระ main+co | นับภาระ (Teaching Load) ให้**ครูทุกคนใน `teacher_ids`**; **ใหม่ — Intersection Availability check**: คำนวณช่วงว่างร่วมของครูทุกคนใน block (ว่าง = INFEASIBLE วินิจฉัยได้ก่อน solver) | 🟡 ปานกลาง (สำคัญมาก) |
+| 5 | **Fixed Slot Conflict** — `backend/preflight.py` `_check_fixed_slot_conflicts` (495+) | เช็คเฉพาะ `lb.teacher_id` (main) | ⚠️ **จุดที่พิมพ์เขียวเดิมพลาด** — ต้องเช็ค unavailable/fixed ชนให้**ครูทุกคน**ใน `teacher_ids` ด้วย | 🟡 ปานกลาง |
+| 6 | **Frontend — Verification** — `VerificationStep.jsx` | matrix ใช้ `[lb.teacher_id, lb.co_teacher_id]` (บรรทัด 149); `teacherLoad.js` `computeNeededPerTeacher` นับ co | ขยายเป็น spread `lb.teacher_ids` — matrix ครู×ห้อง, TeacherSummaryTable, รายงานคาบไม่ครบ นับสมาชิกทุกคน | 🟡 ปานกลาง |
+| 7 | **Frontend — Grid** — `GridCell.jsx` / `TimetableGrid.jsx` | แสดง `{teacher} + {coTeacher}` (บรรทัด 234–236, 303–305) | แสดงชื่อครูหลัก + ชิปย่อครูร่วม (เช่น `สมศรี +2` / tooltip รายชื่อครบ) ในทุกมุมมอง (ห้อง/ครู/พิมพ์/PublicViewer) | 🟡 ปานกลาง |
+| 8 | **ระบบสอนแทนรายวัน (หัวข้อ 15)** | `original_teacher_id` อ้างอิงครูคนเดียว | ⚠️ **จุดที่พิมพ์เขียวเดิมไม่ได้พูดถึง** — สอนแทนต้องระบุว่าแทน**ครูคนไหน**ใน `teacher_ids` (เช่น ครูต่างชาติลา → หาแทนเฉพาะตำแหน่งนั้น) | 🟡 ปานกลาง |
+
+**หลักการนับภาระ (สำคัญ)**: คาบ 1 คาบของ block ที่มี N ครู → นับภาระครู **คนละ 1 คาบ (×N ในมุมครู)**
+แต่ class capacity / room usage นับ **block ครั้งเดียว** — ไม่คูณ N
+
+### 16.4 เนื้อหาสำหรับแผนงาน (Roadmap Text → `features/timetable.md`)
+
+```markdown
+### Phase B.3: Flexible Multi-Teacher Co-teaching Extension
+- **Feature Overview**: รองรับการผูกครูผู้สอนร่วมใน 1 คาบเรียนได้ไม่จำกัด (N-person Co-teaching)
+  รองรับการประกบ ครูหลัก + ครูต่างชาติ + นศ.ฝึกสอน (EP/MEP/ขยายโอกาส)
+- **Backend Tasks**:
+  1. [Schema] ขยาย `LessonBlock.teacher_ids` เป็น `list[str]` พร้อม Backward-compatibility layer
+     (validator ซิงก์ teacher_id/co_teacher_id → teacher_ids, dedupe, ลำดับคงที่)
+  2. [Excel Parser] อัปเกรด `import_multi_sheet` ให้แยก comma-separated IDs จากคอลัมน์ครูผู้สอน
+     + อัปเดต template Excel (`generate_full_template`)
+  3. [Preflight] ปรับ `_count_teacher_available_slots` ให้นับภาระครูทุกคนในลิสต์ + ตรวจ
+     **Intersected Availability** (ช่วงว่างร่วมของทุกคน) + เช็ค fixed-slot conflict ครบทุกคน
+  4. [Solver] ปรับ Constraint H1 (Teacher Clash) + `_is_valid_slot` + `_compute_teacher_loads`
+     ให้ iterate สมาชิกทุกคนใน `teacher_ids` (ตัวแปรตัดสินใจยังผูกกับ lesson block — ไม่เพิ่มมิติ)
+  5. [Substitute] ระบบสอนแทนรายวันรองรับการระบุ "แทนครูคนไหน" ในลิสต์ครูร่วม
+  6. [Test] เพิ่ม pytest: N-teacher clash, load ×N, intersection ว่าง → diagnostics, backward compat
+- **Frontend Tasks**:
+  1. [Ingestion UI] สร้างคอมโพเนนต์ Teacher Pool (แท็บกลุ่มสาระ/ต่างชาติ/นศ.ฝึกสอน)
+     + Drag-and-Drop หยอดครูเข้าการ์ดวิชา
+  2. [Real-time Warning] คำนวณช่วงเวลาว่างร่วมกันของกลุ่มครูใน Block แจ้งเตือนทันที
+     หากไม่มีช่วงว่างตรงกันก่อน Solve
+  3. [Timetable Grid] ปรับ Render กล่องคาบเรียนให้แสดงชื่อบุคลากรครบทุกคนอย่างชัดเจน
+     (ครูหลัก + ชิปย่อ เช่น `สมศรี +2`, tooltip รายชื่อครบ) ในทุกมุมมอง/เอกสารพิมพ์/PublicViewer
+  4. [Verification] ปรับ TeacherClassMatrix / TeacherSummaryTable / ภาระงานครู
+     ให้แสดงและนับครูร่วมทุกคน
+```
+
+### 16.5 คุณค่าเชิงธุรกิจ (Business Value)
+
+- แก้ Pain Point ของโรงเรียนขนาดกลาง–ใหญ่ และโรงเรียนขยายโอกาส: นศ.ฝึกสอนมีคาบชนกับครูพี่เลี้ยง,
+  ตารางครูต่างชาติไม่ลงตัว, ต้องใช้ Excel วางเองทุกสัปดาห์
+- **ไม่กระทบ Core Performance**: สถาปัตยกรรมคงความเร็วระดับ Sub-second (<0.7s) ของ OR-Tools CP-SAT
+  เพราะไม่สร้างมิติตัวแปรใหม่ในระดับ solver (x ยังผูกกับ lesson block)
+- รองรับห้องเรียนพิเศษ (EP/MEP) ที่เป็นกลุ่มลูกค้าหลักของระบบ — ต่างจากซอฟต์แวร์จัดตารางทั่วไปที่
+  รองรับ co-teacher แค่ 1 คน
+
+### 16.6 ข้อควรระวัง (Gotchas)
+
+1. **Backward compatibility**: ข้อมูลเก่าที่ยังใช้ `teacher_id`/`co_teacher_id` ต้องอ่านได้ —
+   ให้ validator แปลงเป็น `teacher_ids` อัตโนมัติ; `teacher_id` ต้องเป็นตัวแรกเสมอ (ใช้เป็น primary
+   สำหรับ ScheduledSlot/display/substitute)
+2. **Dedupe และลำดับ**: `teacher_ids` ต้องไม่ซ้ำกัน, เรียงลำดับคงที่ (กัน diff ไม่เสถียร),
+   ต้องไม่รวม `teacher_id` กับ `co_teacher_id` ซ้ำ
+3. **นับภาระไม่คูณ N**: คาบของ block ที่มี N ครู นับภาระครูคนละ 1 (ในมุมครู ×N) แต่ class capacity
+   / room usage นับ block ละ 1 — อย่าทำซ้ำซ้อน
+4. **Intersection ว่าง**: block ที่ครูทุกคนไม่มีช่วงว่างตรงกันเลย = จัดไม่ได้ — ต้องจับได้ตั้งแต่
+   preflight (diagnostics ภาษาไทย "ครูทั้ง N คนไม่มีคาบว่างตรงกัน") + Visual Warning ฝั่ง UI
+   ก่อนกดจัด
+5. **Multi-block**: ห้องที่อยู่ใน schedule block ต่างกันมีเลขคาบ/เวลาไม่เท่ากัน — ตรวจช่วงว่างร่วม
+   ต้องเทียบตามเวลาจริง (period_no ของ block นั้น), ไม่ใช่เลขคาบลอยๆ
+6. **Substitute กับ co-teach**: ครูที่ลาใน block ที่มีหลายคน — สอนแทนต้องผูกกับ
+   "ตำแหน่งครูที่ลา" (`original_teacher_id` เจาะจงคน), ครูร่วมที่เหลือยังสอนปกติ ไม่ต้องหาคนแทนทั้งคาบ
+7. **Fixed slot conflict**: การเช็คคาบชนของ block ที่ `is_fixed` ต้องเช็คครูทุกคน — ปัจจุบัน POC
+   เช็คเฉพาะ main teacher
+8. **Display แนวตั้ง/พิมพ์**: กล่องคาบที่มี 4 ชื่อต้องแสดงแบบ compact (`ครูหลัก +2`) และ
+   เอกสารพิมพ์/PublicViewer ต้องแสดงชื่อครบ (ไม่ตัดทิ้ง) — ตรงกับ Pain Point ของครูที่ต้องการเห็น
+   "ใครเข้าห้องบ้าง"
+9. **`identity_factory` ใหม่**: POC resolution เป็นแบบ name→auto-id — ระบบหลักต้องนิยามกลไก
+   แก้รหัสครู (`T01`/`T_ENG_02`/`TR_003`) → entity เดิมหรือสร้างใหม่ และ error ที่อ่านเข้าใจได้
+   ถ้าเจอรหัสไม่รู้จัก
+10. **นศ.ฝึกสอน (Trainee)**: `teacher_type` มีค่า `trainee` อยู่แล้ว — กำหนดเพดานภาระ/วันว่าง
+    ตามข้อกำหนดโรงเรียน (เช่น สอนไม่เกิน 5 คาบ/สัปดาห์, ไม่โดนจัดคาบสุดท้าย) ผ่าน max/min period
+    ที่มีอยู่ — ไม่ต้องเพิ่มกลไกใหม่
+
 
