@@ -7,6 +7,7 @@ import TeacherWorkloadStep from './pages/TeacherWorkloadStep.jsx'
 import VerificationStep from './pages/VerificationStep.jsx'
 import TimetableView from './pages/TimetableView.jsx'
 import PrintStudio from './pages/PrintStudio.jsx'
+import SubstituteCenterPage from './pages/SubstituteCenterPage.jsx'
 import PublicViewerPage from './pages/PublicViewerPage.jsx'
 import AuthCallback from './pages/AuthCallback.jsx'
 
@@ -32,6 +33,7 @@ function AppContent() {
       {activeStep === 4 && <VerificationStep />}
       {activeStep === 5 && <TimetableView />}
       {activeStep === 6 && <PrintStudio />}
+      {activeStep === 7 && <SubstituteCenterPage />}
     </Layout>
   )
 }

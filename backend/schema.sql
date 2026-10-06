@@ -290,3 +290,41 @@ CREATE TRIGGER trg_lesson_blocks_updated BEFORE UPDATE ON lesson_blocks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 CREATE TRIGGER trg_excel_imports_updated BEFORE UPDATE ON excel_imports
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ── 16. daily substitute schedules (ระบบสอนแทนรายวัน — design เตรียมไว้สำหรับระบบหลัก) ──
+-- ข้อมูลรายวันเป็น layer แยกจากตารางหลัก (timetable_slots) — ไม่แก้ตารางหลัก
+-- อ้างอิงดีไซน์เต็มใน docs/FUNCTION_DESIGN.md หัวข้อ 15
+CREATE TABLE daily_substitute_schedules (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    school_id         UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    schedule_id       UUID REFERENCES school_schedules(id),
+    calendar_date     DATE NOT NULL,
+    day_of_week       INT NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
+    absent_teacher_ids JSONB DEFAULT '[]',
+    note              TEXT,
+    created_by        UUID,
+    created_at        TIMESTAMPTZ DEFAULT now(),
+    updated_at        TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(school_id, schedule_id, calendar_date)
+);
+
+CREATE TABLE daily_substitute_assignments (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    schedule_id             UUID NOT NULL REFERENCES daily_substitute_schedules(id) ON DELETE CASCADE,
+    period_num              INT NOT NULL CHECK (period_num BETWEEN 1 AND 12),
+    class_id                UUID NOT NULL REFERENCES classes(id),
+    subject_id              UUID NOT NULL REFERENCES subjects(id),
+    original_teacher_id     UUID NOT NULL REFERENCES teachers(id),
+    substitute_teacher_id   UUID NOT NULL REFERENCES teachers(id),
+    reason                  TEXT,
+    note                    TEXT,
+    created_at              TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(schedule_id, period_num, class_id)
+);
+
+CREATE INDEX idx_dss_calendar_date ON daily_substitute_schedules(calendar_date);
+CREATE INDEX idx_dss_school_date ON daily_substitute_schedules(school_id, calendar_date);
+CREATE INDEX idx_dsa_schedule ON daily_substitute_assignments(schedule_id);
+CREATE INDEX idx_dsa_substitute_teacher ON daily_substitute_assignments(substitute_teacher_id);
+CREATE INDEX idx_dsa_original_teacher ON daily_substitute_assignments(original_teacher_id);
+

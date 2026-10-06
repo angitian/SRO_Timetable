@@ -4,8 +4,8 @@ import { useApp } from '../../context/AppContext.jsx'
 
 export default function Layout({ children }) {
   const { cacheKey, activeStep } = useApp()
-  // Step 5 (TimetableView) and Step 6 (PrintStudio) use full-width layout
-  const isFullWidth = activeStep === 5 || activeStep === 6
+  // Step 5 (TimetableView), Step 6 (PrintStudio) และ Step 7 (SubstituteCenter) ใช้ full-width layout
+  const isFullWidth = activeStep === 5 || activeStep === 6 || activeStep === 7
   // Step 0 (LandingPage) manages its own full-height layout — no padding
   const isLanding = activeStep === 0
   return (

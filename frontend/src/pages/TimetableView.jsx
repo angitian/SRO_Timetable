@@ -805,6 +805,7 @@ export default function TimetableView() {
         className={viewMode === 'class' ? selectedClass?.name : selectedTeacher?.name}
         onOpenConstraints={() => setShowConstraintsModal(true)}
         onOpenSubstitutes={() => setShowSubstituteModal(true)}
+        onOpenDailySubstitute={() => setStep(7)}
         // Version / Save props
         snapshots={snapshots}
         activeSnapshotId={activeSnapshotId}

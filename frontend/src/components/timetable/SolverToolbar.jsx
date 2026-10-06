@@ -19,6 +19,7 @@ import {
   Calendar,
   CalendarClock,
   Users,
+  UserX,
   FlaskConical,
   FileSpreadsheet,
   Printer,
@@ -272,6 +273,7 @@ export default function SolverToolbar({
   className: selectedClassName,
   onOpenConstraints,
   onOpenSubstitutes,
+  onOpenDailySubstitute,
   // ── Version / Save props ──
   snapshots = [],
   activeSnapshotId = null,
@@ -589,12 +591,24 @@ export default function SolverToolbar({
               onClick={onOpenSubstitutes}
               disabled={!hasResult}
               className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold
+                text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 hover:border-gray-400
+                transition-colors whitespace-nowrap min-w-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="จัดการคาบสอนแทนบนตารางหลัก (แสดงผลบนกริดสัปดาห์)"
+            >
+              <UserX className="w-3.5 h-3.5 shrink-0" />
+              สอนแทน (กริดหลัก)
+            </button>
+
+            <button
+              onClick={onOpenDailySubstitute}
+              disabled={!hasResult}
+              className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold
                 text-orange-700 bg-orange-50 border border-orange-300 hover:bg-orange-100 hover:border-orange-400
                 transition-colors whitespace-nowrap min-w-0 disabled:opacity-40 disabled:cursor-not-allowed"
-              title="จัดการคาบสอนแทน (ครูที่ลา)"
+              title="ระบบสอนแทนรายวัน: เลือกวันที่/ครู → หาครูว่าง → ออกตารางรายวัน + ประวัติ + สถิติ"
             >
               <CalendarClock className="w-3.5 h-3.5 shrink-0" />
-              สอนแทน
+              สอนแทนรายวัน
             </button>
           </div>
         </div>

@@ -51,6 +51,9 @@ const initialState = {
   // substitutes: [{ id, day, period, class_id, subject_id, original_teacher_id, substitute_teacher_id }]
   // Manual "สอนแทน" overrides applied AFTER generation (display-level only).
   substitutes: [],
+  // dailySchedules: { "YYYY-MM-DD": { date, dayOfWeek, absentTeacherIds, note, assignments[] } }
+  // ตารางสอนแทนรายวัน — layer แยกจากตารางหลัก ไม่ปนกับ substitutes/result
+  dailySchedules: {},
   // ── Snapshot versioning ──
   snapshots: [], // metadata list for dropdown
   activeSnapshotId: null, // currently loaded snapshot id
@@ -82,6 +85,7 @@ function reducer(state, action) {
         result: null,
         userPlacements: {},
         substitutes: [],
+        dailySchedules: {},
         error: null,
         errorResponse: null,
         cacheHint: null,
@@ -115,6 +119,7 @@ function reducer(state, action) {
         result: null,
         userPlacements: {},
         substitutes: [],
+        dailySchedules: {},
         error: null,
         errorResponse: null,
         cacheKey: null,
@@ -199,6 +204,23 @@ function reducer(state, action) {
       return { ...state, substitutes: [], isSnapshotDirty: true }
     case 'RESTORE_SUBSTITUTES':
       return { ...state, substitutes: Array.isArray(action.payload) ? action.payload : [] }
+    case 'SET_DAILY_SCHEDULE': {
+      // payload: full DailySchedule object (upsert ตาม date)
+      const date = action.payload?.date
+      if (!date) return state
+      return {
+        ...state,
+        dailySchedules: { ...state.dailySchedules, [date]: action.payload },
+      }
+    }
+    case 'REMOVE_DAILY_SCHEDULE': {
+      // payload: { date }
+      const next = { ...state.dailySchedules }
+      delete next[action.payload.date]
+      return { ...state, dailySchedules: next }
+    }
+    case 'RESTORE_DAILY_SCHEDULES':
+      return { ...state, dailySchedules: (action.payload && typeof action.payload === 'object') ? action.payload : {} }
     case 'CLEAR_RESULT':
       return { ...state, result: null, error: null, errorResponse: null, cacheKey: null, lastSync: null }
     case 'RESTORE_PLACEMENTS': {
@@ -998,6 +1020,14 @@ export function AppProvider({ children }) {
     dispatch({ type: 'CLEAR_SUBSTITUTES' })
   }, [])
 
+  // ── Daily substitute schedule (สอนแทนรายวัน) actions ────────────────
+  const setDailySchedule = useCallback((schedule) => {
+    dispatch({ type: 'SET_DAILY_SCHEDULE', payload: schedule })
+  }, [])
+  const removeDailySchedule = useCallback((date) => {
+    dispatch({ type: 'REMOVE_DAILY_SCHEDULE', payload: { date } })
+  }, [])
+
   // ── Special rooms (facilities) actions ──────────────────────────
   const addSpecialRoom = useCallback((room) => {
     dispatch({ type: 'ADD_SPECIAL_ROOM', payload: room })
@@ -1203,6 +1233,37 @@ export function AppProvider({ children }) {
     }
   }, [state.fixtureData?.schedule_blocks, state.selectedFixture])
 
+  // ── Daily schedules (สอนแทนรายวัน) persistence — localStorage ───────
+  const dailyStorageKey = state.selectedFixture ? `daily_schedules_${state.selectedFixture}` : null
+
+  useEffect(() => {
+    if (!dailyStorageKey) return
+    try {
+      if (state.dailySchedules && Object.keys(state.dailySchedules).length > 0) {
+        localStorage.setItem(dailyStorageKey, JSON.stringify(state.dailySchedules))
+      } else {
+        localStorage.removeItem(dailyStorageKey)
+      }
+    } catch (e) {
+      console.warn('[AppContext] dailySchedules persist failed:', e.message)
+    }
+  }, [state.dailySchedules, dailyStorageKey])
+
+  // Restore daily schedules when fixture loads
+  useEffect(() => {
+    if (state.fixtureData && state.selectedFixture) {
+      const key = `daily_schedules_${state.selectedFixture}`
+      try {
+        const saved = localStorage.getItem(key)
+        if (saved) {
+          dispatch({ type: 'RESTORE_DAILY_SCHEDULES', payload: JSON.parse(saved) })
+        }
+      } catch (e) {
+        console.warn('[AppContext] dailySchedules restore failed:', e.message)
+      }
+    }
+  }, [state.fixtureData?.schedule_blocks, state.selectedFixture])
+
   // ── Auth actions (Google OAuth, optional) ───────────────────────────
   const doLogin = useCallback(async () => {
     try {
@@ -1349,6 +1410,10 @@ export function AppProvider({ children }) {
         setSubstitute,
         removeSubstitute,
         clearSubstitutes,
+        // Daily substitute schedule (สอนแทนรายวัน)
+        dailySchedules: state.dailySchedules,
+        setDailySchedule,
+        removeDailySchedule,
         // Special rooms (facilities)
         addSpecialRoom,
         updateSpecialRoom,

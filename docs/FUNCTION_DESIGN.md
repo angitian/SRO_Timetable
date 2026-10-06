@@ -24,6 +24,7 @@
 12. [การทดสอบ (Testing)](#12-การทดสอบ-testing)
 13. [แนวทางการรวมกับระบบหลัก (Integration Guide)](#13-แนวทางการรวมกับระบบหลัก)
 14. [การ Deploy และการตั้งค่า](#14-การ-deploy-และการตั้งค่า)
+15. [ระบบสอนแทนรายวัน (Daily Substitute Schedule)](#15-ระบบสอนแทนรายวัน-daily-substitute-schedule)
 
 ---
 
@@ -708,3 +709,164 @@ npm run build      # production build
 | คาบว่างแทรก | Idle Gap |
 | ตรวจสอบก่อนจัด | Pre-flight Validation |
 | ครูเกินเพดาน | Over Max Load |
+
+---
+
+## 15. ระบบสอนแทนรายวัน (Daily Substitute Schedule)
+
+> เพิ่มในรอบงานล่าสุด (2026-10-06) — ใช้ใน POC ระดับ 1 (หน้า Step 7)
+> และออกแบบระดับ 2 (DB schema + UX) เตรียมไว้สำหรับรวมกับระบบหลัก
+
+### 15.1 ภาพรวมและความแตกต่างจากระบบสอนแทนเดิม
+
+| | ระบบเดิม (SubstituteManagerModal) | ระบบใหม่ (SubstituteCenterPage) |
+|---|---|---|
+| หลักการ | แก้ระดับ display บนกริดสัปดาห์หลัก | **layer แยกวันที่** ทับบนตารางหลัก |
+| คีย์ข้อมูล | (day, period, class_id) ของสัปดาห์ | **วันที่จริง (YYYY-MM-DD)** + (day, period, class) |
+| การเก็บ | localStorage `substitutes_{fixture}` | localStorage `daily_schedules_{fixture}` |
+| ประวัติ/ย้อนหลัง | ไม่มี | มี — เปิดดู/แก้/ลบย้อนหลังได้ |
+| สถิติ | ไม่มี | มี — คาบปกติ/ชั่วโมง/คาบสอนแทน (สัปดาห์/เดือน/ช่วงเอง) |
+| กระทบตารางหลัก | แสดงผลทับเท่านั้น (ไม่แก้ data) | **ไม่แตะตารางหลักเลย** — แยกข้อมูลคนละชั้น |
+
+**หลักการสำคัญ**: ตารางหลัก (master timetable) เป็นข้อมูลคงที่ — ระบบสอนแทนรายวันเป็น layer
+ที่อ้างอิง slot เดิม (day, period, class) แล้วแทนที่ "ครูผู้สอน" เฉพาะมุมมองรายวัน/สถิติ/เอกสาร
+การลบ/แก้ไขข้อมูลรายวันไม่มีผลกับตารางหลักหรือระบบ substitutes เดิม
+
+### 15.2 Data Model (Level 1 — frontend)
+
+```
+AppContext.state.dailySchedules = { "2026-10-06": DailySchedule, ... }   // key = วันที่จริง
+
+DailySchedule = {
+  date: "2026-10-06",            // วันที่จริง (YYYY-MM-DD)
+  dayOfWeek: 2,                  // derive: จันทร์=1 … อาทิตย์=7
+  absentTeacherIds: ["T01"],     // ครูที่มาร์คว่าลา/ไม่มา (กันออกจากรายชื่อครูว่าง)
+  note: "",                      // หมายเหตุ (แสดงในเอกสาร)
+  assignments: [                 // รายการสอนแทนของวัน
+    {
+      id: "ASG_...",
+      period: 3,                 // เลขคาบ (period_no เดิมของ block)
+      class_id, subject_id,
+      original_teacher_id,       // ครูเจ้าของคาบ (จากตารางหลัก)
+      substitute_teacher_id,     // ครูที่รับสอนแทน
+      created_at, updated_at
+    }
+  ],
+  created_at, updated_at
+}
+```
+
+ไฟล์: `frontend/src/utils/dailySchedule.js` — ตรรกะหลัก
+- `dateToDayOfWeek` / `formatThaiDate` / `formatShortDate` — วันที่ → วัน/ภาษาไทย
+- `getDaySlots(resultSlots, userPlacements, lessonBlockMap, dayOfWeek)` — slots ของวันนั้น (solver + user placements)
+- `computeFreeTeachers({ dayOfWeek, period, daySlots, assignments, teachers, absentTeacherIds, lessonBlockMap })` —
+  ครูว่าง = ไม่ใช่ครู/co-teacher ของคาบนั้นในตารางหลัก **และ** ไม่ได้รับสอนแทนคาบนั้นแล้ว **และ** ไม่อยู่ใน
+  unavailable/admin_free **และ** ไม่ได้มาร์คลา
+- `getClassPeriods` / `getPeriodDurationMinutes` — คาบ (STUDY เท่านั้น, ไม่นับ lunch/break) + ช่วงเวลาจริง
+- `buildDailyGrid` — กริด ห้อง × คาบ ของวัน (cell มี `isSubstitute`/`originalName` สำหรับไฮไลต์)
+
+### 15.3 Flow การใช้งาน (หน้า Step 7 — `SubstituteCenterPage.jsx`)
+
+```
+Tab "รายวัน":
+  1. เลือกวัน/วันที่ (default วันนี้) → ระบบ map เป็น dayOfWeek แล้วโหลดคาบของวันจากตารางหลัก
+  2. เลือกชื่อครู (ลา/ไม่มา/ต้องการดูคาบ) → เห็นคาบที่ครูคนนั้นสอนวันนั้น (วิชา/ห้อง/เวลา/สถานะ)
+  3. กดคาบ → พาเนล "ครูที่ว่างคาบนี้" (คำนวณสด) → กดเลือกครู → บันทึก assignment
+  4. พรีวิว "ตารางใหม่รายวัน" (ต่อห้อง × คาบ, ครูสอนแทนไฮไลต์ส้ม) + export PDF/Excel + หมายเหตุ
+  5. ติ๊ก "ครูที่ลา/ไม่มา" เพื่อกันครูออกจากรายชื่อครูว่าง; ลบ assignment ได้ทันที
+
+Tab "ประวัติ": รายการวันที่เคยจัด (เรียงล่าสุด) → เปิดดู/แก้ไขย้อนหลัง หรือลบทั้งวัน
+
+Tab "สถิติ": เลือกช่วง (สัปดาห์นี้/เดือนนี้/ช่วงวันที่เอง)
+  → สรุป: จำนวนคาบสอนแทน, ครูที่รับสอนแทน, ครูที่รับมากสุด
+  → ตารางต่อครู: คาบปกติ/สัปดาห์, ชม./สัปดาห์, คาบสอนแทน, ชม.สอนแทน, รวมคาบ, % สัดส่วน + แท่งเปรียบเทียบ
+  → คาบสอนแทนรายสัปดาห์ (แท่ง) + export รายงาน PDF/Excel
+```
+
+**ครูที่ว่างคำนวณแบบสด** — ถ้าครูรับสอนแทนคาบนั้นแล้ว จะไม่โผล่ในรายชื่อครูว่างของคาบอื่นที่เวลาเดียวกัน
+(กันซ้ำ); ครูที่มาร์คลาจะถูกตัดออกจากรายชื่อครูว่างทั้งวัน
+
+### 15.4 สถิติครู (`frontend/src/utils/substituteStats.js`)
+
+| ฟังก์ชัน | คำนวณ |
+|---|---|
+| `computeBaseTeacherLoad` | คาบ/สัปดาห์ + คาบ/วัน + นาที/วัน + นาที/สัปดาห์ จากตารางหลัก (นับ co-teacher ทั้งสองฝั่ง, ชั่วโมงจากช่วงเวลาจริงของ block) |
+| `computeSubstituteStats` | คาบสอนแทน/ช่วง + รายวัน + รายสัปดาห์ (group ด้วยจันทร์ของสัปดาห์) จาก dailySchedules |
+| `computeSubstituteSummary` | ยอดรวม/จำนวนครู/ครูที่รับมากสุด |
+| `buildStatsRows` | ตารางรายงานต่อครู เรียงจากรับสอนแทนมากสุด (พร้อม % สัดส่วน) |
+
+**ที่มาของ "ชั่วโมง"**: ใช้ `getPeriodDurationMinutes` จาก `start_time/end_time` ของ period ใน
+schedule block ของห้องนั้น (ไม่นับพักเที่ยง/เบรก) — ไม่ใช่แค่นับจำนวนคาบ
+
+### 15.5 Export (`frontend/src/utils/exportDailySchedule.js`)
+
+- `exportDailySchedulePDF / Excel` — เอกสารตารางรายวัน: หัวเอกสาร (วันที่/วัน), ตารางต่อห้อง
+  (คาบ/เวลา/วิชา/ครูผู้สอน — ครูสอนแทนไฮไลต์ + ครูเดิมกำกับ), สรุปรายการสอนแทน, รายชื่อครูที่ลา
+- `exportStatsPDF / Excel` — รายงานสถิติ (ช่วง + ตารางต่อครู)
+- ใช้ exceljs (dynamic import เหมือน exportExcel.js) + print dialog (เหมือน exportPdf.js)
+
+### 15.6 ระดับ 2 — DB Schema (สำหรับระบบหลัก) — เขียน DDL ลง `backend/schema.sql` แล้ว
+
+```sql
+-- ตารางสอนแทนรายวัน (ชั้นข้อมูลแยกจากตารางหลัก)
+CREATE TABLE daily_substitute_schedules (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    school_id       UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    schedule_id     UUID REFERENCES school_schedules(id),   -- ตารางหลักที่อ้างอิง
+    calendar_date   DATE NOT NULL,                          -- วันที่จริง
+    day_of_week     INT NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
+    absent_teacher_ids JSONB DEFAULT '[]',                  -- ครูที่ลา/ไม่มา
+    note            TEXT,
+    created_by      UUID REFERENCES users(id),
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(school_id, schedule_id, calendar_date)
+);
+
+CREATE TABLE daily_substitute_assignments (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    schedule_id             UUID NOT NULL REFERENCES daily_substitute_schedules(id) ON DELETE CASCADE,
+    period_num              INT NOT NULL CHECK (period_num BETWEEN 1 AND 12),
+    class_id                UUID NOT NULL REFERENCES classes(id),
+    subject_id              UUID NOT NULL REFERENCES subjects(id),
+    original_teacher_id     UUID NOT NULL REFERENCES teachers(id),
+    substitute_teacher_id   UUID NOT NULL REFERENCES teachers(id),
+    reason                  TEXT,
+    note                    TEXT,
+    created_at              TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(schedule_id, period_num, class_id)
+);
+
+CREATE INDEX idx_dss_calendar_date ON daily_substitute_schedules(calendar_date);
+CREATE INDEX idx_dsa_substitute_teacher ON daily_substitute_assignments(substitute_teacher_id);
+CREATE INDEX idx_dsa_original_teacher ON daily_substitute_assignments(original_teacher_id);
+```
+
+**สถิติระดับ 2 (SQL)**: นับ `daily_substitute_assignments` join `daily_substitute_schedules` โดย
+`calendar_date BETWEEN ? AND ?` group by `substitute_teacher_id` — เทียบกับ `teacher_load_after`
+(ตารางหลัก) เพื่อรายงาน "คาบปกติ vs คาบสอนแทน"
+
+### 15.7 ระดับ 2 — UX/UI Design (สำหรับรวมระบบหลัก)
+
+1. **รวม UX ทั้งสองระบบเป็นชุดเดียว**: ระบบเดิม (display-level บนกริดสัปดาห์) + ระบบรายวัน รวมเป็น
+   หน้า/ฟีเจอร์เดียว — เลือกวันที่แล้วกริดสัปดาห์แสดง layer รายวันของวันที่นั้น (ไม่ใช่สองหน้าคู่ขนาน)
+2. **ปฏิทินเลือกวัน** + badge วันที่/สัปดาห์ที่มีข้อมูลอยู่แล้ว — เห็นช่องว่างของสัปดาห์ทันที
+3. **รายงานครูที่ลา**: หน้ารวมครูที่ลาประจำวัน (ลา/อบรม/ประชุม) → ระบบเสนอคาบที่ต้องหาคนแทนอัตโนมัติ
+4. **Workflow อนุมัติ**: ผู้ดูแลมอบหมาย → ครูรับ/ปฏิเสธ → ยืนยัน → ประกาศตารางรายวัน (ตัวเลือก)
+5. **การแจ้งเตือน**: push/Line/โทรศัพท์ — ครูที่รับสอนแทน + ครูที่ลา
+6. **Role**: admin (จัด/อนุมัติ/ดูสถิติทั้งหมด) vs ครู (ดูตารางวันตัวเอง/รับงาน)
+7. **สถิติ dashboard**: chart รายสัปดาห์/เดือน + เปรียบเทียบครู + export หลายรูปแบบ + เหตุผล (ลา/อบรม)
+8. **Responsive**: หน้าจัดรายวันใช้ได้บนโทรศัพท์ (คอลัมน์การ์ด แทนตารางกว้าง)
+
+### 15.8 ข้อควรระวัง (Gotchas)
+
+1. **วันจันทร์=1 … อาทิตย์=7** — การ map วันที่จริง → dayOfWeek ต้องยืนยันกับข้อกำหนดโรงเรียน (บางที่
+   เริ่มวันอาทิตย์/เสาร์) — กำหนดเป็น constant กลางในระดับ 2
+2. **Multi-block**: ห้องที่อยู่ใน schedule block ต่างกัน มีเลขคาบ/เวลาต่างกัน — ตรวจคาบด้วย `period_no`
+   ของ block ของห้องนั้น (ลบ/เบรกไม่นับ)
+3. **Double period**: ต้องหาคนแทนทั้ง 2 คาบ (assign ทีละคาบ — UI แสดงเป็น 2 การ์ด)
+4. **localStorage จำกัด**: POC เก็บ ~180 วัน/จำกัดขนาด (try/catch) — ระดับ 2 ใช้ DB (schema ข้อ 15.6)
+5. **ซิงก์ข้ามเครื่อง**: ระดับ 1 เป็น per-browser — ระดับ 2 ต้องบันทึกผ่าน API ฝั่งหลัก
+6. **กันครูซ้ำเวลาเดียวกัน**: ครูรับสอนแทนแล้ว 1 คาบเวลา → ไม่โผล่ในรายชื่อครูว่างคาบนั้นอีก (บังคับใน
+   `computeFreeTeachers`)
+
