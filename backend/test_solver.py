@@ -21,6 +21,8 @@ from models import (
     SubjectCategory,
     Room,
     ScheduleConfig,
+    ScheduleBlock,
+    SchedulePeriod,
     SubjectTimeRule,
 )
 from solver import TimetableSolver
@@ -272,6 +274,9 @@ def main():
     all_pass = all_pass and success
 
     success = test_teacher_over_max_places_all()
+    all_pass = all_pass and success
+
+    success = test_am_pm_hard_with_blocks()
     all_pass = all_pass and success
 
     print(f"\n{'='*60}")
@@ -1202,6 +1207,80 @@ def test_teacher_over_max_places_all() -> bool:
         return False
 
     print(f"  ✅ PASS: T1 วางครบ 18/18 + load_status 'over' (เกิน max 16 เตือนล้วนๆ)")
+    return True
+
+
+def _with_schedule_block(request: TimetableRequest) -> TimetableRequest:
+    """Attach a schedule block (8 study + lunch at pos 5, real sequential times)
+    covering all classes — mimics the multi-block mode used by the wizard."""
+    periods: list[SchedulePeriod] = []
+    cur = 8 * 60  # 08:00
+    for idx in range(1, 10):
+        is_lunch = idx == 5
+        dur = 60 if is_lunch else 50
+        s, e = cur, cur + dur
+        periods.append(SchedulePeriod(
+            period_no=idx,
+            start_time=f"{s // 60:02d}:{s % 60:02d}",
+            end_time=f"{e // 60:02d}:{e % 60:02d}",
+            type="LUNCH" if is_lunch else "STUDY",
+        ))
+        cur = e + (10 if not is_lunch else 0)
+    request.schedule_blocks = [ScheduleBlock(
+        id="b1",
+        name="ตารางเรียน",
+        target_classes=[c.id for c in request.classes],
+        days_per_week=5,
+        start_time="08:00",
+        period_duration_mins=50,
+        break_duration_mins=10,
+        periods=periods,
+        apply_to_all_days=True,
+    )]
+    return request
+
+
+def test_am_pm_hard_with_blocks() -> bool:
+    """Regression: global am/pm HARD mode with schedule_blocks must not crash
+    preflight (was AttributeError in _study_periods_per_day) and must keep
+    every teacher with a free morning + afternoon period."""
+    print(f"\n{'='*60}")
+    print("  TEST: am_pm HARD with schedule_blocks (regression for 500 crash)")
+    print(f"{'='*60}")
+
+    request = _with_schedule_block(_synthetic_request())
+    request.schedule_config = request.schedule_config.model_copy(
+        update={"am_pm_free_mode": "hard"}
+    )
+
+    try:
+        result = TimetableSolver(request).solve()
+    except Exception as e:  # noqa: BLE001
+        print(f"  ❌ FAIL: crashed: {type(e).__name__}: {e}")
+        return False
+
+    if result.metrics.status not in ("OPTIMAL", "FEASIBLE", "INFEASIBLE"):
+        print(f"  ❌ FAIL: unexpected status {result.metrics.status}")
+        return False
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ✅ PASS: INFEASIBLE but NO crash (preflight ran) — OK")
+        return True
+
+    # Light load → every teacher must have >=1 free morning AND afternoon per day
+    teaching: dict[str, dict[int, set]] = {}
+    for s in result.slots:
+        teaching.setdefault(s.teacher_id, {}).setdefault(s.day, set()).add(s.period)
+    violations = 0
+    for tid, days in teaching.items():
+        for d in range(1, 6):
+            t = days.get(d, set())
+            if not (any(p not in t for p in (1, 2, 3, 4)) and any(p not in t for p in (6, 7, 8, 9))):
+                violations += 1
+    if violations:
+        print(f"  ❌ FAIL: {violations} day(s) without free morning+afternoon")
+        return False
+
+    print(f"  ✅ PASS: block mode + hard — no crash, ครูทุกคนมีว่างเช้า+บ่าย")
     return True
 
 

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, CheckCircle, AlertTriangle,
   Users, Layers, ClipboardCheck, Info,
-  Search, FlaskConical, Copy, Check,
+  Search, FlaskConical, Copy, Check, Table2,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
@@ -11,6 +11,8 @@ import TeacherSummaryTable from '../components/verification/TeacherSummaryTable.
 import ClassroomDensityTable from '../components/verification/ClassroomDensityTable.jsx'
 import FacilityUsageSummary from '../components/verification/FacilityUsageSummary.jsx'
 import FacilityTimetable from '../components/verification/FacilityTimetable.jsx'
+import TeacherClassMatrix from '../components/verification/TeacherClassMatrix.jsx'
+import { exportMatrixExcel, exportMatrixPDF } from '../utils/exportMatrix.js'
 
 export default function VerificationStep() {
   const { fixtureData, error, errorResponse, setStep } = useApp()
@@ -31,6 +33,7 @@ export default function VerificationStep() {
   const blockMap = useMemo(() => new Map(scheduleBlocks.map((b) => [b.id, b])), [scheduleBlocks])
 
   const [activeTab, setActiveTab] = useState('teachers')
+  const [matrixView, setMatrixView] = useState('matrix') // 'matrix' | 'list'
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedFacilityId, setSelectedFacilityId] = useState('')
 
@@ -139,6 +142,46 @@ export default function VerificationStep() {
     return classroomDensity.filter((c) => c.class.name.toLowerCase().includes(q))
   }, [classroomDensity, searchQuery])
 
+  // ── ครู × ห้อง matrix: cells = periods taught (co-teacher counts for both) ──
+  const teacherClassMatrix = useMemo(() => {
+    const cell = {} // "teacherId|classId" → { periods, subjects: {} }
+    for (const lb of lessonBlocks) {
+      const teacherIds = lb.co_teacher_id ? [lb.teacher_id, lb.co_teacher_id] : [lb.teacher_id]
+      for (const tid of teacherIds) {
+        const key = `${tid}|${lb.class_id}`
+        if (!cell[key]) cell[key] = { periods: 0, subjects: {} }
+        cell[key].periods += lb.periods_per_week
+        const subjName = subjectMap.get(lb.subject_id)?.name || lb.subject_id
+        cell[key].subjects[subjName] = (cell[key].subjects[subjName] || 0) + lb.periods_per_week
+      }
+    }
+    const rows = teachers.map((t) => {
+      const perClass = {}
+      let total = 0
+      for (const c of classes) {
+        const v = cell[`${t.id}|${c.id}`]
+        const periods = v?.periods || 0
+        perClass[c.id] = { periods, subjects: v?.subjects || {} }
+        total += periods
+      }
+      return { teacher: t, perClass, total, isOver: total > (t.max_periods_per_week || 0) }
+    })
+    // Column totals = actual lessons per class (co-taught counts ONCE for the class)
+    const colTotals = {}
+    for (const lb of lessonBlocks) {
+      colTotals[lb.class_id] = (colTotals[lb.class_id] || 0) + lb.periods_per_week
+    }
+    const grandTotal = Object.values(colTotals).reduce((s, v) => s + v, 0)
+    const hasCoTeaching = lessonBlocks.some((lb) => lb.co_teacher_id)
+    return { rows, cols: classes, colTotals, grandTotal, hasCoTeaching }
+  }, [teachers, classes, lessonBlocks, subjectMap])
+
+  const filteredMatrixRows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return teacherClassMatrix.rows
+    return teacherClassMatrix.rows.filter((r) => r.teacher.name.toLowerCase().includes(q))
+  }, [teacherClassMatrix, searchQuery])
+
   // ── Facility (special room) usage summary ──
   const facilityUsage = useMemo(() => {
     if (specialRooms.length === 0) return []
@@ -230,6 +273,23 @@ export default function VerificationStep() {
     const c = getSubjectColor(name, category)
     return `${c.bg} ${c.text} ${c.border}`
   }
+
+  // ── Matrix export payload (Excel + PDF) ──
+  const matrixExportBase = useMemo(() => {
+    const { rows, cols, colTotals, grandTotal } = teacherClassMatrix
+    return {
+      title: 'ตารางสรุปครู × ห้อง',
+      rows: rows.map((r) => ({ id: r.teacher.id, name: r.teacher.name, total: r.total })),
+      cols: cols.map((c) => ({ id: c.id, name: c.name })),
+      cellOf: (tid, cid) => teacherClassMatrix.rows.find((r) => r.teacher.id === tid)?.perClass[cid]?.periods || 0,
+      rowTotals: Object.fromEntries(rows.map((r) => [r.teacher.id, r.total])),
+      colTotals,
+      grandTotal,
+    }
+  }, [teacherClassMatrix])
+
+  const handleMatrixExportExcel = () => { exportMatrixExcel(matrixExportBase) }
+  const handleMatrixExportPdf = () => { exportMatrixPDF(matrixExportBase) }
 
   return (
     <div className="space-y-6 pb-24">
@@ -346,6 +406,17 @@ export default function VerificationStep() {
                 ห้องปฏิบัติการ ({specialRooms.length})
               </button>
             )}
+            <button
+              onClick={() => { setActiveTab('matrix'); setSearchQuery('') }}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all
+                ${activeTab === 'matrix'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+            >
+              <Table2 className="w-4 h-4" />
+              ครู × ห้อง
+            </button>
           </div>
           <div className="relative sm:ml-auto sm:w-64">
             <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -377,6 +448,48 @@ export default function VerificationStep() {
               progressColor={progressColor}
               subjectColorClass={subjectColorClass}
             />
+          )}
+
+          {activeTab === 'matrix' && (
+            <div className="space-y-3">
+              {/* View toggle: matrix ↔ original list */}
+              <div className="flex items-center gap-2">
+                <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-medium">
+                  <button
+                    onClick={() => setMatrixView('matrix')}
+                    className={`px-3 py-1.5 rounded-md transition-all
+                      ${matrixView === 'matrix' ? 'bg-white text-emerald-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    ตารางรวม (Matrix)
+                  </button>
+                  <button
+                    onClick={() => setMatrixView('list')}
+                    className={`px-3 py-1.5 rounded-md transition-all
+                      ${matrixView === 'list' ? 'bg-white text-emerald-700 shadow-sm font-semibold' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    แบบเดิม (ตามครู)
+                  </button>
+                </div>
+              </div>
+
+              {matrixView === 'matrix' ? (
+                <TeacherClassMatrix
+                  rows={filteredMatrixRows}
+                  cols={teacherClassMatrix.cols}
+                  colTotals={teacherClassMatrix.colTotals}
+                  grandTotal={teacherClassMatrix.grandTotal}
+                  hasCoTeaching={teacherClassMatrix.hasCoTeaching}
+                  onExportExcel={handleMatrixExportExcel}
+                  onExportPdf={handleMatrixExportPdf}
+                />
+              ) : (
+                <TeacherSummaryTable
+                  teachers={filteredTeachers}
+                  progressColor={progressColor}
+                  subjectColorClass={subjectColorClass}
+                />
+              )}
+            </div>
           )}
         </div>
       </div>

@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, Fragment } from 'react'
 import {
   Plus, Trash2, ArrowRight, ArrowLeft, Clock, Layers, BookOpen, Coffee,
   UtensilsCrossed, X, Check, ChevronDown, ZoomIn, ZoomOut, Edit2, CalendarHeart, Star, Calendar,
+  AlertTriangle,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { generatePeriods, createDefaultBlock, buildClassBlockMap, insertBreakPeriod } from '../utils/periods.js'
@@ -903,6 +904,43 @@ function gradeValueToLabel(value) {
   return GRADE_LEVELS.find((g) => g.value === value)?.label
 }
 
+// ── Duplicate fixed-slot detection (คาบซ้ำในกิจกรรมพิเศษ) ──────────────────
+
+function effectivePeriodsOf(slot) {
+  return [slot.period, ...(slot.periods || [])].sort((a, b) => a - b)
+}
+
+function periodsOverlap(a, b) {
+  return a.some((p) => b.includes(p))
+}
+
+function classesOverlap(aIds, bIds) {
+  // Empty class_ids = ทุกชั้น → ทับทุกอย่าง
+  if (!aIds || aIds.length === 0) return true
+  if (!bIds || bIds.length === 0) return true
+  return aIds.some((c) => bIds.includes(c))
+}
+
+/**
+ * Return existing activities that overlap the candidate slot:
+ * same day + shared period(s) + overlapping classes.
+ * excludeId — skip the activity being edited.
+ */
+function computeSlotConflicts(candidate, activities, excludeId) {
+  const candPeriods = effectivePeriodsOf(candidate)
+  const candIds = candidate.class_ids || []
+  const conflicts = []
+  for (const act of activities || []) {
+    if (excludeId && act.id === excludeId) continue
+    if (act.day !== candidate.day) continue
+    const actPeriods = effectivePeriodsOf(act)
+    if (!periodsOverlap(candPeriods, actPeriods)) continue
+    if (!classesOverlap(candIds, act.class_ids || [])) continue
+    conflicts.push({ act, periods: actPeriods.filter((p) => candPeriods.includes(p)) })
+  }
+  return conflicts
+}
+
 function SpecialActivitiesSection() {
   const { fixtureData, updateFixtureData } = useApp()
   const activities = fixtureData?.fixed_slots || []
@@ -961,6 +999,29 @@ function SpecialActivitiesSection() {
   const allPresets = [...customPresets, ...ACTIVITY_PRESETS]
   const existingPresetNames = new Set(allPresets.map((p) => p.name))
   const canSaveAsPreset = name.trim() && !existingPresetNames.has(name.trim())
+
+  // ── Duplicate detection: คาบซ้ำกับกิจกรรมเดิม ──
+  const formConflicts = useMemo(() => {
+    const effective = getEffectivePeriods()
+    if (effective.length === 0) return []
+    const draft = {
+      day: fixedDay,
+      period: effective[0],
+      periods: effective.slice(1),
+      class_ids: gradesToClassIds(targetGrades),
+    }
+    return computeSlotConflicts(draft, activities, editingId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedDay, fixedPeriod, periodCount, extraPeriods, targetGrades, classes, activities, editingId])
+
+  // Conflicts among EXISTING activities (for list badges)
+  const listConflicts = useMemo(() => {
+    const map = {}
+    for (const a of activities) {
+      map[a.id] = computeSlotConflicts(a, activities, a.id)
+    }
+    return map
+  }, [activities])
 
   function handleSavePreset() {
     const trimmed = name.trim()
@@ -1245,12 +1306,30 @@ function SpecialActivitiesSection() {
             </p>
           </div>
 
+          {/* Duplicate warning */}
+          {formConflicts.length > 0 && (
+            <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 space-y-0.5">
+              <div className="font-bold flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" /> คาบซ้ำกับกิจกรรมที่มีอยู่ — ยังบันทึกไม่ได้
+              </div>
+              <ul className="list-disc pl-5">
+                {formConflicts.map((c, i) => (
+                  <li key={i}>
+                    {c.act.name} ({DAY_NAMES[(c.act.day || 1) - 1]} {formatPeriodsText(c.periods)})
+                  </li>
+                ))}
+              </ul>
+              <p>เปลี่ยนวัน/คาบ/ระดับชั้น หรือลบกิจกรรมเดิมก่อนบันทึก</p>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex gap-2">
             <button
               onClick={handleSave}
-              disabled={!name.trim()}
+              disabled={!name.trim() || formConflicts.length > 0}
               className="btn-primary flex items-center gap-1 disabled:opacity-40"
+              title={formConflicts.length > 0 ? 'คาบซ้ำกับกิจกรรมเดิม — แก้ก่อนบันทึก' : undefined}
             >
               <Check className="w-4 h-4" />
               {editingId ? 'บันทึก' : 'เพิ่มกิจกรรม'}
@@ -1267,6 +1346,7 @@ function SpecialActivitiesSection() {
         <div className="space-y-2">
           {activities.map((act) => {
             const grades = classIdsToGradeLabels(act.class_ids)
+            const conflicts = listConflicts[act.id] || []
             return (
               <div key={act.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
                 <div className="flex items-center gap-3 flex-wrap">
@@ -1277,6 +1357,14 @@ function SpecialActivitiesSection() {
                   <div className="text-gray-500">
                     {DAY_NAMES[(act.day || 1) - 1]} {formatPeriodsText([act.period, ...(act.periods || [])])}
                   </div>
+                  {conflicts.length > 0 && (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium text-[10px]"
+                      title={conflicts.map((c) => `${c.act.name} (${DAY_NAMES[(c.act.day || 1) - 1]} ${formatPeriodsText(c.periods)})`).join(', ')}
+                    >
+                      ⚠ ซ้ำกับ {conflicts.map((c) => c.act.name).join(', ')}
+                    </span>
+                  )}
                   {grades.length > 0 ? (
                     <div className="flex gap-1">
                       {grades.map((g) => (

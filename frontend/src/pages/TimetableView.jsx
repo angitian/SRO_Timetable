@@ -12,11 +12,19 @@ import ExportExcelModal from '../components/timetable/ExportExcelModal.jsx'
 import SubstituteManagerModal from '../components/timetable/SubstituteManagerModal.jsx'
 import { FACILITY_TYPE_ICONS, FACILITY_TYPE_LABELS } from '../utils/roomTypes.js'
 import { exportQuickTemplateExcel, exportFullTemplateExcel } from '../utils/exportTemplateExcel.js'
+import {
+  computeTeacherAvailableSlots,
+  computeClassAvailableSlots,
+  computeNeededPerClass,
+  computeNeededPerTeacher,
+} from '../utils/teacherLoad.js'
 export default function TimetableView() {
   const {
     result,
     fixtureData,
     isDirty,
+    error,
+    errorResponse,
     setStep,
     runSolver,
     isGenerating,
@@ -106,24 +114,32 @@ export default function TimetableView() {
   const placementTimerRef = useRef(null)
 
   // ── Auto-toast when solver finishes ───────────────────────────────
-  // Fires when isGenerating transitions true → false AND a fresh result
-  // with metrics is present. Skips initial mount and snapshot restores.
+  // Fires when isGenerating transitions true → false. Shows success/failure
+  // for fresh results AND surfaces backend errors (e.g. 500) so the user
+  // never sees a silent "ค้าง" state.
   useEffect(() => {
     const wasGenerating = wasGeneratingRef.current
     wasGeneratingRef.current = isGenerating
-    if (wasGenerating && !isGenerating && result?.metrics) {
-      const m = result.metrics
-      const secs = m.wall_time_seconds != null ? `${m.wall_time_seconds.toFixed(3)}s` : ''
-      const status = m.status || 'UNKNOWN'
-      const isOk = status === 'OPTIMAL' || status === 'FEASIBLE'
-      const msg = isOk
-        ? `จัดตารางสำเร็จ${secs ? ` (ใช้เวลา ${secs} • ${status})` : ` • ${status}`}`
-        : `จัดตารางไม่สำเร็จ${secs ? ` (ใช้เวลา ${secs} • ${status})` : ` • ${status}`}`
-      setCompletionToast({ ok: isOk, msg })
-      const t = setTimeout(() => setCompletionToast(null), 4000)
-      return () => clearTimeout(t)
+    if (wasGenerating && !isGenerating) {
+      if (error) {
+        setCompletionToast({ ok: false, msg: `จัดตารางไม่สำเร็จ: ${error}` })
+        const t = setTimeout(() => setCompletionToast(null), 6000)
+        return () => clearTimeout(t)
+      }
+      if (result?.metrics) {
+        const m = result.metrics
+        const secs = m.wall_time_seconds != null ? `${m.wall_time_seconds.toFixed(3)}s` : ''
+        const status = m.status || 'UNKNOWN'
+        const isOk = status === 'OPTIMAL' || status === 'FEASIBLE'
+        const msg = isOk
+          ? `จัดตารางสำเร็จ${secs ? ` (ใช้เวลา ${secs} • ${status})` : ` • ${status}`}`
+          : `จัดตารางไม่สำเร็จ${secs ? ` (ใช้เวลา ${secs} • ${status})` : ` • ${status}`}`
+        setCompletionToast({ ok: isOk, msg })
+        const t = setTimeout(() => setCompletionToast(null), 4000)
+        return () => clearTimeout(t)
+      }
     }
-  }, [isGenerating, result])
+  }, [isGenerating, result, error])
 
   // ── Reset stale-data banner dismissal on new changes ───────────────
   // When isDirty flips false → true (a fresh batch of data changes from
@@ -164,6 +180,62 @@ export default function TimetableView() {
 
   const { teachers, classes, subjects, fixed_slots, schedule_config, lesson_blocks, schedule_blocks = [], special_rooms = [] } = fixtureData
   const resultSlots = result?.slots || []
+
+  // ── Unplaced-lessons report: explains WHY some lessons couldn't be placed ──
+  // Answers "จัดไม่ครบ — ติดเงื่อนไขไหน" (class capacity / teacher availability /
+  // hard rules). Null when everything was placed.
+  const unplacedReport = useMemo(() => {
+    if (!result || !fixtureData) return null
+    const placed = {}
+    for (const s of resultSlots) {
+      placed[s.lesson_block_id] = (placed[s.lesson_block_id] || 0) + 1
+    }
+    const missingByClass = {}
+    const missingByTeacher = {}
+    let totalMissing = 0
+    for (const lb of lesson_blocks) {
+      const miss = lb.periods_per_week - (placed[lb.id] || 0)
+      if (miss > 0) {
+        totalMissing += miss
+        missingByClass[lb.class_id] = (missingByClass[lb.class_id] || 0) + miss
+        missingByTeacher[lb.teacher_id] = (missingByTeacher[lb.teacher_id] || 0) + miss
+      }
+    }
+    if (totalMissing === 0) return null
+
+    const classMap = new Map(classes.map((c) => [c.id, c]))
+    const teacherMap = new Map(teachers.map((t) => [t.id, t]))
+    const neededByClass = computeNeededPerClass(lesson_blocks)
+    const neededByTeacher = computeNeededPerTeacher(lesson_blocks)
+
+    const classRows = Object.entries(missingByClass).map(([cid, miss]) => {
+      const needed = neededByClass[cid] || 0
+      const avail = computeClassAvailableSlots(cid, schedule_blocks, fixed_slots, schedule_config)
+      return { name: classMap.get(cid)?.name || cid, needed, avail, miss }
+    })
+    const teacherRows = Object.entries(missingByTeacher).map(([tid, miss]) => {
+      const t = teacherMap.get(tid)
+      const needed = neededByTeacher[tid] || 0
+      const avail = computeTeacherAvailableSlots(t, lesson_blocks, schedule_blocks, fixed_slots, schedule_config)
+      return { name: t?.name || tid, needed, avail, miss }
+    })
+
+    // Active HARD rules that may restrict placement
+    const hardRules = []
+    const sc = schedule_config || {}
+    if (sc.am_pm_free_mode === 'hard') hardRules.push('ว่าง 1 คาบเช้า + 1 คาบบ่าย (Hard)')
+    if (sc.heavy_morning_mode === 'hard') hardRules.push('วิชาหนักเน้นเช้า (Hard)')
+    if (sc.max_consecutive_mode === 'hard') hardRules.push('หลีกเลี่ยงสอนเกิน N คาบติด (Hard)')
+    if (sc.subject_day_spacing_mode === 'hard') hardRules.push('ไม่จัดวิชาเดิมติดวัน (Hard)')
+    for (const r of (sc.subject_time_rules || [])) {
+      if (r.mode === 'hard') {
+        const subj = subjects.find((s) => s.id === r.subject_id)
+        hardRules.push(`วิชา ${subj?.name || r.subject_id} เน้น${r.preference === 'morning' ? 'เช้า' : 'บ่าย'} (Hard)`)
+      }
+    }
+
+    return { totalMissing, classRows, teacherRows, hardRules }
+  }, [result, resultSlots, fixtureData, lesson_blocks, classes, teachers, subjects, fixed_slots, schedule_blocks, schedule_config])
 
   // ── Derive grid structure from actual schedule_blocks data ────────
   // Uses schedule_blocks[].periods (from Step 2) when available,
@@ -629,6 +701,78 @@ export default function TimetableView() {
               <X className="w-4 h-4" />
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Solver error banner — shows backend failures (e.g. 500) instead of silence */}
+      {error && !isGenerating && (
+        <div className="flex items-start justify-between gap-3 px-4 py-3 bg-red-50 border border-red-200 text-red-800 rounded-xl mb-3 text-xs sm:text-sm">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 font-bold">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              จัดตารางไม่สำเร็จ
+            </div>
+            <div className="mt-0.5 break-words">{error}</div>
+            {errorResponse?.diagnostics?.hard_rule_issues?.length > 0 && (
+              <ul className="list-disc pl-5 mt-1">
+                {errorResponse.diagnostics.hard_rule_issues.map((h, i) => (
+                  <li key={i}>{h}</li>
+                ))}
+              </ul>
+            )}
+            {errorResponse?.diagnostics?.teacher_overloads?.length > 0 && (
+              <div className="mt-1 text-red-700">
+                ครูที่เกินขีดจำกัด: {errorResponse.diagnostics.teacher_overloads.map((t) => t.teacher_name).join(', ')}
+              </div>
+            )}
+            {errorResponse?.diagnostics?.notes?.length > 0 && (
+              <div className="mt-1 italic text-red-600">
+                {errorResponse.diagnostics.notes.map((n, i) => <div key={i}>{n}</div>)}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => setStep(4)}
+            className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold
+              text-red-700 bg-white border border-red-300 hover:bg-red-100 transition-colors"
+          >
+            ดูรายละเอียดขั้นที่ 4
+          </button>
+        </div>
+      )}
+
+      {/* Unplaced-lessons panel — อธิบายว่าติดอะไร ทำไมจัดไม่ครบ */}
+      {unplacedReport && (
+        <div className="px-4 py-3 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl mb-3 text-xs sm:text-sm space-y-2">
+          <div className="font-bold flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            จัดไม่ครบ {unplacedReport.totalMissing} คาบ — สาเหตุที่เป็นไปได้:
+          </div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            {unplacedReport.classRows.map((r) => (
+              <li key={`c-${r.name}`}>
+                ห้อง <b>{r.name}</b>: วิชารวม <b>{r.needed}</b> คาบ แต่มีช่องว่าง {r.avail} คาบ (หักคาบล็อกแล้ว)
+                {r.needed > r.avail && <span className="text-red-600"> — เกิน {r.needed - r.avail} คาบ</span>}
+              </li>
+            ))}
+            {unplacedReport.teacherRows.map((r) => (
+              <li key={`t-${r.name}`}>
+                ครู <b>{r.name}</b>: สอน <b>{r.needed}</b> คาบ แต่มีช่องว่างสอน {r.avail} คาบ (หักล็อก+ไม่สะดวก)
+                {r.needed > r.avail && <span className="text-red-600"> — เกิน {r.needed - r.avail} คาบ</span>}
+              </li>
+            ))}
+          </ul>
+          {unplacedReport.hardRules.length > 0 && (
+            <div>
+              เงื่อนไข Hard ที่เปิดอยู่ (อาจจำกัดการวาง):{' '}
+              <span className="font-semibold">{unplacedReport.hardRules.join(' · ')}</span>
+              <span className="text-amber-700"> — ลองเปลี่ยนเป็น Soft หรือปิด แล้วจัดใหม่</span>
+            </div>
+          )}
+          <p className="text-amber-700 italic">
+            หมายเหตุ: การปิดเงื่อนไขใน "เงื่อนไขระดับระบบ" ไม่ได้ปลดคาบล็อกกิจกรรม / ช่องไม่สะดวกของครู / พื้นที่ห้องเรียน —
+            คาบที่ลงไม่ได้อาจมาจากพื้นที่จริงไม่พอ (ต้องลดวิชาในห้อง หรือปลดล็อก)
+          </p>
         </div>
       )}
 

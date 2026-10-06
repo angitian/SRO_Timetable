@@ -7,6 +7,7 @@ import {
 import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
 import { getSmartDefaultInfo, getSafetyWarning } from '../utils/smartDefaults.js'
+import { computeTeacherAvailableSlots } from '../utils/teacherLoad.js'
 
 const QUICK_TOGGLES = [
   { key: 'scout', label: 'ลูกเสือ-เนตรนารี', icon: Flag, subject_id: 'ACT_SCOUT', subject_name: 'ลูกเสือ-เนตรนารี' },
@@ -23,59 +24,6 @@ const TEACHER_TYPES = [
 
 function getTeacherTypeInfo(type) {
   return TEACHER_TYPES.find((t) => t.value === type) || TEACHER_TYPES[0]
-}
-
-/**
- * Count a teacher's available teaching slots per week AFTER deducting:
- *   - fixed slots (ลูกเสือ/โฮมรูม/ฯลฯ) that apply to classes the teacher teaches
- *   - teacher.unavailable_slots + admin_free_slots
- * Mirrors the backend preflight capacity check. Uses schedule block day-1 as
- * the period reference (falls back to schedule_config).
- */
-function computeTeacherAvailableSlots(teacher, lessonBlocks, scheduleBlocks, fixedSlots, scheduleConfig) {
-  const taughtClassIds = new Set(lessonBlocks
-    .filter((lb) => lb.teacher_id === teacher.id || lb.co_teacher_id === teacher.id)
-    .map((lb) => lb.class_id))
-
-  const refBlock = scheduleBlocks?.[0]
-  let days
-  let dayPeriods
-  if (refBlock) {
-    days = refBlock.days_per_week || 5
-    dayPeriods = (refBlock.periods || [])
-      .filter((p) => p.type === 'STUDY')
-      .map((p) => p.period_no)
-  } else {
-    const cfg = scheduleConfig || {}
-    days = cfg.days_per_week || 5
-    const lunch = new Set(cfg.lunch_periods || [4])
-    dayPeriods = Array.from({ length: cfg.periods_per_day || 8 }, (_, i) => i + 1)
-      .filter((p) => !lunch.has(p))
-  }
-  if (dayPeriods.length === 0) return 0
-
-  // Slots locked by fixed activities that affect this teacher
-  const blocked = new Set()
-  for (const fs of fixedSlots || []) {
-    const applies = !fs.class_ids || fs.class_ids.length === 0
-      || fs.class_ids.some((cid) => taughtClassIds.has(cid))
-    if (!applies) continue
-    for (const p of [fs.period, ...(fs.periods || [])]) {
-      blocked.add(`${fs.day}-${p}`)
-    }
-  }
-  const busy = new Set([
-    ...(teacher.unavailable_slots || []),
-    ...(teacher.admin_free_slots || []),
-  ])
-
-  let available = 0
-  for (let d = 1; d <= days; d++) {
-    for (const p of dayPeriods) {
-      if (!blocked.has(`${d}-${p}`) && !busy.has(`${d}-${p}`)) available++
-    }
-  }
-  return available
 }
 
 export default function TeacherWorkloadStep() {

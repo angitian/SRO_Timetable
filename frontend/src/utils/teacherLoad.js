@@ -1,0 +1,107 @@
+/**
+ * Shared teacher/class load helpers — used by TeacherWorkloadStep (Step 3)
+ * and TimetableView (Step 5, unplaced-report panel).
+ */
+
+/**
+ * Count a teacher's available teaching slots per week AFTER deducting:
+ *   - fixed slots (ลูกเสือ/โฮมรูม/ฯลฯ) that apply to classes the teacher teaches
+ *   - teacher.unavailable_slots + admin_free_slots
+ * Mirrors the backend preflight capacity check. Uses schedule block day-1 as
+ * the period reference (falls back to schedule_config).
+ */
+export function computeTeacherAvailableSlots(teacher, lessonBlocks, scheduleBlocks, fixedSlots, scheduleConfig) {
+  if (!teacher) return 0
+  const taughtClassIds = new Set(lessonBlocks
+    .filter((lb) => lb.teacher_id === teacher.id || lb.co_teacher_id === teacher.id)
+    .map((lb) => lb.class_id))
+
+  const { days, dayPeriods } = deriveDayPeriods(scheduleBlocks, scheduleConfig)
+  if (dayPeriods.length === 0) return 0
+
+  const blocked = new Set()
+  for (const fs of fixedSlots || []) {
+    const applies = !fs.class_ids || fs.class_ids.length === 0
+      || fs.class_ids.some((cid) => taughtClassIds.has(cid))
+    if (!applies) continue
+    for (const p of [fs.period, ...(fs.periods || [])]) {
+      blocked.add(`${fs.day}-${p}`)
+    }
+  }
+  const busy = new Set([
+    ...(teacher.unavailable_slots || []),
+    ...(teacher.admin_free_slots || []),
+  ])
+
+  let available = 0
+  for (let d = 1; d <= days; d++) {
+    for (const p of dayPeriods) {
+      if (!blocked.has(`${d}-${p}`) && !busy.has(`${d}-${p}`)) available++
+    }
+  }
+  return available
+}
+
+/**
+ * Count a class's available teaching slots per week AFTER deducting fixed
+ * slots (ลูกเสือ/โฮมรูม/ฯลฯ) that apply to that class.
+ */
+export function computeClassAvailableSlots(classId, scheduleBlocks, fixedSlots, scheduleConfig) {
+  const { days, dayPeriods } = deriveDayPeriods(scheduleBlocks, scheduleConfig)
+  if (dayPeriods.length === 0) return 0
+
+  const blocked = new Set()
+  for (const fs of fixedSlots || []) {
+    const applies = !fs.class_ids || fs.class_ids.length === 0
+      || fs.class_ids.includes(classId)
+    if (!applies) continue
+    for (const p of [fs.period, ...(fs.periods || [])]) {
+      blocked.add(`${fs.day}-${p}`)
+    }
+  }
+
+  let available = 0
+  for (let d = 1; d <= days; d++) {
+    for (const p of dayPeriods) {
+      if (!blocked.has(`${d}-${p}`)) available++
+    }
+  }
+  return available
+}
+
+/** Sum lesson periods per class. */
+export function computeNeededPerClass(lessonBlocks) {
+  const needed = {}
+  for (const lb of lessonBlocks || []) {
+    needed[lb.class_id] = (needed[lb.class_id] || 0) + (lb.periods_per_week || 0)
+  }
+  return needed
+}
+
+/** Sum lesson periods per teacher (co-taught counts for both). */
+export function computeNeededPerTeacher(lessonBlocks) {
+  const needed = {}
+  for (const lb of lessonBlocks || []) {
+    needed[lb.teacher_id] = (needed[lb.teacher_id] || 0) + (lb.periods_per_week || 0)
+    if (lb.co_teacher_id) {
+      needed[lb.co_teacher_id] = (needed[lb.co_teacher_id] || 0) + (lb.periods_per_week || 0)
+    }
+  }
+  return needed
+}
+
+/** Shared: derive (days, study-period numbers per day) from blocks or config. */
+function deriveDayPeriods(scheduleBlocks, scheduleConfig) {
+  const refBlock = scheduleBlocks?.[0]
+  if (refBlock) {
+    const dayPeriods = (refBlock.periods || [])
+      .filter((p) => p.type === 'STUDY')
+      .map((p) => p.period_no)
+    return { days: refBlock.days_per_week || 5, dayPeriods }
+  }
+  const cfg = scheduleConfig || {}
+  const lunch = new Set(cfg.lunch_periods || [4])
+  const dayPeriods = Array.from({ length: cfg.periods_per_day || 8 }, (_, i) => i + 1)
+    .filter((p) => !lunch.has(p))
+  return { days: cfg.days_per_week || 5, dayPeriods }
+}

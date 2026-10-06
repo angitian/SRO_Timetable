@@ -55,12 +55,16 @@ def _days_per_week(request: TimetableRequest) -> int:
 
 
 def _study_periods_per_day(request: TimetableRequest) -> int:
-    """Count STUDY periods in a single day (per-block aware, multi-block mode)."""
+    """Count STUDY periods in a single day (per-block aware, multi-block mode).
+
+    NOTE: filter_study_periods returns period NUMBERS (floats), not
+    SchedulePeriod objects — iterate the numbers directly.
+    """
     if request.schedule_blocks:
         total: set[int] = set()
         for blk in request.schedule_blocks:
             periods = filter_study_periods(get_periods_for_block_on_day(blk, 1))
-            total.update(p.period_no for p in periods)
+            total.update(p for p in periods)
         return len(total) or request.schedule_config.periods_per_day
     lunch_set = set(request.schedule_config.lunch_periods)
     all_periods = list(range(1, request.schedule_config.periods_per_day + 1))
