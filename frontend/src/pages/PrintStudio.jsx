@@ -419,8 +419,12 @@ function buildWorkloadSummaryHTML(kind, item, ctx) {
       <span style="${labelStyle}">สรุปภาระงาน (${total} คาบ/สัปดาห์):</span> ${items}
     </div>`
   } else {
-    // Teacher: count lessons per class
-    const teacherSlots = ctx.allSlots.filter((s) => s.teacher_id === item.id)
+    // Teacher: count lessons per class (main + co-teacher)
+    const teacherSlots = ctx.allSlots.filter((s) => {
+      if (s.teacher_id === item.id) return true
+      const lb = ctx.lessonBlockMap.get(s.lesson_block_id)
+      return !!(lb && lb.co_teacher_id === item.id)
+    })
     const classCount = {}
     for (const s of teacherSlots) {
       const className = ctx.classMap.get(s.class_id)?.name || s.class_id
