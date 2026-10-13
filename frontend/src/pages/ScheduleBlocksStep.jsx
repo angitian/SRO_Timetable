@@ -2,11 +2,12 @@ import { useState, useMemo, useEffect, Fragment } from 'react'
 import {
   Plus, Trash2, ArrowRight, ArrowLeft, Clock, Layers, BookOpen, Coffee,
   UtensilsCrossed, X, Check, ChevronDown, ZoomIn, ZoomOut, Edit2, CalendarHeart, Star, Calendar,
-  AlertTriangle,
+  AlertTriangle, Users,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { generatePeriods, createDefaultBlock, buildClassBlockMap, insertBreakPeriod } from '../utils/periods.js'
 import { getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
+import { normalizeClassTeachers } from '../utils/teacherLoad.js'
 
 const PERIOD_TYPE_CONFIG = {
   STUDY: { label: 'คาบเรียน', icon: BookOpen, color: 'bg-blue-100 text-blue-700 border-blue-300' },
@@ -35,7 +36,7 @@ function syncScheduleConfigFromBlocks(blocks, cfg) {
   }
 }
 
-function recalculateTimes(periods, startTime, periodDuration, breakDuration, lunchDuration) {
+function recalculateTimes(periods, startTime, periodDuration, breakDuration, lunchDuration, autoShortBreak = true) {
   const [h, m] = startTime.split(':').map(Number)
   let currentMin = h * 60 + m
   const result = []
@@ -53,7 +54,8 @@ function recalculateTimes(periods, startTime, periodDuration, breakDuration, lun
     })
     currentMin = endMin
     // Add break after STUDY periods (not after last, LUNCH, or BREAK)
-    if (p.type === 'STUDY' && i < periods.length - 1) {
+    // — เว้นเฉพาะเมื่อเปิด auto_short_break (มิฉะนั้นคาบเรียนติดกัน)
+    if (p.type === 'STUDY' && i < periods.length - 1 && autoShortBreak) {
       const next = periods[i + 1]
       if (next.type === 'STUDY') {
         currentMin += breakDuration
@@ -61,6 +63,28 @@ function recalculateTimes(periods, startTime, periodDuration, breakDuration, lun
     }
   }
   return result
+}
+
+/**
+ * สร้างลำดับคาบเรียน + พักเที่ยง
+ * @param {number} studyCount จำนวนคาบเรียน (ไม่รวมพักเที่ยง)
+ * @param {number} lunchAfter จำนวนคาบเรียนก่อนพักเที่ยง (0 = ไม่มีพักเที่ยง)
+ */
+function buildPeriodSequence(studyCount, lunchAfter) {
+  const newPeriods = []
+  let periodNo = 1
+  let studyPlaced = 0
+  const total = lunchAfter > 0 ? studyCount + 1 : studyCount
+  for (let i = 0; i < total; i++) {
+    if (lunchAfter > 0 && i === lunchAfter) {
+      newPeriods.push({ period_no: periodNo++, start_time: '00:00', end_time: '00:00', type: 'LUNCH' })
+    }
+    if (studyPlaced < studyCount) {
+      newPeriods.push({ period_no: periodNo++, start_time: '00:00', end_time: '00:00', type: 'STUDY' })
+      studyPlaced++
+    }
+  }
+  return newPeriods
 }
 
 export default function ScheduleBlocksStep() {
@@ -317,7 +341,8 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
 
   function setPeriodsForDay(d, periods) {
     const recalculated = recalculateTimes(
-      periods, block.start_time, block.period_duration_mins, block.break_duration_mins, block.lunch_duration_mins
+      periods, block.start_time, block.period_duration_mins, block.break_duration_mins, block.lunch_duration_mins,
+      block.auto_short_break !== false,
     )
     if (usePerDay) {
       onUpdate({ periods_by_day: { ...block.periods_by_day, [String(d)]: recalculated } })
@@ -334,34 +359,43 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
       ? refPeriods.slice(0, lunchStudyIdx).filter((p) => p.type === 'STUDY').length
       : Math.min(4, studyCount) // default: lunch after 4th study period
 
-    // Build new period list: study periods + 1 lunch inserted at the right position
-    const newPeriods = []
-    let periodNo = 1
-    let studyPlaced = 0
     const lunchAfter = Math.min(studiesBeforeLunch, studyCount)
-
-    for (let i = 0; i < studyCount + 1; i++) {
-      if (i === lunchAfter) {
-        newPeriods.push({ period_no: periodNo++, start_time: '00:00', end_time: '00:00', type: 'LUNCH' })
-      }
-      if (studyPlaced < studyCount) {
-        newPeriods.push({ period_no: periodNo++, start_time: '00:00', end_time: '00:00', type: 'STUDY' })
-        studyPlaced++
-      }
-    }
+    const newPeriods = buildPeriodSequence(studyCount, lunchAfter)
 
     if (usePerDay) {
       const newByDay = {}
       for (const d of days) {
         newByDay[String(d)] = recalculateTimes(
-          newPeriods, block.start_time, block.period_duration_mins, block.break_duration_mins, block.lunch_duration_mins
+          newPeriods, block.start_time, block.period_duration_mins, block.break_duration_mins, block.lunch_duration_mins,
+          block.auto_short_break !== false,
         )
       }
       onUpdate({ periods_by_day: newByDay })
     } else {
       onUpdate({
-        periods: recalculateTimes(newPeriods, block.start_time, block.period_duration_mins, block.break_duration_mins, block.lunch_duration_mins)
+        periods: recalculateTimes(newPeriods, block.start_time, block.period_duration_mins, block.break_duration_mins, block.lunch_duration_mins, block.auto_short_break !== false)
       })
+    }
+  }
+
+  // เปลี่ยนตำแหน่งพักเที่ยง (lunchAfter = จำนวนคาบเรียนก่อนพักเที่ยง; 0 = ไม่มีพักเที่ยง)
+  function handleLunchPositionChange(lunchAfter) {
+    const applyToDay = (dayPeriods) => {
+      const studyCount = dayPeriods.filter((p) => p.type === 'STUDY').length
+      return recalculateTimes(
+        buildPeriodSequence(studyCount, lunchAfter),
+        block.start_time, block.period_duration_mins, block.break_duration_mins, block.lunch_duration_mins,
+        block.auto_short_break !== false,
+      )
+    }
+    if (usePerDay) {
+      const byDay = {}
+      for (const d of days) {
+        byDay[String(d)] = applyToDay(getPeriodsForDay(d))
+      }
+      onUpdate({ periods_by_day: byDay })
+    } else {
+      onUpdate({ periods: applyToDay(block.periods) })
     }
   }
 
@@ -460,7 +494,8 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
           periods, newBlock.start_time || block.start_time,
           newBlock.period_duration_mins || block.period_duration_mins,
           newBlock.break_duration_mins || block.break_duration_mins,
-          newBlock.lunch_duration_mins || block.lunch_duration_mins
+          newBlock.lunch_duration_mins || block.lunch_duration_mins,
+          newBlock.auto_short_break !== false,
         )
         if (usePerDay) {
           updates.periods_by_day = { ...(updates.periods_by_day || newBlock.periods_by_day), [String(d)]: recalculated }
@@ -554,6 +589,21 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
             onChange={(e) => handleConfigChange({ lunch_duration_mins: parseInt(e.target.value) || 50 })}
             className="w-full border border-gray-300 rounded-lg px-2 py-1.5"
           />
+          <select
+            value={(() => {
+              const dp = getPeriodsForDay(1)
+              const idx = dp.findIndex((p) => p.type === 'LUNCH')
+              return idx >= 0 ? dp.slice(0, idx).filter((p) => p.type === 'STUDY').length : 0
+            })()}
+            onChange={(e) => handleLunchPositionChange(parseInt(e.target.value) || 0)}
+            className="w-full border border-gray-300 rounded-lg px-2 py-1.5 mt-1"
+            title="ตำแหน่งพักเที่ยง — หลังคาบเรียนที่เท่าไร"
+          >
+            <option value={0}>ไม่มีพักเที่ยง</option>
+            {Array.from({ length: (getPeriodsForDay(1).filter((p) => p.type === 'STUDY').length) }, (_, i) => i + 1).map((n) => (
+              <option key={n} value={n}>พักเที่ยงหลังคาบที่ {n}</option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
@@ -566,6 +616,15 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
             onChange={(e) => handleConfigChange({ break_duration_mins: parseInt(e.target.value) || 10 })}
             className="w-full border border-gray-300 rounded-lg px-2 py-1.5"
           />
+          <label className="flex items-center gap-1.5 mt-1.5 cursor-pointer text-xs text-gray-500 hover:text-gray-700" title="ปิด = คาบเรียนติดกัน (08:30–09:20, 09:20–10:10...) ไม่เว้นช่องพักสั้น">
+            <input
+              type="checkbox"
+              checked={block.auto_short_break !== false}
+              onChange={(e) => handleConfigChange({ auto_short_break: e.target.checked })}
+              className="w-3.5 h-3.5 rounded text-blue-600"
+            />
+            เว้นพักสั้นระหว่างคาบอัตโนมัติ
+          </label>
         </div>
         <div>
           <label className="font-medium text-gray-600 mb-1 flex items-center gap-1">
@@ -958,8 +1017,9 @@ function SpecialActivitiesSection() {
   const [fixedPeriod, setFixedPeriod] = useState(6)      // first period of the range
   const [periodCount, setPeriodCount] = useState(1)      // number of consecutive periods
   const [extraPeriods, setExtraPeriods] = useState([])   // additional non-consecutive periods
-  // ครูผู้ดูแลกิจกรรมรายชั้น: { [class_id]: teacher_id }
+  // ครูผู้ดูแลกิจกรรมรายชั้น: { [class_id]: [teacher_id, ...] } — N ครู/ห้อง
   const [classTeachers, setClassTeachers] = useState({})
+  const [showAssignModal, setShowAssignModal] = useState(false)
 
   // Effective periods for the form: contiguous range + extra selections
   function getEffectivePeriods() {
@@ -1037,8 +1097,11 @@ function SpecialActivitiesSection() {
       if (a.day !== fixedDay) continue
       const aPeriods = new Set([a.period, ...(a.periods || [])])
       if (![...periodSet].some((p) => aPeriods.has(p))) continue
-      for (const [cid, tid] of Object.entries(classTeachers)) {
-        if ((a.class_teachers || {})[cid] === tid) clashTeachers.add(tid)
+      const otherCT = normalizeClassTeachers(a.class_teachers || {})
+      for (const [cid, tids] of Object.entries(classTeachers)) {
+        for (const tid of tids) {
+          if ((otherCT[cid] || []).includes(tid)) clashTeachers.add(tid)
+        }
       }
     }
     return [...clashTeachers]
@@ -1083,13 +1146,31 @@ function SpecialActivitiesSection() {
     const list = ids.length > 0 ? classes.filter((c) => ids.includes(c.id)) : classes
     return list
   }
-  function setClassTeacher(classId, teacherId) {
+  // ── batch: เพิ่มครูหลายคนให้หลายห้องพร้อมกัน (dedupe ต่อห้อง) ──
+  function addTeachersToRooms(teacherIds, roomIds) {
     setClassTeachers((prev) => {
       const next = { ...prev }
-      if (teacherId) next[classId] = teacherId
-      else delete next[classId]
+      for (const roomId of roomIds) {
+        const cur = normalizeClassTeachers(next)[roomId] || []
+        const merged = [...new Set([...cur, ...teacherIds])]
+        next[roomId] = merged
+      }
       return next
     })
+  }
+  function addTeacherToRoom(roomId, teacherId) {
+    addTeachersToRooms([teacherId], [roomId])
+  }
+  function removeTeacherFromRoom(roomId, teacherId) {
+    setClassTeachers((prev) => {
+      const next = { ...prev }
+      const cur = normalizeClassTeachers(next)[roomId] || []
+      next[roomId] = cur.filter((t) => t !== teacherId)
+      return next
+    })
+  }
+  function clearAllClassTeachers() {
+    setClassTeachers({})
   }
 
   // Resolve selected grade labels → class_ids (empty = all classes)
@@ -1149,7 +1230,7 @@ function SpecialActivitiesSection() {
     setFixedPeriod(act.period || 6)
     setPeriodCount(count)
     setExtraPeriods(extra)
-    setClassTeachers(act.class_teachers || {})
+    setClassTeachers(normalizeClassTeachers(act.class_teachers || {}))
     setShowForm(true)
   }
 
@@ -1278,41 +1359,121 @@ function SpecialActivitiesSection() {
             </div>
           </div>
 
-          {/* ครูผู้ดูแลกิจกรรม (รายชั้น) — นับเข้างานครู */}
+          {/* ครูผู้ดูแลกิจกรรม (รายชั้น, N ครู/ห้อง) — นับเข้างานครู */}
           <div>
-            <label className="font-medium text-gray-600 mb-1 block">
-              ครูผู้ดูแลรายชั้น
-              <span className="ml-1.5 text-xs font-normal text-gray-400">
-                (คาบนี้จะนับเข้างานครูผู้ดูแล และกันครูไม่ให้ถูกจัดคาบอื่นชน) — ไม่เลือก = ไม่นับ
-              </span>
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="font-medium text-gray-600 block">
+                ครูผู้ดูแลรายชั้น
+                <span className="ml-1.5 text-xs font-normal text-gray-400">
+                  (หลายคน/ห้องได้ — ทุกคนนับภาระ 1 คาบ/สัปดาห์ ไม่คูณจำนวนห้อง; กันครูไม่ให้ถูกจัดคาบชน)
+                </span>
+              </label>
+              <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAssignModal(true)}
+                  disabled={targetClassesForTeachers().length === 0}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold
+                    bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-40"
+                >
+                  <Users className="w-3.5 h-3.5" /> จัดสรรครู
+                </button>
+                {Object.keys(classTeachers).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearAllClassTeachers}
+                    className="px-2 py-1 rounded-lg text-xs font-semibold text-red-500 border border-red-200 hover:bg-red-50 transition-colors"
+                    title="ล้างครูผู้ดูแลทั้งหมดของกิจกรรมนี้"
+                  >
+                    ล้างทั้งหมด
+                  </button>
+                )}
+              </div>
+            </div>
             {targetClassesForTeachers().length === 0 ? (
               <p className="text-xs text-gray-400 italic">ยังไม่มีห้องเรียนในระบบ</p>
             ) : (
-              <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg bg-white divide-y divide-gray-100">
-                {targetClassesForTeachers().map((c) => (
-                  <div key={c.id} className="flex items-center gap-2 px-2 py-1.5">
-                    <span className="text-sm text-gray-700 w-24 shrink-0">{c.name}</span>
-                    <select
-                      value={classTeachers[c.id] || ''}
-                      onChange={(e) => setClassTeacher(c.id, e.target.value)}
-                      className="flex-1 border border-gray-300 rounded-lg px-2 py-1 text-sm"
-                    >
-                      <option value="">— ไม่ระบุครูผู้ดูแล —</option>
-                      {teachers.map((t) => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
+              <div>
+                {/* สรุปต่อครู: ครูก → N ห้อง */}
+                {Object.keys(classTeachers).length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {(() => {
+                      const perTeacher = {}
+                      for (const [cid, tids] of Object.entries(classTeachers)) {
+                        for (const tid of tids) {
+                          if (!perTeacher[tid]) perTeacher[tid] = []
+                          perTeacher[tid].push(cid)
+                        }
+                      }
+                      return Object.entries(perTeacher).map(([tid, cids]) => (
+                        <span key={tid} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full
+                          bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium">
+                          {teachers.find((t) => t.id === tid)?.name || tid}
+                          <span className="text-[10px] text-emerald-500">({cids.length} ห้อง)</span>
+                        </span>
+                      ))
+                    })()}
                   </div>
-                ))}
+                ) : (
+                  <p className="text-xs text-gray-400 italic mb-2">ยังไม่มีครูผู้ดูแล — กด "จัดสรรครู" เพื่อเลือกหลายห้องหลายชั้นพร้อมกัน</p>
+                )}
+                {/* สรุปรายห้องแบบ compact */}
+                <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg bg-white divide-y divide-gray-100">
+                  {targetClassesForTeachers().map((c) => {
+                    const tids = classTeachers[c.id] || []
+                    return (
+                      <div key={c.id} className="flex items-center gap-2 px-2 py-1">
+                        <span className="text-sm text-gray-700 w-24 shrink-0">{c.name}</span>
+                        {tids.length === 0 ? (
+                          <span className="text-xs text-gray-300 italic">—</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {tids.map((tid) => (
+                              <span key={tid} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full
+                                bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs">
+                                {teachers.find((t) => t.id === tid)?.name || tid}
+                                <button
+                                  type="button"
+                                  onClick={() => removeTeacherFromRoom(c.id, tid)}
+                                  className="text-emerald-400 hover:text-red-500 transition-colors"
+                                  title="ลบครูออกจากห้องนี้"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <select
+                          value=""
+                          onChange={(e) => { if (e.target.value) addTeacherToRoom(c.id, e.target.value) }}
+                          className="ml-auto shrink-0 border border-gray-300 rounded-lg px-1.5 py-0.5 text-xs"
+                          title="เพิ่มครูเดี่ยวให้ห้องนี้"
+                        >
+                          <option value="">+ เพิ่มครูห้องนี้</option>
+                          {teachers.map((t) => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
-            {Object.keys(classTeachers).length > 0 && (
-              <p className="text-xs text-gray-400 mt-1">
-                เลือกแล้ว {Object.keys(classTeachers).length} ชั้น · รวม {Object.values(classTeachers).length} คาบ/สัปดาห์
-              </p>
-            )}
           </div>
+
+          {/* Modal จัดสรรครูดูแลกิจกรรม */}
+          <TeacherAssignmentModal
+            isOpen={showAssignModal}
+            onClose={() => setShowAssignModal(false)}
+            classes={targetClassesForTeachers()}
+            teachers={teachers}
+            classTeachers={classTeachers}
+            addTeachersToRooms={addTeachersToRooms}
+            addTeacherToRoom={addTeacherToRoom}
+            removeTeacherFromRoom={removeTeacherFromRoom}
+          />
 
           {/* Day + Period(s) */}
           <div className="grid grid-cols-3 gap-3">
@@ -1475,16 +1636,26 @@ function SpecialActivitiesSection() {
                       ทุกห้อง
                     </span>
                   )}
-                  {/* ครูผู้ดูแลรายชั้น */}
+                  {/* ครูผู้ดูแลรายชั้น (N ครู/ห้อง) */}
                   {Object.keys(act.class_teachers || {}).length > 0 && (
-                    <span
-                      className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 font-medium text-[10px]"
-                      title={Object.entries(act.class_teachers || {}).map(([cid, tid]) =>
-                        `${classes.find((c) => c.id === cid)?.name || cid}: ${teachers.find((t) => t.id === tid)?.name || tid}`
-                      ).join('\n')}
-                    >
-                      ดูแล {Object.keys(act.class_teachers).length} ชั้น · {Object.keys(act.class_teachers).length} คาบ/สัปดาห์
-                    </span>
+                    (() => {
+                      const ct = normalizeClassTeachers(act.class_teachers || {})
+                      const roomCount = Object.keys(ct).length
+                      const teacherCount = new Set(Object.values(ct).flat()).size
+                      const tooltip = Object.entries(ct)
+                        .map(([cid, tids]) =>
+                          `${classes.find((c) => c.id === cid)?.name || cid}: ${tids.map((t) => teachers.find((x) => x.id === t)?.name || t).join(', ')}`
+                        )
+                        .join('\n')
+                      return (
+                        <span
+                          className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 font-medium text-[10px]"
+                          title={tooltip}
+                        >
+                          ดูแล {roomCount} ชั้น · {teacherCount} ครู (1 คาบ/ครู/สัปดาห์)
+                        </span>
+                      )
+                    })()
                   )}
                 </div>
                 <div className="flex gap-1">
@@ -1500,6 +1671,284 @@ function SpecialActivitiesSection() {
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+/* ═══════════════════════════ Modal จัดสรรครูดูแลกิจกรรม ═══════════════════════════
+ * 4 ขั้นตอน: A) เลือกห้อง/ชั้น  B) ค้นหา/ติ๊กครูหลายคน  C) เพิ่ม batch
+ *            D) ตารางปรับรายห้อง (badge × ลบ + เพิ่มเดี่ยว)
+ * ครูทุกคนที่เข้าร่วมกิจกรรมนี้ นับภาระ 1 คาบ/สัปดาห์ (ไม่คูณจำนวนห้อง)
+ */
+function TeacherAssignmentModal({
+  isOpen,
+  onClose,
+  classes,          // ห้องที่อยู่ในขอบเขตกิจกรรมนี้
+  teachers,         // ครูทั้งหมด
+  classTeachers,    // { [class_id]: string[] } — ปัจจุบัน
+  addTeachersToRooms,
+  addTeacherToRoom,
+  removeTeacherFromRoom,
+}) {
+  const [selectedRooms, setSelectedRooms] = useState(() => new Set())
+  const [selectedTeachers, setSelectedTeachers] = useState(() => new Set())
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState('all')
+
+  // เปิด modal → เลือกห้องทั้งหมดในขอบเขตเป็นค่าเริ่มต้น
+  useEffect(() => {
+    if (isOpen) {
+      setSelectedRooms(new Set(classes.map((c) => c.id)))
+      setSelectedTeachers(new Set())
+      setSearch('')
+      setTypeFilter('all')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen])
+
+  const gradeGroups = useMemo(() => {
+    const map = {}
+    for (const c of classes) {
+      if (!map[c.grade_level]) map[c.grade_level] = []
+      map[c.grade_level].push(c)
+    }
+    return Object.entries(map).sort((a, b) => Number(a[0]) - Number(b[0]))
+  }, [classes])
+
+  if (!isOpen) return null
+
+  const filteredTeachers = teachers.filter((t) => {
+    if (typeFilter !== 'all' && t.teacher_type !== typeFilter) return false
+    const q = search.trim().toLowerCase()
+    if (q && !(t.name || '').toLowerCase().includes(q) && !(t.id || '').toLowerCase().includes(q)) return false
+    return true
+  })
+
+  const toggleRoom = (id) => {
+    setSelectedRooms((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const toggleGrade = (gradeClasses) => {
+    const ids = gradeClasses.map((c) => c.id)
+    const allSelected = ids.every((id) => selectedRooms.has(id))
+    setSelectedRooms((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) {
+        if (allSelected) next.delete(id)
+        else next.add(id)
+      }
+      return next
+    })
+  }
+  const toggleTeacher = (id) => {
+    setSelectedTeachers((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const handleBulkAdd = () => {
+    if (selectedTeachers.size === 0 || selectedRooms.size === 0) return
+    addTeachersToRooms([...selectedTeachers], [...selectedRooms])
+    setSelectedTeachers(new Set())
+  }
+
+  const selectedRoomCount = selectedRooms.size
+  const selectedTeacherCount = selectedTeachers.size
+  const teacherTypeOptions = [
+    { value: 'all', label: 'ทุกประเภท' },
+    { value: 'regular', label: 'ครูประจำ' },
+    { value: 'special', label: 'ครูพิเศษ' },
+    { value: 'foreign', label: 'ครูต่างชาติ' },
+    { value: 'trainee', label: 'นศ.ฝึกสอน' },
+  ]
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[88vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 sticky top-0 bg-white rounded-t-2xl z-10">
+          <div className="flex items-center gap-2">
+            <Users className="w-5 h-5 text-emerald-600" />
+            <h3 className="text-lg font-bold text-gray-900">จัดสรรครูดูแลกิจกรรม</h3>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600" aria-label="ปิด">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-5">
+          {/* A. เลือกห้อง/ชั้น */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-sm font-bold text-gray-700">
+                1. เลือกห้อง / ชั้น
+                <span className="ml-2 text-xs font-normal text-gray-400">({selectedRoomCount}/{classes.length} ห้อง)</span>
+              </div>
+              <div className="flex gap-1.5">
+                <button onClick={() => setSelectedRooms(new Set(classes.map((c) => c.id)))} className="px-2 py-0.5 rounded-md text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors">
+                  เลือกทั้งหมด
+                </button>
+                <button onClick={() => setSelectedRooms(new Set())} className="px-2 py-0.5 rounded-md text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">
+                  ล้าง
+                </button>
+              </div>
+            </div>
+            <div className="space-y-1.5 max-h-44 overflow-y-auto border border-gray-200 rounded-lg p-2">
+              {gradeGroups.map(([grade, gradeClasses]) => {
+                const allSelected = gradeClasses.every((c) => selectedRooms.has(c.id))
+                return (
+                  <div key={grade}>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <button
+                        onClick={() => toggleGrade(gradeClasses)}
+                        className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-colors
+                          ${allSelected ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'}`}
+                      >
+                        ป.{grade} ทั้งหมด
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1 pl-1">
+                      {gradeClasses.map((c) => (
+                        <button
+                          key={c.id}
+                          onClick={() => toggleRoom(c.id)}
+                          className={`px-2 py-0.5 rounded-md text-xs font-medium border transition-all
+                            ${selectedRooms.has(c.id)
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'}`}
+                        >
+                          {c.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* B + C. ติ๊กครูหลายคน → เพิ่ม batch */}
+          <div>
+            <div className="text-sm font-bold text-gray-700 mb-1.5">
+              2. เลือกครู (หลายคนได้) → เพิ่มให้ห้องที่เลือกพร้อมกัน
+            </div>
+            <div className="flex gap-2 mb-2">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="ค้นหาชื่อครู / รหัสครู…"
+                className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+              />
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+              >
+                {teacherTypeOptions.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="max-h-44 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+              {filteredTeachers.length === 0 && (
+                <div className="px-3 py-4 text-xs text-gray-400 italic text-center">ไม่พบครูที่ตรงเงื่อนไข</div>
+              )}
+              {filteredTeachers.map((t) => {
+                const on = selectedTeachers.has(t.id)
+                return (
+                  <label key={t.id} className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors ${on ? 'bg-emerald-50' : 'hover:bg-gray-50'}`}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => toggleTeacher(t.id)}
+                      className="w-4 h-4 rounded text-emerald-600"
+                    />
+                    <span className="text-sm font-medium text-gray-800">{t.name}</span>
+                    <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+                      {teacherTypeOptions.find((o) => o.value === t.teacher_type)?.label || t.teacher_type || 'ครู'}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+            <button
+              onClick={handleBulkAdd}
+              disabled={selectedTeachers.size === 0 || selectedRooms.size === 0}
+              className="mt-2 w-full px-4 py-2.5 rounded-lg text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700
+                transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              เพิ่มครู {selectedTeacherCount} คนที่เลือก ให้กับ {selectedRoomCount} ห้องที่เลือกพร้อมกัน
+            </button>
+            <p className="text-[11px] text-gray-400 mt-1.5">
+              * ครูทุกคนที่เข้าร่วมกิจกรรมนี้ นับภาระ <b>1 คาบ/สัปดาห์</b> (ไม่คูณจำนวนห้อง) — เพิ่มซ้ำจะไม่ซ้ำกัน
+            </p>
+          </div>
+
+          {/* D. ตารางปรับรายห้อง */}
+          <div>
+            <div className="text-sm font-bold text-gray-700 mb-1.5">3. ปรับรายห้อง (เพิ่ม/ลบครูเดี่ยว)</div>
+            <div className="max-h-56 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+              {classes.map((c) => {
+                const tids = normalizeClassTeachers(classTeachers)[c.id] || []
+                return (
+                  <div key={c.id} className="flex items-center gap-2 px-3 py-1.5">
+                    <span className="text-sm text-gray-700 w-24 shrink-0">{c.name}</span>
+                    {tids.length === 0 ? (
+                      <span className="text-xs text-gray-300 italic">— ไม่มีครูผู้ดูแล —</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {tids.map((tid) => (
+                          <span key={tid} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full
+                            bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs">
+                            {teachers.find((t) => t.id === tid)?.name || tid}
+                            <button
+                              type="button"
+                              onClick={() => removeTeacherFromRoom(c.id, tid)}
+                              className="text-emerald-400 hover:text-red-500 transition-colors"
+                              title="ลบครูออกจากห้องนี้"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <select
+                      value=""
+                      onChange={(e) => { if (e.target.value) addTeacherToRoom(c.id, e.target.value) }}
+                      className="ml-auto shrink-0 border border-gray-300 rounded-lg px-1.5 py-0.5 text-xs"
+                      title="เพิ่มครูเดี่ยวให้ห้องนี้"
+                    >
+                      <option value="">+ เพิ่มครูห้องนี้</option>
+                      {teachers.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-gray-200 sticky bottom-0 bg-white rounded-b-2xl">
+          <button
+            onClick={onClose}
+            className="w-full px-4 py-2.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+          >
+            เสร็จสิ้น (บันทึกเมื่อกด "เพิ่มกิจกรรม/บันทึก" ในฟอร์ม)
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

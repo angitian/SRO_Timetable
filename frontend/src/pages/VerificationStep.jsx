@@ -7,6 +7,7 @@ import {
 import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
 import { getSubjectColor } from '../utils/subjectColors.js'
+import { normalizeClassTeachers } from '../utils/teacherLoad.js'
 import TeacherSummaryTable from '../components/verification/TeacherSummaryTable.jsx'
 import ClassroomDensityTable from '../components/verification/ClassroomDensityTable.jsx'
 import FacilityUsageSummary from '../components/verification/FacilityUsageSummary.jsx'
@@ -66,20 +67,22 @@ export default function VerificationStep() {
       addTeacher(lb.teacher_id)
       if (lb.co_teacher_id) addTeacher(lb.co_teacher_id)
     }
-    // คาบดูแลกิจกรรม (fixed slots) — นับเข้างานครูผู้ดูแลรายชั้น
+    // คาบดูแลกิจกรรม (fixed slots) — นับเข้างานครูผู้ดูแลรายชั้น (N ครู/ห้อง → 1 คาบ/ครู/สัปดาห์)
     for (const fs of fixedSlots) {
       const effective = new Set([fs.period, ...(fs.periods || [])])
       const seenTeachers = new Set()
-      for (const [cid, tid] of Object.entries(fs.class_teachers || {})) {
-        if (seenTeachers.has(tid)) continue
-        seenTeachers.add(tid)
-        const entry = loads[tid]
-        if (!entry) continue
-        const className = classMap.get(cid)?.name || cid
-        const key = `${fs.name} → ${className}`
-        entry.subjects[key] = (entry.subjects[key] || 0) + effective.size
-        entry.subjectRooms.push({ subject: fs.name, class: className, periods: effective.size })
-        entry.total += effective.size
+      for (const [cid, tids] of Object.entries(normalizeClassTeachers(fs.class_teachers))) {
+        for (const tid of tids) {
+          if (seenTeachers.has(tid)) continue
+          seenTeachers.add(tid)
+          const entry = loads[tid]
+          if (!entry) continue
+          const className = classMap.get(cid)?.name || cid
+          const key = `${fs.name} → ${className}`
+          entry.subjects[key] = (entry.subjects[key] || 0) + effective.size
+          entry.subjectRooms.push({ subject: fs.name, class: className, periods: effective.size })
+          entry.total += effective.size
+        }
       }
     }
     return Object.values(loads).map((entry) => ({

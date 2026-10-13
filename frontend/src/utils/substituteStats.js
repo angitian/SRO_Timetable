@@ -7,6 +7,7 @@
  * ชั่วโมงคำนวณจากช่วงเวลาจริงของ schedule block (ไม่นับ lunch/break)
  */
 import { getPeriodDurationMinutes } from './dailySchedule.js'
+import { flattenClassTeachers } from './teacherLoad.js'
 
 /** ตรวจว่าวันที่อยู่ในช่วง (จาก/ถึง) หรือไม่ — เปรียบเทียบ string YYYY-MM-DD */
 export function isDateInRange(dateStr, fromDate, toDate) {
@@ -67,17 +68,17 @@ export function computeBaseTeacherLoad({
       })
     }
   }
-  // คาบดูแลกิจกรรม (fixed slots) — ภาระคงที่ของครูผู้ดูแล (นับคาบไม่ซ้ำต่อกิจกรรม)
+  // คาบดูแลกิจกรรม (fixed slots) — ภาระคงที่ของครูผู้ดูแล (1 คาบ/ครู/สัปดาห์ ไม่คูณห้อง)
   for (const fs of fixedSlots || []) {
     const periods = [...new Set([fs.period, ...(fs.periods || [])])]
     const seen = new Set()
-    for (const [cid, tid] of Object.entries(fs.class_teachers || {})) {
+    for (const tid of flattenClassTeachers(fs.class_teachers)) {
       if (seen.has(tid)) continue
       seen.add(tid)
       touch(tid)
       const L = loads[tid]
       for (const p of periods) {
-        const mins = getPeriodDurationMinutes(cid, p, scheduleBlocks, scheduleConfig)
+        const mins = getPeriodDurationMinutes(fs.class_ids?.[0] || '', p, scheduleBlocks, scheduleConfig)
         L.periodsPerWeek += 1
         L.periodsPerDay[fs.day] = (L.periodsPerDay[fs.day] || 0) + 1
         L.minutesPerDay[fs.day] = (L.minutesPerDay[fs.day] || 0) + mins

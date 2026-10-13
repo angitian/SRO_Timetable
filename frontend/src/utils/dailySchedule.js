@@ -108,7 +108,7 @@ export function computeFreeTeachers({
   for (const fs of fixedSlots || []) {
     const effective = [fs.period, ...(fs.periods || [])]
     if (fs.day !== dayOfWeek || !effective.includes(period)) continue
-    for (const tid of Object.values(fs.class_teachers || {})) {
+    for (const tid of Object.values(fs.class_teachers || {}).flat()) {
       busy.add(tid)
     }
   }

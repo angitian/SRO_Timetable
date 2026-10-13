@@ -253,6 +253,9 @@ def main():
     success = test_fixed_slot_supervision_over_max()
     all_pass = all_pass and success
 
+    success = test_fixed_slot_supervision_multi_teacher()
+    all_pass = all_pass and success
+
     success = test_am_pm_free_soft()
     all_pass = all_pass and success
 
@@ -913,6 +916,61 @@ def test_fixed_slot_supervision_over_max() -> bool:
         return False
 
     print(f"  ✅ PASS: T5 needed=7 (รวม supervision), reason=over_max, ไม่บล็อก")
+    return True
+
+
+def test_fixed_slot_supervision_multi_teacher() -> bool:
+    """Fixed slot class_teachers รองรับหลายครู/ห้อง (list) — ครูแต่ละคนนับภาระ
+    1 คาบ/สัปดาห์ (ไม่คูณจำนวนห้อง) + legacy string ยังอ่านได้ (validator)."""
+    print(f"\n{'='*60}")
+    print("  TEST: fixed slot supervision N-teacher/class (multi)")
+    print(f"{'='*60}")
+
+    # C1 มีครูดูแล 2 คน (T5, T6), C2 มี 1 คน (T5) → T5=1 คาบ, T6=1 คาบ (dedupe ต่อครู)
+    request = _synthetic_request(fixed_slots=[
+        FixedSlot(id="FS1", name="ลูกเสือ", slot_type=FixedSlotType.SCOUT,
+                  day=4, period=6, class_ids=["C1", "C2"],
+                  class_teachers={"C1": ["T5", "T6"], "C2": "T5"}),
+    ])
+
+    report = run_preflight(request)
+    if report.has_blocking_issues():
+        print(f"  ❌ FAIL: unexpected blocking issues: {report.model_dump()}")
+        return False
+
+    solver = TimetableSolver(request)
+    result = solver.solve()
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE")
+        return False
+
+    # 1. ภาระ: T5 = 6 (สอน) + 1 (ลูกเสือ) = 7; T6 = 6 + 1 = 7 (ไม่ใช่ 6+2)
+    loads = {tl.teacher_id: tl.assigned_periods for tl in result.teacher_loads}
+    if loads.get("T5") != 7 or loads.get("T6") != 7:
+        print(f"  ❌ FAIL: T5={loads.get('T5')} T6={loads.get('T6')} — expected both 7 (1 supervision each)")
+        return False
+
+    # 2. ครูผู้ดูแล (T5, T6) ไม่ถูกจัดคาบ (Thu,6) ชน
+    lb_by_id = {lb.id: lb for lb in request.lesson_blocks}
+    for s in result.slots:
+        teachers_at_slot = {s.teacher_id}
+        lb = lb_by_id.get(s.lesson_block_id)
+        if lb and lb.co_teacher_id:
+            teachers_at_slot.add(lb.co_teacher_id)
+        if s.day == 4 and s.period == 6 and teachers_at_slot & {"T5", "T6"}:
+            print(f"  ❌ FAIL: supervisor scheduled at D4P6: {teachers_at_slot}")
+            return False
+
+    # 3. Validator: legacy string ถูก normalize เป็น list
+    fs = request.fixed_slots[0]
+    if fs.class_teachers.get("C2") != ["T5"]:
+        print(f"  ❌ FAIL: legacy string not normalized: {fs.class_teachers.get('C2')}")
+        return False
+    if fs.supervisor_teacher_ids() != {"T5", "T6"}:
+        print(f"  ❌ FAIL: supervisor_teacher_ids={fs.supervisor_teacher_ids()} expected {{T5,T6}}")
+        return False
+
+    print(f"  ✅ PASS: N-teacher supervision → T5=7, T6=7 (1 คาบ/ครู), no clash, legacy ok")
     return True
 
 

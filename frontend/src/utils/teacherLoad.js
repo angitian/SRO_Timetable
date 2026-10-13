@@ -35,7 +35,7 @@ export function computeTeacherAvailableSlots(teacher, lessonBlocks, scheduleBloc
 
   // คาบที่ครูคนนี้เป็นผู้ดูแลกิจกรรม (fixed slot class_teachers) — ว่างไม่ได้
   for (const fs of fixedSlots || []) {
-    const supervises = Object.values(fs.class_teachers || {}).includes(teacher.id)
+    const supervises = flattenClassTeachers(fs.class_teachers).has(teacher.id)
     if (!supervises) continue
     for (const p of [fs.period, ...(fs.periods || [])]) {
       busy.add(`${fs.day}-${p}`)
@@ -100,16 +100,43 @@ export function computeNeededPerTeacher(lessonBlocks) {
 }
 
 /**
- * คาบดูแลกิจกรรม (fixed slots) ต่อครู — จาก fs.class_teachers { class_id: teacher_id }
+ * Normalize class_teachers (fixed slot) → { [class_id]: string[] }
+ * รองรับข้อมูลเก่าแบบ { class_id: teacher_id } (string) → [teacher_id]
+ */
+export function normalizeClassTeachers(raw) {
+  const normalized = {}
+  for (const [classId, teachers] of Object.entries(raw || {})) {
+    if (Array.isArray(teachers)) {
+      normalized[classId] = teachers.filter((t) => typeof t === 'string' && t.trim())
+    } else if (typeof teachers === 'string' && teachers.trim().length > 0) {
+      normalized[classId] = [teachers]
+    } else {
+      normalized[classId] = []
+    }
+  }
+  return normalized
+}
+
+/** Flatten ครูผู้ดูแลทั้งหมดของกิจกรรม (list ของ class_teachers) → set ของ teacher_id */
+export function flattenClassTeachers(raw) {
+  const ids = new Set()
+  for (const list of Object.values(normalizeClassTeachers(raw))) {
+    for (const tid of list) ids.add(tid)
+  }
+  return ids
+}
+
+/**
+ * คาบดูแลกิจกรรม (fixed slots) ต่อครู — จาก fs.class_teachers { class_id: [teacher_id, ...] }
  * คืน { [teacher_id]: count } — นับคาบที่ไม่ซ้ำกันของแต่ละกิจกรรม (effective periods)
- * ครูที่ดูแลหลายชั้นในกิจกรรมเดียวกันนับครั้งเดียว (ครูดูแลกิจกรรมนั้นคาบเดียวต่อสัปดาห์)
+ * ครูที่เข้าร่วมกิจกรรมนี้ 1 ครั้ง = 1 คาบ/สัปดาห์ (ไม่คูณจำนวนห้องที่ดูแล)
  */
 export function computeFixedSupervision(fixedSlots) {
   const counts = {}
   for (const fs of fixedSlots || []) {
     const unique = new Set([fs.period, ...(fs.periods || [])])
     const seen = new Set()
-    for (const tid of Object.values(fs.class_teachers || {})) {
+    for (const tid of flattenClassTeachers(fs.class_teachers)) {
       if (seen.has(tid)) continue
       seen.add(tid)
       counts[tid] = (counts[tid] || 0) + unique.size

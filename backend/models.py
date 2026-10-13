@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────
@@ -171,18 +171,40 @@ class FixedSlot(BaseModel):
         default_factory=list,
         description="Empty list = all classes",
     )
-    class_teachers: dict[str, str] = Field(
+    class_teachers: dict[str, list[str]] = Field(
         default_factory=dict,
-        description="ครูผู้ดูแลกิจกรรมรายชั้น: { class_id: teacher_id }. ชั้นที่ไม่ได้ระบุ = ไม่มีผู้ดูแล (ไม่นับภาระ/ไม่ล็อกครู)",
+        description="ครูผู้ดูแลกิจกรรมรายชั้น: { class_id: [teacher_id, ...] } — รองรับหลายครูต่อห้อง; ครูทุกคนที่เข้าร่วมนับภาระ 1 คาบ/สัปดาห์ (ไม่คูณจำนวนห้อง)",
     )
+
+    @field_validator("class_teachers", mode="before")
+    @classmethod
+    def _normalize_class_teachers(cls, v):
+        """Backward compat: ข้อมูลเก่า { class_id: teacher_id } (string) → [teacher_id]."""
+        if not v:
+            return {}
+        out: dict[str, list[str]] = {}
+        for key, val in v.items():
+            if isinstance(val, str):
+                out[key] = [val] if val.strip() else []
+            elif isinstance(val, list):
+                out[key] = [x for x in val if isinstance(x, str) and x.strip()]
+            else:
+                out[key] = []
+        return out
 
     def effective_periods(self) -> list[int]:
         """Return the sorted list of all periods this fixed slot occupies."""
         return sorted(set([self.period, *self.periods]))
 
     def supervisor_teacher_ids(self) -> set[str]:
-        """Unique teacher ids supervising this fixed slot (from class_teachers)."""
-        return set((self.class_teachers or {}).values())
+        """Unique teacher ids supervising this fixed slot (flattened from class_teachers lists)."""
+        ids: set[str] = set()
+        for val in (self.class_teachers or {}).values():
+            if isinstance(val, str):
+                ids.add(val)
+            else:
+                ids.update(v for v in val if v)
+        return ids
 
 
 class SubjectTimeRule(BaseModel):

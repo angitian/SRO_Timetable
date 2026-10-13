@@ -83,6 +83,7 @@ export function createDefaultBlock(id, name, opts = {}) {
     break_duration_mins: breakDurationMins,
     lunch_duration_mins: lunchDurationMins,
     apply_to_all_days: true,
+    auto_short_break: true, // เว้นพักสั้นระหว่างคาบเรียนติดกันอัตโนมัติ (ปิดได้)
     periods_by_day: {},
     periods: generatePeriods(startTime, periodDurationMins, breakDurationMins, lunchPeriodNos, breakPeriodNos, lunchDurationMins, totalPeriods),
   }

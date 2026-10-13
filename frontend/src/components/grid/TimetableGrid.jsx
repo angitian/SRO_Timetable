@@ -571,10 +571,17 @@ export default function TimetableGrid({
                   const isBreak = breakSet.has(p)
                   const fixedSlot = getFixedSlotFor(d, p, classId)
                   const isFixed = !!fixedSlot
-                  // ครูผู้ดูแลกิจกรรมของห้องนี้ (class_teachers[classId])
-                  const fixedSlotTeacherName = isFixed && fixedSlot?.class_teachers?.[classId]
-                    ? (teacherMap.get(fixedSlot.class_teachers[classId])?.name || fixedSlot.class_teachers[classId])
-                    : null
+                  // ครูผู้ดูแลกิจกรรมของห้องนี้ (class_teachers[classId] — อาจมีหลายคน)
+                  const fixedSlotTeacherName = (() => {
+                    if (!isFixed || !fixedSlot?.class_teachers?.[classId]) return null
+                    const raw = fixedSlot.class_teachers[classId]
+                    const ids = Array.isArray(raw) ? raw : [raw]
+                    const names = ids.map((tid) => teacherMap.get(tid)?.name || tid).filter(Boolean)
+                    if (names.length === 0) return null
+                    return names.length <= 2
+                      ? names.join(', ')
+                      : `${names.slice(0, 2).join(', ')} +${names.length - 2}`
+                  })()
                   const userPlacement = userPlacementMap.get(`${d}-${p}-${classId}`)
                   const matchedSlots = isFixed || isLunch || isBreak ? [] : getFilteredSlots(d, p, classId)
                   const slot = matchedSlots[0] || null
@@ -712,7 +719,7 @@ export default function TimetableGrid({
                   const isFixed = !!fixedSlot
                   // ครูคนนี้เป็นผู้ดูแลกิจกรรมนี้หรือไม่ → แสดง badge "ดูแลกิจกรรม"
                   const fixedSlotTeacherName = isFixed && activeTeacherId && fixedSlot?.class_teachers
-                    ? (Object.values(fixedSlot.class_teachers).includes(activeTeacherId)
+                    ? (Object.values(fixedSlot.class_teachers).flat().includes(activeTeacherId)
                         ? (teacherMap.get(activeTeacherId)?.name || activeTeacherId)
                         : null)
                     : null
