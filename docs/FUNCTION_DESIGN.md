@@ -166,7 +166,7 @@ time table/
 | `LessonBlock` | `id`, `subject_id`, `teacher_id`, `co_teacher_id` (ครูผู้สอนร่วม), `class_id`, `room_id`, `periods_per_week` (1–10), `is_double_period`, `is_fixed`, `fixed_day`/`fixed_period` (legacy เดี่ยว), `fixed_slots` (list — มีค่าเมื่อใช้แทน legacy), `block_id` (ผูกกับ schedule block) | หน่วยประมวลผลหลักของ solver |
 | `FixedSlot` | `id`, `name`, `slot_type`, `day`, `period`, `periods` (คาบเพิ่มเติมในวันเดียวกัน), `class_ids` (ว่าง = ทุกห้อง), `class_teachers` (dict `{class_id: [teacher_id, ...]}` — ครูผู้ดูแลกิจกรรม **รายชั้น หลายคน/ห้องได้**; รองรับข้อมูลเก่าแบบ string → normalize เป็น array) | กิจกรรมพิเศษ เช่น ลูกเสือ/โฮมรูม; `effective_periods()` = sorted union; ครูผู้ดูแลทุกคนนับภาระ **1 คาบ/สัปดาห์ต่อกิจกรรม** (ไม่คูณจำนวนห้อง) + กันไม่ให้ถูกจัดคาบชน |
 | `SubjectTimeRule` | `subject_id`, `preference` (morning/afternoon), `mode` (soft/hard/off) | "วิชาเฉพาะช่วงเวลา" |
-| `ScheduleConfig` | `days_per_week` (1–7), `periods_per_day` (1–12), `lunch_periods` (default [4]), `assembly_slots`, `max_consecutive_teaching` (default 4), `default_max_periods_per_week` (default 22), `pe_hot_periods`, `am_pm_free_mode`, `max_consecutive_mode`, `subject_day_spacing_mode`, `heavy_morning_mode`, `workload_balance_mode`, `gap_clustering_mode`, + legacy bool fields, `subject_time_rules` | ทุก `*_mode` มีค่า `off`/`soft`/`hard` |
+| `ScheduleConfig` | `days_per_week` (1–7), `periods_per_day` (1–12), `lunch_periods` (default [4]), `assembly_slots`, `max_consecutive_teaching` (default 4), `default_max_periods_per_week` (default 22 — ใช้กับครูใหม่/import; import Excel ฝั่ง parser **ไม่ตั้ง max** ให้ frontend ใช้ค่านี้จริง + ปุ่ม "ใช้กับทุกคน" ที่ Step 3), `pe_hot_periods`, `am_pm_free_mode`, `max_consecutive_mode`, `subject_day_spacing_mode`, `heavy_morning_mode`, `workload_balance_mode`, `gap_clustering_mode`, + legacy bool fields, `subject_time_rules` | ทุก `*_mode` มีค่า `off`/`soft`/`hard` |
 
 **Legacy bool → mode mapping** (สำคัญสำหรับ backward compat):
 - `enable_subject_day_spacing` (True → soft) → `subject_day_spacing_mode`
@@ -459,7 +459,7 @@ Solver ใช้ `num_search_workers = 8`, `max_time_in_seconds = solver_time_li
 
 ### Step 3 — `TeacherWorkloadStep.jsx`
 
-- **GlobalConditionsCard**: ปรับโหมด off/soft/hard ของทุกกฎรวม (S1–S3, workload balance, am/pm free, heavy morning, gap clustering, subject day spacing), `default_max_periods_per_week`, `max_consecutive_teaching`, lunch periods, PE hot periods, วิชาเฉพาะช่วงเวลา (`subject_time_rules`)
+- **GlobalConditionsCard**: ปรับโหมด off/soft/hard ของทุกกฎรวม (S1–S3, workload balance, am/pm free, heavy morning, gap clustering, subject day spacing), `default_max_periods_per_week` (มีปุ่ม **"ใช้กับทุกคน"** — นำค่าไปทับ max ครูทั้งลิสต์), `max_consecutive_teaching`, lunch periods, PE hot periods, วิชาเฉพาะช่วงเวลา (`subject_time_rules`)
 - **TeacherCard + TeacherPreferencesSection** (ต่อครู): กริดช่องห้ามสอน (unavailable_slots), admin role (none/finance/discipline/dept_head), max/min periods, no_first_period/no_last_period, max_consecutive_teaching + enable toggle, spread_free_periods (AM/PM)
 - **AddTeacherModal**: เพิ่มครูใหม่ (auto ID)
 - **SubjectMasterModal**: จัดการวิชา — ชื่อ, category, is_heavy, time_preference

@@ -302,7 +302,7 @@ def import_with_mapping(
             teachers_map[teacher_name] = {
                 "id": tid,
                 "name": teacher_name,
-                "max_periods_per_week": 22,
+                # ไม่ตั้ง max_periods_per_week — frontend จะใช้ค่า default_max_periods_per_week ที่ผู้ใช้ตั้ง (Global Conditions)
                 "min_periods_per_week": 0,
                 "unavailable_slots": [],
                 "admin_role": "none",
@@ -315,7 +315,7 @@ def import_with_mapping(
                 teachers_map[co_teacher_name] = {
                     "id": f"T{len(teachers_map) + 1}",
                     "name": co_teacher_name,
-                    "max_periods_per_week": 22,
+                    # ไม่ตั้ง max_periods_per_week — frontend จะใช้ค่า default_max_periods_per_week ที่ผู้ใช้ตั้ง (Global Conditions)
                     "min_periods_per_week": 0,
                     "unavailable_slots": [],
                     "admin_role": "none",
@@ -672,7 +672,7 @@ def import_multi_sheet(
             teachers_map[teacher_name] = {
                 "id": tid,
                 "name": teacher_name,
-                "max_periods_per_week": 22,
+                # ไม่ตั้ง max_periods_per_week — frontend จะใช้ค่า default_max_periods_per_week ที่ผู้ใช้ตั้ง (Global Conditions)
                 "min_periods_per_week": 0,
                 "unavailable_slots": [],
                 "admin_role": "none",
@@ -685,7 +685,7 @@ def import_multi_sheet(
                 teachers_map[co_teacher_name] = {
                     "id": f"T{len(teachers_map) + 1}",
                     "name": co_teacher_name,
-                    "max_periods_per_week": 22,
+                    # ไม่ตั้ง max_periods_per_week — frontend จะใช้ค่า default_max_periods_per_week ที่ผู้ใช้ตั้ง (Global Conditions)
                     "min_periods_per_week": 0,
                     "unavailable_slots": [],
                     "admin_role": "none",
@@ -1072,7 +1072,7 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
             teachers_map[teacher_name] = {
                 "id": tid,
                 "name": teacher_name,
-                "max_periods_per_week": 22,
+                # ไม่ตั้ง max_periods_per_week — frontend จะใช้ค่า default_max_periods_per_week ที่ผู้ใช้ตั้ง (Global Conditions)
                 "min_periods_per_week": 0,
                 "unavailable_slots": [],
                 "admin_role": "none",
@@ -1085,7 +1085,7 @@ def import_minimum_template(file_bytes: bytes) -> dict[str, Any]:
                 teachers_map[co_teacher_name] = {
                     "id": f"T{len(teachers_map) + 1}",
                     "name": co_teacher_name,
-                    "max_periods_per_week": 22,
+                    # ไม่ตั้ง max_periods_per_week — frontend จะใช้ค่า default_max_periods_per_week ที่ผู้ใช้ตั้ง (Global Conditions)
                     "min_periods_per_week": 0,
                     "unavailable_slots": [],
                     "admin_role": "none",

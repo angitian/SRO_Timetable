@@ -512,7 +512,7 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-gray-800">เพดานคาบเริ่มต้นของครู</div>
                 <div className="text-xs text-gray-400">
-                  ใช้กับครูที่สร้างใหม่ / import (ครูแต่ละคนแก้ต่อตัวได้ที่บัตรครู)
+                  ใช้กับครูที่สร้างใหม่ / import — กด "ใช้กับทุกคน" เพื่อปรับทั้งลิสต์ (ครูแต่ละคนแก้ต่อตัวได้ที่บัตรครู)
                 </div>
               </div>
               <input
@@ -523,6 +523,22 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
                 title="เพดานคาบ/สัปดาห์เริ่มต้นของครูใหม่"
               />
               <span className="text-xs text-gray-500 shrink-0">คาบ/สัปดาห์</span>
+              <button
+                onClick={() => {
+                  const count = (fixtureData?.teachers || []).length
+                  if (count === 0) return
+                  if (window.confirm(`นำค่า ${defaultMax} คาบ/สัปดาห์ ไปใช้กับครูทุกคน (${count} คน)? ครูที่ตั้งค่าเองจะถูกทับ`)) {
+                    updateFixtureData({
+                      teachers: (fixtureData.teachers || []).map((t) => ({ ...t, max_periods_per_week: defaultMax })),
+                    })
+                  }
+                }}
+                disabled={defaultMax <= 0}
+                className="shrink-0 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-40"
+                title="นำค่าเพดานนี้ไปใช้กับครูทุกคน (ทับค่าที่ตั้งไว้)"
+              >
+                ใช้กับทุกคน
+              </button>
             </div>
           </div>
 
