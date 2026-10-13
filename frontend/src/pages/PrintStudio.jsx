@@ -32,6 +32,7 @@ import {
 } from '../utils/exportEngine.js'
 import { exportMultiExcel } from '../utils/exportExcel.js'
 import { exportMultiPNG } from '../utils/exportImage.js'
+import { normalizeClassTeachers, flattenClassTeachers } from '../utils/teacherLoad.js'
 import { saveTimetableResult } from '../api/client.js'
 import PrintSettingsPanel from '../components/print/PrintSettingsPanel.jsx'
 
@@ -411,6 +412,13 @@ function buildWorkloadSummaryHTML(kind, item, ctx) {
       const subjName = ctx.subjectMap.get(lb.subject_id)?.name || lb.subject_id
       subjCount[subjName] = (subjCount[subjName] || 0) + lb.periods_per_week
     }
+    // คาบกิจกรรมพิเศษที่ล็อกห้องนี้
+    for (const fs of ctx.fixedSlots || []) {
+      const applies = !fs.class_ids || fs.class_ids.length === 0 || fs.class_ids.includes(item.id)
+      if (!applies) continue
+      const n = new Set([fs.period, ...(fs.periods || [])]).size
+      subjCount[fs.name || 'กิจกรรม'] = (subjCount[fs.name || 'กิจกรรม'] || 0) + n
+    }
     const total = Object.values(subjCount).reduce((a, b) => a + b, 0)
     const items = Object.entries(subjCount)
       .map(([name, count]) => `<span style="${pillStyle}">${escapeHTML(name)} (${count})</span>`)
@@ -430,10 +438,20 @@ function buildWorkloadSummaryHTML(kind, item, ctx) {
       const className = ctx.classMap.get(s.class_id)?.name || s.class_id
       classCount[className] = (classCount[className] || 0) + 1
     }
-    const total = Object.values(classCount).reduce((a, b) => a + b, 0)
-    const items = Object.entries(classCount)
-      .map(([name, count]) => `<span style="${pillStyle}">${escapeHTML(name)} (${count})</span>`)
-      .join('')
+    // คาบดูแลกิจกรรม (fixed slots) — นับ 1 คาบ/ครู/กิจกรรม (ไม่คูณจำนวนห้อง)
+    const activityCount = {}
+    for (const fs of ctx.fixedSlots || []) {
+      if (!flattenClassTeachers(fs.class_teachers).has(item.id)) continue
+      const n = new Set([fs.period, ...(fs.periods || [])]).size
+      activityCount[fs.name || 'กิจกรรม'] = (activityCount[fs.name || 'กิจกรรม'] || 0) + n
+    }
+    const classTotal = Object.values(classCount).reduce((a, b) => a + b, 0)
+    const activityTotal = Object.values(activityCount).reduce((a, b) => a + b, 0)
+    const total = classTotal + activityTotal
+    const items = [
+      ...Object.entries(classCount).map(([name, count]) => `<span style="${pillStyle}">${escapeHTML(name)} (${count})</span>`),
+      ...Object.entries(activityCount).map(([name, count]) => `<span style="${pillStyle}">${escapeHTML(name)} (${count})</span>`),
+    ].join('')
     return `<div style="margin-top:6px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:10px;color:#6b7280;line-height:1.5;break-inside:avoid;">
       <span style="${labelStyle}">สรุปภาระงาน (${total} คาบ/สัปดาห์):</span> ${items}
     </div>`

@@ -7,7 +7,7 @@ import {
 import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
 import { getSmartDefaultInfo, getSafetyWarning } from '../utils/smartDefaults.js'
-import { computeTeacherAvailableSlots } from '../utils/teacherLoad.js'
+import { computeTeacherAvailableSlots, computeFixedSupervision } from '../utils/teacherLoad.js'
 
 const QUICK_TOGGLES = [
   { key: 'scout', label: 'ลูกเสือ-เนตรนารี', icon: Flag, subject_id: 'ACT_SCOUT', subject_name: 'ลูกเสือ-เนตรนารี' },
@@ -58,8 +58,13 @@ export default function TeacherWorkloadStep() {
         loads[lb.co_teacher_id].assigned += lb.periods_per_week
       }
     }
+    // คาบดูแลกิจกรรม (fixed slots class_teachers) — ภาระคงที่ของครูผู้ดูแล (1 คาบ/ครู/กิจกรรม)
+    const supervision = computeFixedSupervision(fixtureData?.fixed_slots || [])
+    for (const [tid, n] of Object.entries(supervision)) {
+      if (loads[tid]) loads[tid].assigned += n
+    }
     return loads
-  }, [teachers, lessonBlocks, defaultMaxPeriods])
+  }, [teachers, lessonBlocks, defaultMaxPeriods, fixtureData?.fixed_slots])
 
   // Available teaching slots per teacher after deducting locked activities
   // (ลูกเสือ/โฮมรูม/ฯลฯ) and unavailable slots — answers "หักล็อกแล้วเหลือเท่าไหร่"
@@ -635,6 +640,11 @@ function TeacherCard({
   const [showAddRow, setShowAddRow] = useState(false)
   const [editingMax, setEditingMax] = useState(false)
   const [maxDraft, setMaxDraft] = useState('')
+  // คาบดูแลกิจกรรม (fixed slots) ของครูคนนี้ — นับเข้างานแล้วใน load.assigned
+  const supervisionPeriods = useMemo(
+    () => computeFixedSupervision(fixtureData?.fixed_slots || [])[teacher.id] || 0,
+    [fixtureData?.fixed_slots, teacher.id],
+  )
   const [newRow, setNewRow] = useState({
     subject_id: subjects[0]?.id || '',
     class_id: classes[0]?.id || '',
@@ -683,6 +693,11 @@ function TeacherCard({
             </div>
             <div className="text-xs text-gray-500">
               {teacherLbs.length} รายการ
+              {supervisionPeriods > 0 && (
+                <span className="ml-2 badge bg-emerald-100 text-emerald-700 text-[10px]">
+                  กิจกรรมดูแล {supervisionPeriods} คาบ
+                </span>
+              )}
               {isCrossBlock && (
                 <span className="ml-2 badge bg-purple-100 text-purple-700 text-[10px]">
                   สอนข้ามบล็อก ({teacherBlockIds.length})

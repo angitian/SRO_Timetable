@@ -1107,7 +1107,16 @@ export default function TimetableView() {
 
           {/* Detailed after table */}
           <div className="card">
-            <h2 className="font-bold text-gray-900 mb-4">รายละเอียดภาระงาน (หลังจัดตาราง)</h2>
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+              <h2 className="font-bold text-gray-900">รายละเอียดภาระงาน (หลังจัดตาราง)</h2>
+              {isDirty && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1"
+                  title="เช่น เพิ่ม/แก้กิจกรรมหรือครูหลังจัดตาราง — ตัวเลขหลังจัดยังเป็นค่าตอนจัดตารางครั้งล่าสุด">
+                  <AlertTriangle className="w-3 h-3" />
+                  ข้อมูลเปลี่ยนหลังจัดตาราง (เช่น แก้กิจกรรม/ครู) — กรุณาจัดตารางใหม่เพื่อให้ตัวเลขรวมรายการที่แก้
+                </span>
+              )}
+            </div>
             <TeacherLoadTable loads={loadAfter} />
           </div>
         </div>
