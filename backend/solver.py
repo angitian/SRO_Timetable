@@ -170,6 +170,9 @@ class TimetableSolver:
         Supports multi-period fixed slots (fs.periods) — every effective period
         is registered. Class-specific slots (class_ids non-empty) are mapped per
         class; empty class_ids block ALL classes (assembly-style).
+
+        Also builds fixed_slots_per_teacher from fs.class_teachers so a
+        supervising teacher can't be double-booked at the same real time.
         """
         self.assembly_set: set[tuple[int, int]] = set()
         for fs in request.fixed_slots:
@@ -181,6 +184,12 @@ class TimetableSolver:
             for cid in fs.class_ids:
                 for p in fs.effective_periods():
                     self.fixed_slots_per_class.setdefault(cid, set()).add((fs.day, p))
+        # ครูผู้ดูแลกิจกรรม: ห้ามถูกจัดคาบอื่นชนเวลาที่ดูแลกิจกรรม
+        self.fixed_slots_per_teacher: dict[str, set[tuple[int, int]]] = {}
+        for fs in request.fixed_slots:
+            for tid in fs.supervisor_teacher_ids():
+                for p in fs.effective_periods():
+                    self.fixed_slots_per_teacher.setdefault(tid, set()).add((fs.day, p))
 
     def _build_pe_hot_set(self, request: TimetableRequest) -> None:
         """Build pe_hot_set from schedule_config (legacy mode only)."""
@@ -250,12 +259,15 @@ class TimetableSolver:
 
     def _is_teacher_hard_blocked(self, teacher_id: str, d: int, p: int) -> bool:
         """Hard availability filters for one teacher: unavailable/admin-free
-        slots plus no_first_period / no_last_period preferences."""
+        slots, no_first_period / no_last_period preferences, and fixed-slot
+        supervision duty (ครูผู้ดูแลกิจกรรม)."""
         if self._is_teacher_unavailable(teacher_id, d, p):
             return True
         if self._is_first_period_blocked(teacher_id, p):
             return True
         if self._is_last_period_blocked(teacher_id, d, p):
+            return True
+        if (d, p) in self.fixed_slots_per_teacher.get(teacher_id, set()):
             return True
         return False
 
@@ -1261,6 +1273,12 @@ class TimetableSolver:
             lb = lb_by_id.get(s.lesson_block_id)
             if lb and lb.co_teacher_id:
                 counts[lb.co_teacher_id] = counts.get(lb.co_teacher_id, 0) + 1
+
+        # คาบดูแลกิจกรรม (fixed slots) นับเข้างานครูผู้ดูแล — เป็นภาระคงที่ (ไม่ใช่ตัวแปร solver)
+        for fs in self.req.fixed_slots:
+            supervision_periods = len(fs.effective_periods())
+            for tid in fs.supervisor_teacher_ids():
+                counts[tid] = counts.get(tid, 0) + supervision_periods
 
         result: list[TeacherLoadSummary] = []
         for teacher in self.req.teachers:

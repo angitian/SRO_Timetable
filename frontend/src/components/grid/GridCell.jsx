@@ -41,6 +41,7 @@ export default function GridCell({
   isFixed,          // 🔒 locked fixed slot (assembly/homeroom/etc.) — not draggable
   isPreAssigned,    // 📌 user manually placed — not draggable by solver
   fixedSlotName,    // name to display for fixed slots (e.g. "โฮมรูม")
+  fixedSlotTeacherName, // supervising teacher name for this class's fixed slot (ถ้ามี)
   isDragTarget,
   dragTargetInfo,   // { valid, reason } from TimetableGrid validation
   isDraggable,
@@ -96,6 +97,11 @@ export default function GridCell({
         <div className="text-xs sm:text-sm font-bold text-gray-600 truncate w-full text-center">
           {fixedSlotName || 'บล็อกกิจกรรม'}
         </div>
+        {fixedSlotTeacherName && (
+          <div className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5 truncate w-full text-center">
+            ดูแล: {fixedSlotTeacherName}
+          </div>
+        )}
         <span className="mt-1 inline-flex items-center gap-0.5 text-[10px] font-semibold text-gray-500 bg-gray-300 rounded-full px-2 py-0.5">
           🔒 บล็อกกิจกรรม
         </span>

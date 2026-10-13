@@ -173,6 +173,32 @@ def _build_assembly_and_class_blocks(
     return assembly_set, fixed_slots_per_class
 
 
+def _build_fixed_slot_teacher_map(
+    request: TimetableRequest,
+) -> dict[str, set[tuple[int, int]]]:
+    """Map supervising teachers (fs.class_teachers) to their (day, period) duty.
+
+    Mirrors TimetableSolver._build_fixed_slot_maps — used to subtract
+    supervision time from available teaching slots and to check conflicts.
+    """
+    teacher_slots: dict[str, set[tuple[int, int]]] = {}
+    for fs in request.fixed_slots:
+        for tid in fs.supervisor_teacher_ids():
+            for p in fs.effective_periods():
+                teacher_slots.setdefault(tid, set()).add((fs.day, p))
+    return teacher_slots
+
+
+def _fixed_supervision_per_teacher(request: TimetableRequest) -> dict[str, int]:
+    """Count fixed-slot supervision periods per teacher (constant workload)."""
+    counts: dict[str, int] = {}
+    for fs in request.fixed_slots:
+        n = len(fs.effective_periods())
+        for tid in fs.supervisor_teacher_ids():
+            counts[tid] = counts.get(tid, 0) + n
+    return counts
+
+
 def _valid_periods_for_day(
     blk: ScheduleBlock, day: int
 ) -> list[int]:
@@ -209,6 +235,7 @@ def _count_teacher_available_slots(
     block_by_id: dict[str, ScheduleBlock],
     assembly_set: set[tuple[int, int]],
     fixed_slots_per_class: dict[str, set[tuple[int, int]]],
+    fixed_slots_per_teacher: dict[str, set[tuple[int, int]]] | None = None,
 ) -> int:
     """Count net available teaching slots for a teacher across the week.
 
@@ -220,6 +247,7 @@ def _count_teacher_available_slots(
       - no_last_period and p == max valid period of that day
       - PE hot period (skipped here — subject-specific, not teacher-level)
       - assembly / class-specific fixed slot for *any* class the teacher teaches
+      - fixed-slot supervision duty (ครูผู้ดูแลกิจกรรม) at that (day, period)
 
     Lunch guarantee (multi-block): reserve >= 1 lunch slot per day in the
     11:00-13:30 window for each block the teacher teaches in.
@@ -286,6 +314,9 @@ def _count_teacher_available_slots(
             # Assembly blocks everyone
             if (d, p) in assembly_set:
                 continue
+            # ครูผู้ดูแลกิจกรรม: ต้องว่างช่วงที่ดูแลกิจกรรม (ห้ามจัดคาบอื่นชน)
+            if (d, p) in (fixed_slots_per_teacher or {}).get(teacher.id, set()):
+                continue
             # Class-specific fixed slot: if ANY class the teacher teaches
             # is blocked at (d, p), the teacher can't teach then
             blocked_by_class = False
@@ -329,6 +360,8 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
     block_by_id = {b.id: b for b in request.schedule_blocks}
     class_to_block = _build_class_to_block(request)
     assembly_set, fixed_slots_per_class = _build_assembly_and_class_blocks(request)
+    fixed_slots_per_teacher = _build_fixed_slot_teacher_map(request)
+    supervision_counts = _fixed_supervision_per_teacher(request)
 
     _check_class_capacity(
         request, report, class_by_id, class_to_block, block_by_id,
@@ -336,14 +369,14 @@ def run_preflight(request: TimetableRequest) -> DiagnosticsReport:
     )
     _check_teacher_overloads(
         request, report, class_to_block, block_by_id,
-        assembly_set, fixed_slots_per_class,
+        assembly_set, fixed_slots_per_class, fixed_slots_per_teacher, supervision_counts,
     )
     _check_room_overloads(
         request, report, room_by_id, assembly_set,
     )
     _check_fixed_slot_conflicts(
         request, report, teacher_by_id, class_to_block, block_by_id,
-        assembly_set, fixed_slots_per_class,
+        assembly_set, fixed_slots_per_class, fixed_slots_per_teacher,
     )
     _check_hard_rule_feasibility(request, report)
 
@@ -405,6 +438,8 @@ def _check_teacher_overloads(
     block_by_id: dict,
     assembly_set: set,
     fixed_slots_per_class: dict[str, set],
+    fixed_slots_per_teacher: dict[str, set] | None = None,
+    supervision_counts: dict[str, int] | None = None,
 ) -> None:
     """Check 2: each teacher's needed periods within [min, max] and available slots."""
     teacher_needed: dict[str, int] = {}
@@ -413,13 +448,17 @@ def _check_teacher_overloads(
         # Co-taught periods count toward the co-teacher's workload too
         if lb.co_teacher_id:
             teacher_needed[lb.co_teacher_id] = teacher_needed.get(lb.co_teacher_id, 0) + lb.periods_per_week
+    # คาบดูแลกิจกรรม (fixed slots) เป็นภาระคงที่ของครูผู้ดูแล
+    for tid, n in (supervision_counts or {}).items():
+        teacher_needed[tid] = teacher_needed.get(tid, 0) + n
 
     for teacher in request.teachers:
         needed = teacher_needed.get(teacher.id, 0)
         if needed == 0:
             continue
         available = _count_teacher_available_slots(
-            teacher, request, class_to_block, block_by_id, assembly_set, fixed_slots_per_class
+            teacher, request, class_to_block, block_by_id, assembly_set, fixed_slots_per_class,
+            fixed_slots_per_teacher,
         )
         reason = ""
         if teacher.max_periods_per_week > 0 and needed > teacher.max_periods_per_week:
@@ -500,6 +539,7 @@ def _check_fixed_slot_conflicts(
     block_by_id: dict,
     assembly_set: set,
     fixed_slots_per_class: dict[str, set],
+    fixed_slots_per_teacher: dict[str, set] | None = None,
 ) -> None:
     """Check 4: pre-assigned (fixed) lesson blocks don't conflict with constraints."""
     for lb in request.lesson_blocks:
@@ -575,3 +615,19 @@ def _check_fixed_slot_conflicts(
                     )
                 )
                 continue
+
+    # ครูผู้ดูแลกิจกรรม (fixed slots): เช็คว่าครูผู้ดูแลว่างจริงที่ (วัน, คาบ) ของกิจกรรม
+    for fs in request.fixed_slots:
+        for tid in fs.supervisor_teacher_ids():
+            teacher = teacher_by_id.get(tid)
+            if not teacher:
+                continue
+            for p in fs.effective_periods():
+                key = f"{fs.day}-{p}"
+                if key in teacher.unavailable_slots or key in teacher.admin_free_slots:
+                    report.fixed_slot_conflicts.append(
+                        FixedSlotConflict(
+                            lesson_block_id=fs.id, day=fs.day, period=p,
+                            reason="supervisor_unavailable",
+                        )
+                    )

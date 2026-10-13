@@ -17,6 +17,7 @@ import {
   computeClassAvailableSlots,
   computeNeededPerClass,
   computeNeededPerTeacher,
+  computeFixedSupervision,
 } from '../utils/teacherLoad.js'
 export default function TimetableView() {
   const {
@@ -325,21 +326,23 @@ export default function TimetableView() {
     const statuses = {}
     const loadAfter = result?.teacher_loads || []
     const loadMap = new Map(loadAfter.map((l) => [l.teacher_id, l]))
+    const supervision = computeFixedSupervision(fixed_slots)
     for (const t of teachers) {
       const load = loadMap.get(t.id)
       if (load) {
         statuses[t.id] = { assigned: load.assigned_periods, max: load.max_periods, status: load.load_status }
       } else {
-        // No result yet — compute from lesson blocks
+        // No result yet — compute from lesson blocks (main + co) + กิจกรรมที่ดูแล
         const assigned = lesson_blocks
-          .filter((lb) => lb.teacher_id === t.id)
+          .filter((lb) => lb.teacher_id === t.id || lb.co_teacher_id === t.id)
           .reduce((sum, lb) => sum + lb.periods_per_week, 0)
+          + (supervision[t.id] || 0)
         const status = assigned > t.max_periods_per_week ? 'over' : assigned < t.min_periods_per_week ? 'under' : 'ok'
         statuses[t.id] = { assigned, max: t.max_periods_per_week, status }
       }
     }
     return statuses
-  }, [teachers, result, lesson_blocks])
+  }, [teachers, result, lesson_blocks, fixed_slots])
 
   // ── Teacher load data (before/after) for workload tab ─────────────
   const loadBefore = useMemo(() => {
@@ -348,9 +351,18 @@ export default function TimetableView() {
       loads[t.id] = { teacher_id: t.id, teacher_name: t.name, assigned: 0, max: t.max_periods_per_week, min: t.min_periods_per_week }
     }
     for (const lb of lesson_blocks) {
+      // ครูหลัก + ครูผู้สอนร่วม (co-teacher) นับทั้งคู่
       if (loads[lb.teacher_id]) {
         loads[lb.teacher_id].assigned += lb.periods_per_week
       }
+      if (lb.co_teacher_id && loads[lb.co_teacher_id]) {
+        loads[lb.co_teacher_id].assigned += lb.periods_per_week
+      }
+    }
+    // คาบดูแลกิจกรรม (fixed slots) — ภาระคงที่ของครูผู้ดูแล
+    const supervision = computeFixedSupervision(fixed_slots)
+    for (const [tid, n] of Object.entries(supervision)) {
+      if (loads[tid]) loads[tid].assigned += n
     }
     return Object.values(loads).map((l) => ({
       teacher_id: l.teacher_id,
@@ -360,7 +372,7 @@ export default function TimetableView() {
       min_periods: l.min,
       load_status: l.assigned > l.max ? 'over' : l.assigned < l.min ? 'under' : 'ok',
     }))
-  }, [teachers, lesson_blocks])
+  }, [teachers, lesson_blocks, fixed_slots])
 
   const loadAfter = result?.teacher_loads || []
   const beforeMap = new Map(loadBefore.map((l) => [l.teacher_id, l]))

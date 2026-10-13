@@ -21,6 +21,7 @@ export default function VerificationStep() {
   const subjects = fixtureData?.subjects || []
   const classes = fixtureData?.classes || []
   const lessonBlocks = fixtureData?.lesson_blocks || []
+  const fixedSlots = fixtureData?.fixed_slots || []
   const scheduleBlocks = fixtureData?.schedule_blocks || []
   const specialRooms = fixtureData?.special_rooms || []
   const result = fixtureData?.result || null
@@ -50,15 +51,36 @@ export default function VerificationStep() {
       }
     }
     for (const lb of lessonBlocks) {
-      const entry = loads[lb.teacher_id]
-      if (!entry) continue
-      const subjName = subjectMap.get(lb.subject_id)?.name || lb.subject_id
-      const className = classMap.get(lb.class_id)?.name || lb.class_id
-      const key = `${subjName} → ${className}`
-      entry.subjects[key] = (entry.subjects[key] || 0) + lb.periods_per_week
-      entry.subjectRooms.push({ subject: subjName, class: className, periods: lb.periods_per_week })
-      entry.total += lb.periods_per_week
-      if (lb.block_id) entry.blockIds.add(lb.block_id)
+      const addTeacher = (tid) => {
+        const entry = loads[tid]
+        if (!entry) return
+        const subjName = subjectMap.get(lb.subject_id)?.name || lb.subject_id
+        const className = classMap.get(lb.class_id)?.name || lb.class_id
+        const key = `${subjName} → ${className}`
+        entry.subjects[key] = (entry.subjects[key] || 0) + lb.periods_per_week
+        entry.subjectRooms.push({ subject: subjName, class: className, periods: lb.periods_per_week })
+        entry.total += lb.periods_per_week
+        if (lb.block_id) entry.blockIds.add(lb.block_id)
+      }
+      // ครูหลัก + ครูผู้สอนร่วม (co-teacher) นับทั้งคู่
+      addTeacher(lb.teacher_id)
+      if (lb.co_teacher_id) addTeacher(lb.co_teacher_id)
+    }
+    // คาบดูแลกิจกรรม (fixed slots) — นับเข้างานครูผู้ดูแลรายชั้น
+    for (const fs of fixedSlots) {
+      const effective = new Set([fs.period, ...(fs.periods || [])])
+      const seenTeachers = new Set()
+      for (const [cid, tid] of Object.entries(fs.class_teachers || {})) {
+        if (seenTeachers.has(tid)) continue
+        seenTeachers.add(tid)
+        const entry = loads[tid]
+        if (!entry) continue
+        const className = classMap.get(cid)?.name || cid
+        const key = `${fs.name} → ${className}`
+        entry.subjects[key] = (entry.subjects[key] || 0) + effective.size
+        entry.subjectRooms.push({ subject: fs.name, class: className, periods: effective.size })
+        entry.total += effective.size
+      }
     }
     return Object.values(loads).map((entry) => ({
       ...entry,
@@ -66,7 +88,7 @@ export default function VerificationStep() {
       isCrossBlock: entry.blockIds.size > 1,
       blockNames: Array.from(entry.blockIds).map((bid) => blockMap.get(bid)?.name || bid),
     }))
-  }, [teachers, lessonBlocks, subjectMap, classMap, blockMap])
+  }, [teachers, lessonBlocks, subjectMap, classMap, blockMap, fixedSlots])
 
   // Classroom Density
   const classroomDensity = useMemo(() => {

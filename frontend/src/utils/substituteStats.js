@@ -16,7 +16,7 @@ export function isDateInRange(dateStr, fromDate, toDate) {
 /**
  * ภาระฐานของครูแต่ละคนจากตารางหลัก
  * คืน { [teacherId]: { periodsPerWeek, periodsPerDay:{day:count}, minutesPerDay:{}, minutesPerWeek } }
- * co-teacher นับทั้งสองฝั่ง
+ * co-teacher นับทั้งสองฝั่ง + คาบดูแลกิจกรรม (fixed slots class_teachers) นับด้วย
  */
 export function computeBaseTeacherLoad({
   resultSlots,
@@ -24,6 +24,7 @@ export function computeBaseTeacherLoad({
   lessonBlockMap,
   scheduleBlocks,
   scheduleConfig,
+  fixedSlots,
 }) {
   const loads = {}
   const touch = (tid) => {
@@ -64,6 +65,24 @@ export function computeBaseTeacherLoad({
         period: p.period,
         co_teacher_id: lb.co_teacher_id,
       })
+    }
+  }
+  // คาบดูแลกิจกรรม (fixed slots) — ภาระคงที่ของครูผู้ดูแล (นับคาบไม่ซ้ำต่อกิจกรรม)
+  for (const fs of fixedSlots || []) {
+    const periods = [...new Set([fs.period, ...(fs.periods || [])])]
+    const seen = new Set()
+    for (const [cid, tid] of Object.entries(fs.class_teachers || {})) {
+      if (seen.has(tid)) continue
+      seen.add(tid)
+      touch(tid)
+      const L = loads[tid]
+      for (const p of periods) {
+        const mins = getPeriodDurationMinutes(cid, p, scheduleBlocks, scheduleConfig)
+        L.periodsPerWeek += 1
+        L.periodsPerDay[fs.day] = (L.periodsPerDay[fs.day] || 0) + 1
+        L.minutesPerDay[fs.day] = (L.minutesPerDay[fs.day] || 0) + mins
+        L.minutesPerWeek += mins
+      }
     }
   }
   return loads

@@ -81,6 +81,7 @@ export function getDaySlots(resultSlots, userPlacements, lessonBlockMap, dayOfWe
 /**
  * ครูที่ว่างคาบ (วัน, คาบ) นั้น — busy = ครู/co-teacher ของคาบนั้นในตารางหลัก
  * + ครูที่รับสอนแทนคาบนั้นแล้วในวันนี้ + unavailable/admin_free + ครูที่มาร์คลา
+ * + ครูที่เป็นผู้ดูแลกิจกรรม (fixed slot class_teachers) ในคาบนั้น
  */
 export function computeFreeTeachers({
   dayOfWeek,
@@ -90,6 +91,7 @@ export function computeFreeTeachers({
   teachers,
   absentTeacherIds = [],
   lessonBlockMap,
+  fixedSlots,
 }) {
   const busy = new Set()
   for (const s of daySlots) {
@@ -101,6 +103,14 @@ export function computeFreeTeachers({
   }
   for (const a of assignments || []) {
     if (a.period === period) busy.add(a.substitute_teacher_id)
+  }
+  // ครูผู้ดูแลกิจกรรม (fixed slots) ณ คาบนี้ — ว่างไม่ได้
+  for (const fs of fixedSlots || []) {
+    const effective = [fs.period, ...(fs.periods || [])]
+    if (fs.day !== dayOfWeek || !effective.includes(period)) continue
+    for (const tid of Object.values(fs.class_teachers || {})) {
+      busy.add(tid)
+    }
   }
   const key = `${dayOfWeek}-${period}`
   const absent = new Set(absentTeacherIds || [])

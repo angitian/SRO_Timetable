@@ -33,6 +33,15 @@ export function computeTeacherAvailableSlots(teacher, lessonBlocks, scheduleBloc
     ...(teacher.admin_free_slots || []),
   ])
 
+  // คาบที่ครูคนนี้เป็นผู้ดูแลกิจกรรม (fixed slot class_teachers) — ว่างไม่ได้
+  for (const fs of fixedSlots || []) {
+    const supervises = Object.values(fs.class_teachers || {}).includes(teacher.id)
+    if (!supervises) continue
+    for (const p of [fs.period, ...(fs.periods || [])]) {
+      busy.add(`${fs.day}-${p}`)
+    }
+  }
+
   let available = 0
   for (let d = 1; d <= days; d++) {
     for (const p of dayPeriods) {
@@ -88,6 +97,25 @@ export function computeNeededPerTeacher(lessonBlocks) {
     }
   }
   return needed
+}
+
+/**
+ * คาบดูแลกิจกรรม (fixed slots) ต่อครู — จาก fs.class_teachers { class_id: teacher_id }
+ * คืน { [teacher_id]: count } — นับคาบที่ไม่ซ้ำกันของแต่ละกิจกรรม (effective periods)
+ * ครูที่ดูแลหลายชั้นในกิจกรรมเดียวกันนับครั้งเดียว (ครูดูแลกิจกรรมนั้นคาบเดียวต่อสัปดาห์)
+ */
+export function computeFixedSupervision(fixedSlots) {
+  const counts = {}
+  for (const fs of fixedSlots || []) {
+    const unique = new Set([fs.period, ...(fs.periods || [])])
+    const seen = new Set()
+    for (const tid of Object.values(fs.class_teachers || {})) {
+      if (seen.has(tid)) continue
+      seen.add(tid)
+      counts[tid] = (counts[tid] || 0) + unique.size
+    }
+  }
+  return counts
 }
 
 /** Shared: derive (days, study-period numbers per day) from blocks or config. */

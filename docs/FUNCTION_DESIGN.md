@@ -164,7 +164,7 @@ time table/
 | `ClassGroup` | `id`, `name`, `grade_level` (1–12) | |
 | `FixedSlotAssignment` | `day` (1–7), `period` (1–12) | ใช้ปักหมุดหลายช่องของ lesson block เดียวกัน |
 | `LessonBlock` | `id`, `subject_id`, `teacher_id`, `co_teacher_id` (ครูผู้สอนร่วม), `class_id`, `room_id`, `periods_per_week` (1–10), `is_double_period`, `is_fixed`, `fixed_day`/`fixed_period` (legacy เดี่ยว), `fixed_slots` (list — มีค่าเมื่อใช้แทน legacy), `block_id` (ผูกกับ schedule block) | หน่วยประมวลผลหลักของ solver |
-| `FixedSlot` | `id`, `name`, `slot_type`, `day`, `period`, `periods` (คาบเพิ่มเติมในวันเดียวกัน), `class_ids` (ว่าง = ทุกห้อง) | กิจกรรมพิเศษ เช่น ลูกเสือ/โฮมรูม; `effective_periods()` = sorted union |
+| `FixedSlot` | `id`, `name`, `slot_type`, `day`, `period`, `periods` (คาบเพิ่มเติมในวันเดียวกัน), `class_ids` (ว่าง = ทุกห้อง), `class_teachers` (dict `{class_id: teacher_id}` — ครูผู้ดูแลกิจกรรมรายชั้น) | กิจกรรมพิเศษ เช่น ลูกเสือ/โฮมรูม; `effective_periods()` = sorted union; ครูผู้ดูแล → นับเข้างาน + กันไม่ให้ถูกจัดคาบชน |
 | `SubjectTimeRule` | `subject_id`, `preference` (morning/afternoon), `mode` (soft/hard/off) | "วิชาเฉพาะช่วงเวลา" |
 | `ScheduleConfig` | `days_per_week` (1–7), `periods_per_day` (1–12), `lunch_periods` (default [4]), `assembly_slots`, `max_consecutive_teaching` (default 4), `default_max_periods_per_week` (default 22), `pe_hot_periods`, `am_pm_free_mode`, `max_consecutive_mode`, `subject_day_spacing_mode`, `heavy_morning_mode`, `workload_balance_mode`, `gap_clustering_mode`, + legacy bool fields, `subject_time_rules` | ทุก `*_mode` มีค่า `off`/`soft`/`hard` |
 
@@ -351,8 +351,13 @@ Solver ใช้ `num_search_workers = 8`, `max_time_in_seconds = solver_time_li
    - `needed < min` → `under_min` (บล็อก)
    - hard am/pm mode → `am_pm_hard` (บล็อก)
 3. **Room Overload** — ห้องพิเศษถูกใช้เกินช่องว่าง → `RoomOverload` (บล็อก)
-4. **Fixed Slot Conflict** — lesson block ที่ `is_fixed` ชนกับ unavailable/lunch/assembly/class block → `FixedSlotConflict` (บล็อก)
+4. **Fixed Slot Conflict** — lesson block ที่ `is_fixed` ชนกับ unavailable/lunch/assembly/class block → `FixedSlotConflict` (บล็อก); **ครูผู้ดูแลกิจกรรม** (`FixedSlot.class_teachers`) ที่มี unavailable/admin_free ชนคาบกิจกรรม → `FixedSlotConflict` reason `supervisor_unavailable` (บล็อก)
 5. **Hard Rule Feasibility** — hard global rules ที่พิสูจน์ได้ว่าเป็นไปไม่ได้ (เช่น วิชาหนัก hard morning เกินช่องเช้า) → `hard_rule_issues` ข้อความภาษาไทย (บล็อก)
+
+> **การนับภาระงานครู (รวม co-teacher + กิจกรรม)**: `TeacherOverload`/`teacher_loads` นับคาบของ
+> lesson block ให้ **ครูหลัก + ครูผู้สอนร่วม (co-teacher) ทั้งคู่** และนับ **คาบดูแลกิจกรรม** ของครูผู้ดูแล
+> (`FixedSlot.class_teachers`) เป็นภาระคงที่ — ครูผู้ดูแลถูกกันไม่ให้ถูกจัดคาบอื่นชนเวลาที่ดูแลกิจกรรม
+> (`_is_teacher_hard_blocked` / `_count_teacher_available_slots` หักคาบนั้นออก)
 
 ---
 
@@ -869,7 +874,8 @@ CREATE INDEX idx_dsa_original_teacher ON daily_substitute_assignments(original_t
 4. **localStorage จำกัด**: POC เก็บ ~180 วัน/จำกัดขนาด (try/catch) — ระดับ 2 ใช้ DB (schema ข้อ 15.6)
 5. **ซิงก์ข้ามเครื่อง**: ระดับ 1 เป็น per-browser — ระดับ 2 ต้องบันทึกผ่าน API ฝั่งหลัก
 6. **กันครูซ้ำเวลาเดียวกัน**: ครูรับสอนแทนแล้ว 1 คาบเวลา → ไม่โผล่ในรายชื่อครูว่างคาบนั้นอีก (บังคับใน
-   `computeFreeTeachers`)
+   `computeFreeTeachers`); **ครูที่เป็นผู้ดูแลกิจกรรม** (`FixedSlot.class_teachers`) ในคาบนั้นก็ถูกกันออก
+   จากรายชื่อครูว่างสอนแทนด้วย
 
 ---
 

@@ -26,6 +26,7 @@ from models import (
     SubjectTimeRule,
 )
 from solver import TimetableSolver
+from preflight import run_preflight
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -244,6 +245,12 @@ def main():
     all_pass = all_pass and success
 
     success = test_co_teacher()
+    all_pass = all_pass and success
+
+    success = test_fixed_slot_supervision()
+    all_pass = all_pass and success
+
+    success = test_fixed_slot_supervision_over_max()
     all_pass = all_pass and success
 
     success = test_am_pm_free_soft()
@@ -825,6 +832,87 @@ def test_co_teacher() -> bool:
         return False
 
     print(f"  ✅ PASS: co-teacher no clash; T1={loads['T1']}, T2={loads['T2']} (นับทั้ง 2 คน)")
+    return True
+
+
+def test_fixed_slot_supervision() -> bool:
+    """Fixed slots with class_teachers: supervision counts into teacher load,
+    the supervising teacher can't be scheduled at the same (day, period),
+    and preflight counts supervision toward max_periods (over_max)."""
+    print(f"\n{'='*60}")
+    print("  TEST: fixed slot supervision (ครูผู้ดูแลกิจกรรม)")
+    print(f"{'='*60}")
+
+    request = _synthetic_request(fixed_slots=[
+        FixedSlot(id="FS1", name="ลูกเสือ", slot_type=FixedSlotType.SCOUT,
+                  day=4, period=6, class_ids=["C1"],
+                  class_teachers={"C1": "T6"}),
+    ])
+
+    # Preflight: T6 ต้องมี needed = 6 (วิชา) + 1 (ดูแลลูกเสือ) = 7
+    report = run_preflight(request)
+    if report.has_blocking_issues():
+        print(f"  ❌ FAIL: unexpected blocking issues: {report.model_dump()}")
+        return False
+
+    solver = TimetableSolver(request)
+    result = solver.solve()
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE")
+        return False
+
+    # 1. ครูผู้ดูแล (T6) ไม่ถูกจัดคาบ (Thu,6) ชนเวลาดูแลกิจกรรม
+    lb_by_id = {lb.id: lb for lb in request.lesson_blocks}
+    for s in result.slots:
+        teachers_at_slot = {s.teacher_id}
+        lb = lb_by_id.get(s.lesson_block_id)
+        if lb and lb.co_teacher_id:
+            teachers_at_slot.add(lb.co_teacher_id)
+        if s.day == 4 and s.period == 6 and "T6" in teachers_at_slot:
+            print(f"  ❌ FAIL: T6 scheduled at D4P6 while supervising ลูกเสือ")
+            return False
+
+    # 2. ภาระงาน T6 = 6 (สอน ป.6) + 1 (ดูแลลูกเสือ) = 7
+    loads = {tl.teacher_id: tl.assigned_periods for tl in result.teacher_loads}
+    if loads.get("T6") != 7:
+        print(f"  ❌ FAIL: T6 assigned={loads.get('T6')} expected 7 (6 teaching + 1 supervision)")
+        return False
+
+    print(f"  ✅ PASS: supervision counted (T6=7), no clash at D4P6, preflight ok")
+    return True
+
+
+def test_fixed_slot_supervision_over_max() -> bool:
+    """Preflight flags over_max when supervision pushes a teacher past their cap."""
+    print(f"\n{'='*60}")
+    print("  TEST: fixed slot supervision → preflight over_max")
+    print(f"{'='*60}")
+
+    # T5 teaches 6 periods and supervises 1 → needed 7 > max 6 → over_max (เตือน ไม่บล็อก)
+    request = _synthetic_request(fixed_slots=[
+        FixedSlot(id="FS1", name="โฮมรูม", slot_type=FixedSlotType.HOMEROOM,
+                  day=2, period=1, class_ids=["C5"],
+                  class_teachers={"C5": "T5"}),
+    ])
+    request.teachers = [
+        t.model_copy(update={"max_periods_per_week": 6}) if t.id == "T5" else t
+        for t in request.teachers
+    ]
+
+    report = run_preflight(request)
+    over = [o for o in report.teacher_overloads if o.teacher_id == "T5"]
+    if not over or over[0].reason != "over_max":
+        print(f"  ❌ FAIL: expected over_max for T5, got {over}")
+        return False
+    if over[0].needed_periods != 7:
+        print(f"  ❌ FAIL: T5 needed={over[0].needed_periods} expected 7 (6 + 1 supervision)")
+        return False
+    # over_max = เตือนเท่านั้น ไม่บล็อก
+    if report.has_blocking_issues():
+        print(f"  ❌ FAIL: over_max ควรเป็นคำเตือนไม่บล็อก แต่ has_blocking_issues=True")
+        return False
+
+    print(f"  ✅ PASS: T5 needed=7 (รวม supervision), reason=over_max, ไม่บล็อก")
     return True
 
 

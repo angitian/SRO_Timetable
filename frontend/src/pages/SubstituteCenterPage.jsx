@@ -222,8 +222,9 @@ function SubstituteCenterInner() {
       teachers,
       absentTeacherIds,
       lessonBlockMap,
+      fixedSlots: fixtureData.fixed_slots,
     })
-  }, [selectedSlot, dayOfWeek, daySlots, assignments, teachers, absentTeacherIds, lessonBlockMap])
+  }, [selectedSlot, dayOfWeek, daySlots, assignments, teachers, absentTeacherIds, lessonBlockMap, fixtureData.fixed_slots])
 
   const historyDates = useMemo(
     () => Object.keys(dailySchedules || {}).sort((a, b) => b.localeCompare(a)),
@@ -346,6 +347,7 @@ function SubstituteCenterInner() {
           lessonBlockMap={lessonBlockMap}
           scheduleBlocks={schedule_blocks}
           scheduleConfig={schedule_config}
+          fixedSlots={fixtureData.fixed_slots}
         />
       )}
 
@@ -752,7 +754,7 @@ function HistoryTab({ historyDates, dailySchedules, teacherMap, onOpen, onDelete
 }
 
 /* ═══════════════════════════ Tab: สถิติ ═══════════════════════════ */
-function StatsTab({ teachers, dailySchedules, resultSlots, userPlacements, lessonBlockMap, scheduleBlocks, scheduleConfig }) {
+function StatsTab({ teachers, dailySchedules, resultSlots, userPlacements, lessonBlockMap, scheduleBlocks, scheduleConfig, fixedSlots }) {
   const [statsRange, setStatsRange] = useState('week') // week | month | custom
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
@@ -778,8 +780,8 @@ function StatsTab({ teachers, dailySchedules, resultSlots, userPlacements, lesso
   }, [statsRange, customFrom, customTo])
 
   const baseLoads = useMemo(
-    () => computeBaseTeacherLoad({ resultSlots, userPlacements, lessonBlockMap, scheduleBlocks, scheduleConfig }),
-    [resultSlots, userPlacements, lessonBlockMap, scheduleBlocks, scheduleConfig],
+    () => computeBaseTeacherLoad({ resultSlots, userPlacements, lessonBlockMap, scheduleBlocks, scheduleConfig, fixedSlots }),
+    [resultSlots, userPlacements, lessonBlockMap, scheduleBlocks, scheduleConfig, fixedSlots],
   )
   const subStats = useMemo(
     () => computeSubstituteStats(dailySchedules, { fromDate, toDate, scheduleBlocks, scheduleConfig }),

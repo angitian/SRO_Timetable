@@ -171,10 +171,18 @@ class FixedSlot(BaseModel):
         default_factory=list,
         description="Empty list = all classes",
     )
+    class_teachers: dict[str, str] = Field(
+        default_factory=dict,
+        description="ครูผู้ดูแลกิจกรรมรายชั้น: { class_id: teacher_id }. ชั้นที่ไม่ได้ระบุ = ไม่มีผู้ดูแล (ไม่นับภาระ/ไม่ล็อกครู)",
+    )
 
     def effective_periods(self) -> list[int]:
         """Return the sorted list of all periods this fixed slot occupies."""
         return sorted(set([self.period, *self.periods]))
+
+    def supervisor_teacher_ids(self) -> set[str]:
+        """Unique teacher ids supervising this fixed slot (from class_teachers)."""
+        return set((self.class_teachers or {}).values())
 
 
 class SubjectTimeRule(BaseModel):

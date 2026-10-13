@@ -945,6 +945,7 @@ function SpecialActivitiesSection() {
   const { fixtureData, updateFixtureData } = useApp()
   const activities = fixtureData?.fixed_slots || []
   const classes = fixtureData?.classes || []
+  const teachers = fixtureData?.teachers || []
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [customPresets, setCustomPresets] = useState(() => loadCustomPresets())
@@ -957,6 +958,8 @@ function SpecialActivitiesSection() {
   const [fixedPeriod, setFixedPeriod] = useState(6)      // first period of the range
   const [periodCount, setPeriodCount] = useState(1)      // number of consecutive periods
   const [extraPeriods, setExtraPeriods] = useState([])   // additional non-consecutive periods
+  // ครูผู้ดูแลกิจกรรมรายชั้น: { [class_id]: teacher_id }
+  const [classTeachers, setClassTeachers] = useState({})
 
   // Effective periods for the form: contiguous range + extra selections
   function getEffectivePeriods() {
@@ -1023,6 +1026,25 @@ function SpecialActivitiesSection() {
     return map
   }, [activities])
 
+  // ครูผู้ดูแลคนเดียวกันถูกเลือกให้ดูแลกิจกรรมที่ชน (วัน+คาบ) กันเอง → เตือน
+  const supervisorConflictTeachers = useMemo(() => {
+    const effective = getEffectivePeriods()
+    if (effective.length === 0 || Object.keys(classTeachers).length === 0) return []
+    const periodSet = new Set(effective)
+    const clashTeachers = new Set()
+    for (const a of activities) {
+      if (editingId && a.id === editingId) continue
+      if (a.day !== fixedDay) continue
+      const aPeriods = new Set([a.period, ...(a.periods || [])])
+      if (![...periodSet].some((p) => aPeriods.has(p))) continue
+      for (const [cid, tid] of Object.entries(classTeachers)) {
+        if ((a.class_teachers || {})[cid] === tid) clashTeachers.add(tid)
+      }
+    }
+    return [...clashTeachers]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedDay, fixedPeriod, periodCount, extraPeriods, classTeachers, activities, editingId])
+
   function handleSavePreset() {
     const trimmed = name.trim()
     if (!trimmed) return
@@ -1046,8 +1068,28 @@ function SpecialActivitiesSection() {
     setFixedPeriod(6)
     setPeriodCount(1)
     setExtraPeriods([])
+    setClassTeachers({})
     setEditingId(null)
     setShowForm(false)
+  }
+
+  // ชั้นที่กิจกรรมนี้ล็อก (class_ids) — ใช้แสดงรายการเลือกครูผู้ดูแลรายชั้น
+  function targetClassIds() {
+    return gradesToClassIds(targetGrades)
+  }
+  function targetClassesForTeachers() {
+    const ids = targetClassIds()
+    // ถ้าไม่เลือกระดับชั้น = ทุกห้อง
+    const list = ids.length > 0 ? classes.filter((c) => ids.includes(c.id)) : classes
+    return list
+  }
+  function setClassTeacher(classId, teacherId) {
+    setClassTeachers((prev) => {
+      const next = { ...prev }
+      if (teacherId) next[classId] = teacherId
+      else delete next[classId]
+      return next
+    })
   }
 
   // Resolve selected grade labels → class_ids (empty = all classes)
@@ -1085,6 +1127,7 @@ function SpecialActivitiesSection() {
       period: effective[0],
       periods: effective.slice(1),
       class_ids: gradesToClassIds(targetGrades),
+      class_teachers: { ...classTeachers },
     }
     if (editingId) {
       updateFixtureData({
@@ -1106,6 +1149,7 @@ function SpecialActivitiesSection() {
     setFixedPeriod(act.period || 6)
     setPeriodCount(count)
     setExtraPeriods(extra)
+    setClassTeachers(act.class_teachers || {})
     setShowForm(true)
   }
 
@@ -1234,6 +1278,42 @@ function SpecialActivitiesSection() {
             </div>
           </div>
 
+          {/* ครูผู้ดูแลกิจกรรม (รายชั้น) — นับเข้างานครู */}
+          <div>
+            <label className="font-medium text-gray-600 mb-1 block">
+              ครูผู้ดูแลรายชั้น
+              <span className="ml-1.5 text-xs font-normal text-gray-400">
+                (คาบนี้จะนับเข้างานครูผู้ดูแล และกันครูไม่ให้ถูกจัดคาบอื่นชน) — ไม่เลือก = ไม่นับ
+              </span>
+            </label>
+            {targetClassesForTeachers().length === 0 ? (
+              <p className="text-xs text-gray-400 italic">ยังไม่มีห้องเรียนในระบบ</p>
+            ) : (
+              <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg bg-white divide-y divide-gray-100">
+                {targetClassesForTeachers().map((c) => (
+                  <div key={c.id} className="flex items-center gap-2 px-2 py-1.5">
+                    <span className="text-sm text-gray-700 w-24 shrink-0">{c.name}</span>
+                    <select
+                      value={classTeachers[c.id] || ''}
+                      onChange={(e) => setClassTeacher(c.id, e.target.value)}
+                      className="flex-1 border border-gray-300 rounded-lg px-2 py-1 text-sm"
+                    >
+                      <option value="">— ไม่ระบุครูผู้ดูแล —</option>
+                      {teachers.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            )}
+            {Object.keys(classTeachers).length > 0 && (
+              <p className="text-xs text-gray-400 mt-1">
+                เลือกแล้ว {Object.keys(classTeachers).length} ชั้น · รวม {Object.values(classTeachers).length} คาบ/สัปดาห์
+              </p>
+            )}
+          </div>
+
           {/* Day + Period(s) */}
           <div className="grid grid-cols-3 gap-3">
             <div>
@@ -1323,6 +1403,23 @@ function SpecialActivitiesSection() {
             </div>
           )}
 
+          {/* Supervisor clash warning */}
+          {supervisorConflictTeachers.length > 0 && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5">
+              <div className="font-bold flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" /> ครูผู้ดูแลติดคาบกิจกรรมอื่นในเวลาเดียวกัน
+              </div>
+              <ul className="list-disc pl-5">
+                {supervisorConflictTeachers.map((tid) => (
+                  <li key={tid}>
+                    {teachers.find((t) => t.id === tid)?.name || tid} ถูกเลือกดูแลกิจกรรมที่วัน/คาบซ้ำกับกิจกรรมเดิม —
+                    ระบบจะกันครูคนนี้ไม่ให้สอนคาบนั้น และภาระงานจะนับซ้ำ
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex gap-2">
             <button
@@ -1376,6 +1473,17 @@ function SpecialActivitiesSection() {
                   ) : (
                     <span className="px-1.5 py-0.5 rounded bg-gray-200 text-gray-600 font-medium text-xs">
                       ทุกห้อง
+                    </span>
+                  )}
+                  {/* ครูผู้ดูแลรายชั้น */}
+                  {Object.keys(act.class_teachers || {}).length > 0 && (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 font-medium text-[10px]"
+                      title={Object.entries(act.class_teachers || {}).map(([cid, tid]) =>
+                        `${classes.find((c) => c.id === cid)?.name || cid}: ${teachers.find((t) => t.id === tid)?.name || tid}`
+                      ).join('\n')}
+                    >
+                      ดูแล {Object.keys(act.class_teachers).length} ชั้น · {Object.keys(act.class_teachers).length} คาบ/สัปดาห์
                     </span>
                   )}
                 </div>

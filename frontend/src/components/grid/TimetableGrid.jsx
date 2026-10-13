@@ -571,6 +571,10 @@ export default function TimetableGrid({
                   const isBreak = breakSet.has(p)
                   const fixedSlot = getFixedSlotFor(d, p, classId)
                   const isFixed = !!fixedSlot
+                  // ครูผู้ดูแลกิจกรรมของห้องนี้ (class_teachers[classId])
+                  const fixedSlotTeacherName = isFixed && fixedSlot?.class_teachers?.[classId]
+                    ? (teacherMap.get(fixedSlot.class_teachers[classId])?.name || fixedSlot.class_teachers[classId])
+                    : null
                   const userPlacement = userPlacementMap.get(`${d}-${p}-${classId}`)
                   const matchedSlots = isFixed || isLunch || isBreak ? [] : getFilteredSlots(d, p, classId)
                   const slot = matchedSlots[0] || null
@@ -637,6 +641,7 @@ export default function TimetableGrid({
                       isBreak={isBreak}
                       isFixed={isFixed}
                       fixedSlotName={fixedSlot?.name}
+                      fixedSlotTeacherName={fixedSlotTeacherName}
                       isPreAssigned={isPreAssigned}
                       isDragTarget={isTarget}
                       dragTargetInfo={targetInfo}
@@ -705,6 +710,12 @@ export default function TimetableGrid({
                   const isBreak = breakSet.has(p)
                   const fixedSlot = getFixedSlotsForTeacher(d, p)[0] || null
                   const isFixed = !!fixedSlot
+                  // ครูคนนี้เป็นผู้ดูแลกิจกรรมนี้หรือไม่ → แสดง badge "ดูแลกิจกรรม"
+                  const fixedSlotTeacherName = isFixed && activeTeacherId && fixedSlot?.class_teachers
+                    ? (Object.values(fixedSlot.class_teachers).includes(activeTeacherId)
+                        ? (teacherMap.get(activeTeacherId)?.name || activeTeacherId)
+                        : null)
+                    : null
                   const teacherSlots = isFixed || isLunch || isBreak ? [] : getTeacherSlots(d, p)
                   const isTarget = dragTarget?.day === d && dragTarget?.period === p
                   const targetInfo = isTarget ? dragTarget : null
@@ -717,6 +728,7 @@ export default function TimetableGrid({
                       isBreak={isBreak}
                       isFixed={isFixed}
                       fixedSlotName={fixedSlot?.name}
+                      fixedSlotTeacherName={fixedSlotTeacherName}
                       isDragTarget={isTarget}
                       dragTargetInfo={targetInfo}
                       isDraggable={teacherSlots.length > 0 && !isFixed}
