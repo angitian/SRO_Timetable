@@ -321,9 +321,9 @@ time table/
 
 | Preset (frontend) | optimization_mode | time limit | พฤติกรรม |
 |---|---|---|---|
-| ⚡ fast | `FAST` | ~2–3 วิ | ใช้ `_FirstSolutionCallback` หยุดที่ feasible แรก |
-| 🎯 balanced | `BALANCED` | ~10–15 วิ | รันเต็ม time limit เพิ่มคุณภาพ objective |
-| 💎 deep | `DEEP` | มากกว่า | เปิด gap clustering + S2 น้ำหนักสูง |
+| ⚡ fast | `FAST` | ~5 วิ | ใช้ `_FirstSolutionCallback` หยุดที่ feasible แรก |
+| 🎯 balanced | `BALANCED` | ~20 วิ | รันเต็ม time limit เพิ่มคุณภาพ objective |
+| 💎 deep | `DEEP` | ~45–60 วิ | เปิด gap clustering + S2 น้ำหนักสูง |
 
 ค่า time limit จริงมาจาก `SOLVER_PRESETS` ใน `frontend/src/utils/scoreCalculator.js` (resolveSolverParams)
 Solver ใช้ `num_search_workers = 8`, `max_time_in_seconds = solver_time_limit_seconds`

@@ -295,8 +295,8 @@ export const SOLVER_PRESETS = {
     icon: '⚡',
     name: 'เร็ว (Fast)',
     shortName: 'เร็ว',
-    timeLimit: 3,
-    description: 'ใช้เวลา ~2-3 วินาที เน้นได้ตารางครบ ไม่คำนึงถึงการเกลี่ยคาบ',
+    timeLimit: 5,
+    description: 'ใช้เวลา ~5 วินาที เน้นได้ตารางครบ ไม่คำนึงถึงการเกลี่ยคาบ',
     optimizeGaps: false,
   },
   BALANCED: {
@@ -304,8 +304,8 @@ export const SOLVER_PRESETS = {
     icon: '🎯',
     name: 'สมดุล (Balanced)',
     shortName: 'สมดุล',
-    timeLimit: 15,
-    description: 'ใช้เวลา ~10-15 วินาที แนะนำ: ตารางสมดุล ลดคาบว่างครู',
+    timeLimit: 20,
+    description: 'ใช้เวลา ~20 วินาที แนะนำ: ตารางสมดุล ลดคาบว่างครู',
     optimizeGaps: true,
   },
   DEEP: {
@@ -313,8 +313,8 @@ export const SOLVER_PRESETS = {
     icon: '💎',
     name: 'ประณีต (Deep)',
     shortName: 'ประณีต',
-    timeLimit: 45,
-    description: 'ใช้เวลา ~30-45 วินาที คุณภาพสูงสุด เกลี่ยวิชาเช้าและตารางครูเนียนที่สุด',
+    timeLimit: 60,
+    description: 'ใช้เวลา ~45-60 วินาที คุณภาพสูงสุด เกลี่ยวิชาเช้าและตารางครูเนียนที่สุด',
     optimizeGaps: true,
   },
 }
