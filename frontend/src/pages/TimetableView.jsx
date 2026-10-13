@@ -716,6 +716,30 @@ export default function TimetableView() {
         </div>
       )}
 
+      {/* Result-stale banner — จำนวนคาบที่วางไม่ตรงกับข้อมูลปัจจุบัน
+          (เช่น แก้ข้อมูล/import ใหม่หลังจัด หรือคาบบางส่วนวางไม่ได้) */}
+      {hasResult && placedCount < totalCount && (
+        <div className="flex items-center justify-between px-4 py-2 bg-red-50 border border-red-300 text-red-800 rounded-xl mb-3 text-xs sm:text-sm">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span className="font-medium min-w-0">
+              วางแล้ว <b>{placedCount}</b>/{totalCount} คาบ — ข้อมูลอาจเปลี่ยนหลังจัดตาราง (เช่น แก้/เพิ่มวิชา, import ใหม่) หรือคาบบางส่วนวางไม่ได้ —
+              กรุณาจัดตารางใหม่เพื่อให้ผลลัพธ์ตรงข้อมูลปัจจุบัน
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 ml-3">
+            <button
+              onClick={() => runSolver({ preAssignments: userPlacements })}
+              disabled={isGenerating}
+              className="flex items-center gap-1 bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-lg font-medium text-xs transition-colors disabled:opacity-60"
+            >
+              <Rocket className="w-3 h-3" />
+              จัดใหม่
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Solver error banner — shows backend failures (e.g. 500) instead of silence */}
       {error && !isGenerating && (
         <div className="flex items-start justify-between gap-3 px-4 py-3 bg-red-50 border border-red-200 text-red-800 rounded-xl mb-3 text-xs sm:text-sm">

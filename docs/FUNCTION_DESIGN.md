@@ -448,9 +448,13 @@ Solver ใช้ `num_search_workers = 8`, `max_time_in_seconds = solver_time_li
 
 ### Step 2 — `ScheduleBlocksStep.jsx`
 
-- **BlockCard**: สร้าง/แก้ไข schedule block — ชื่อ, target classes, เริ่มเวลา, ระยะคาบ/พัก/พักเที่ยง, จำนวนคาบ, `apply_to_all_days` + `periods_by_day` (วันไหนต่างจากปกติ), เพิ่ม/ลบพักเบรกสั้น (`insertBreakPeriod` → period_no 3.5 ไม่เลื่อนเลขคาบเดิม → **ไม่ต้องรัน solver ใหม่**)
+- **BlockCard**: สร้าง/แก้ไข schedule block — ชื่อ, target classes, เริ่มเวลา, ระยะคาบ/พัก/พักเที่ยง, จำนวนคาบ, `apply_to_all_days` + `periods_by_day` (วันไหนต่างจากปกติ), เพิ่ม/ลบพักเบรกสั้น (`insertBreakPeriod` → period_no 3.5 ไม่เลื่อนเลขคาบเดิม → **ไม่ต้องรัน solver ใหม่**), **checkbox "เว้นพักสั้นระหว่างคาบอัตโนมัติ"** (`auto_short_break` — ปิด = คาบเรียนติดกัน) และ **dropdown ตำแหน่งพักเที่ยง** ("พักเที่ยงหลังคาบที่ N" / ไม่มีพักเที่ยง)
 - `generatePeriods` คำนวณ start/end time อัตโนมัติ
 - **SpecialActivitiesSection** (กิจกรรมพิเศษ/fixed slots): สร้างกิจกรรม (ลูกเสือ/โฮมรูม/ประชุมเช้า/ฯลฯ) เลือกวัน/คาบ/จำนวนคาบ/ระดับชั้น, บันทึกเป็น preset (`loadCustomPresets`/`saveCustomPresets` localStorage), และ **ตรวจคาบซ้ำ (ใหม่)** — `computeSlotConflicts` เตือนเมื่อวัน+คาบ+ชั้นทับกับกิจกรรมเดิม (บล็อกการบันทึก + แสดง badge ในรายการ)
+- **ตัวกันพลาด (guards)**:
+  - `capacityWarnings` — เตือน (ไม่บล็อก) เมื่อกิจกรรมจะเพิ่มให้ห้องที่ใช้คาบเต็ม (needed > study slots − กิจกรรมเดิม − คาบใหม่) เช่น ห้องที่ใช้ 30/30 พอดี
+  - `subjectDuplicateWarning` — เตือนเมื่อชื่อกิจกรรมตรงกับวิชาใน Excel (นับแยก: คาบเรียน + คาบล็อก)
+  - `supervisorConflictTeachers` — เตือนครูผู้ดูแลติดกิจกรรมซ้ำวัน/คาบ
 - ปุ่ม "สร้างตาราง" (ไป Step 3)
 
 ### Step 3 — `TeacherWorkloadStep.jsx`
@@ -484,6 +488,7 @@ Solver ใช้ `num_search_workers = 8`, `max_time_in_seconds = solver_time_li
 - **lockSlot/unlockSlot**: ล็อกคาบว่างเป็น fixed slot (รายห้องหรือทั้งโรงเรียน)
 - **ส่งออก Excel** (ExportExcelModal) + ปุ่มไป PrintStudio
 - แถบสถานะ: SolverMetrics + quality score (scoreCalculator)
+- **แบนเนอร์ผลลัพธ์เก่า/วางไม่ครบ**: เมื่อ `placedCount < totalCount` (คาบที่วางจาก result + placements น้อยกว่าคาบที่ lesson blocks ต้องการ เช่น แก้ข้อมูล/import ใหม่หลังจัด หรือคาบบางส่วนวางไม่ได้) → แสดงแบนเนอร์แดงพร้อมปุ่ม "จัดใหม่"
 
 ### Step 6 — `PrintStudio.jsx`
 

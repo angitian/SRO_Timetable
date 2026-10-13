@@ -1108,6 +1108,54 @@ function SpecialActivitiesSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fixedDay, fixedPeriod, periodCount, extraPeriods, classTeachers, activities, editingId])
 
+  // ── เตือนห้องที่ใช้คาบเต็ม: เพิ่มกิจกรรมนี้แล้วจะจัดตารางไม่ได้ (capacity) ──
+  const capacityWarnings = useMemo(() => {
+    const effective = getEffectivePeriods()
+    if (effective.length === 0) return []
+    const blocks = fixtureData?.schedule_blocks || []
+    const lbs = fixtureData?.lesson_blocks || []
+    const warnings = []
+    for (const c of targetClassesForTeachers()) {
+      const blk = blocks.find((b) => (b.target_classes || []).includes(c.id)) || blocks[0]
+      if (!blk) continue
+      const studyPerDay = (blk.periods || []).filter((p) => p.type === 'STUDY').length
+      const studyTotal = studyPerDay * (blk.days_per_week || 5)
+      // ช่องที่กิจกรรมเดิม (ไม่นับตัวที่กำลังแก้) ล็อกห้องนี้
+      const lockedCells = new Set()
+      for (const a of activities) {
+        if (editingId && a.id === editingId) continue
+        if (a.class_ids && a.class_ids.length > 0 && !a.class_ids.includes(c.id)) continue
+        for (const p of [a.period, ...(a.periods || [])]) lockedCells.add(`${a.day}-${p}`)
+      }
+      const available = studyTotal - lockedCells.size - effective.length
+      const needed = lbs
+        .filter((lb) => lb.class_id === c.id)
+        .reduce((s, lb) => s + (lb.periods_per_week || 0), 0)
+      if (needed > available) {
+        warnings.push({
+          classId: c.id,
+          className: c.name,
+          needed,
+          available,
+          overflow: needed - available,
+        })
+      }
+    }
+    return warnings
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedDay, fixedPeriod, periodCount, extraPeriods, targetGrades, activities, editingId, fixtureData])
+
+  // ── เตือนชื่อกิจกรรมตรงกับวิชาใน Excel (นับแยก: คาบเรียน + คาบล็อก) ──
+  const subjectDuplicateWarning = useMemo(() => {
+    if (!name.trim()) return null
+    const normalize = (s) => String(s || '').trim().toLowerCase().replace(/[\s_]+/g, '')
+    const target = normalize(name)
+    const subjects = fixtureData?.subjects || []
+    const hit = subjects.find((s) => normalize(s.name) === target)
+    return hit ? hit.name : null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, fixtureData?.subjects])
+
   function handleSavePreset() {
     const trimmed = name.trim()
     if (!trimmed) return
@@ -1578,6 +1626,39 @@ function SpecialActivitiesSection() {
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {/* Capacity warning: ห้องใช้คาบเต็มแล้ว */}
+          {capacityWarnings.length > 0 && (
+            <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 space-y-0.5">
+              <div className="font-bold flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" /> ห้องต่อไปนี้ใช้คาบเต็มแล้ว — เพิ่มกิจกรรมนี้จะจัดตารางไม่ได้
+              </div>
+              <ul className="list-disc pl-5">
+                {capacityWarnings.slice(0, 8).map((w) => (
+                  <li key={w.classId}>
+                    {w.className} — ต้องการ {w.needed} คาบ/สัปดาห์ แต่มีช่องเหลือ {w.available} (เกิน {w.overflow})
+                  </li>
+                ))}
+              </ul>
+              {capacityWarnings.length > 8 && (
+                <p>และอีก {capacityWarnings.length - 8} ห้อง…</p>
+              )}
+              <p className="text-[11px] text-red-500">แนะนำ: ลดคาบวิชาใน Excel ก่อน หรืออย่าเพิ่มคาบพิเศษให้ห้องที่เต็ม (คาบพิเศษล็อกช่อง = ลดช่องว่างลงอีก)</p>
+            </div>
+          )}
+
+          {/* Duplicate subject warning: วิชาใน Excel + คาบพิเศษ */}
+          {subjectDuplicateWarning && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5">
+              <div className="font-bold flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" /> วิชา "{subjectDuplicateWarning}" มีอยู่ในรายวิชา (Excel) แล้ว
+              </div>
+              <p>
+                การเพิ่มคาบพิเศษนี้จะนับแยกจากคาบเรียนใน Excel (คาบเรียนยังต้องวาง + คาบนี้ล็อกช่องเพิ่ม) —
+                ถ้าไม่ใช่เจตนาให้มีทั้ง 2 อย่าง กรุณาลบออกข้างใดข้างหนึ่ง เพื่อกันห้องใช้คาบเกิน
+              </p>
             </div>
           )}
 
