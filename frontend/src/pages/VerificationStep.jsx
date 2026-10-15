@@ -9,11 +9,15 @@ import { buildClassBlockMap } from '../utils/periods.js'
 import { getSubjectColor } from '../utils/subjectColors.js'
 import { normalizeClassTeachers } from '../utils/teacherLoad.js'
 import TeacherSummaryTable from '../components/verification/TeacherSummaryTable.jsx'
+import TeacherWorkloadTable from '../components/verification/TeacherWorkloadTable.jsx'
 import ClassroomDensityTable from '../components/verification/ClassroomDensityTable.jsx'
 import FacilityUsageSummary from '../components/verification/FacilityUsageSummary.jsx'
 import FacilityTimetable from '../components/verification/FacilityTimetable.jsx'
 import TeacherClassMatrix from '../components/verification/TeacherClassMatrix.jsx'
 import { exportMatrixExcel, exportMatrixPDF } from '../utils/exportMatrix.js'
+import { classGradeRoom } from '../utils/grades.js'
+import { buildGroupedWorkload } from '../utils/workloadGrouping'
+import { exportWorkloadExcel } from '../utils/workloadExcelExport'
 
 export default function VerificationStep() {
   const { fixtureData, error, errorResponse, setStep } = useApp()
@@ -160,6 +164,71 @@ export default function VerificationStep() {
     if (!q) return teacherSummary
     return teacherSummary.filter((t) => t.teacher.name.toLowerCase().includes(q))
   }, [teacherSummary, searchQuery])
+
+  // ── ตารางภาระงานครู: flat rows = ครู × วิชา × ชั้น/ห้อง × คาบ ──
+  // ตรงกับ teacherSummary (นับครูร่วมสอน + คาบดูแลกิจกรรมด้วย) เพื่อให้
+  // ยอดรวมต่อครูตรงกับตัวเลขอื่น ๆ ในหน้า
+  const teacherWorkloadRows = useMemo(() => {
+    const rows = []
+    for (const lb of lessonBlocks) {
+      const subject = subjectMap.get(lb.subject_id)
+      const subjectName = subject?.name || lb.subject_id
+      const cls = classMap.get(lb.class_id)
+      const { grade, room } = classGradeRoom(cls)
+      const periods = lb.periods_per_week || 0
+      const teacherIds = lb.co_teacher_id ? [lb.teacher_id, lb.co_teacher_id] : [lb.teacher_id]
+      for (const tid of teacherIds) {
+        const t = teacherMap.get(tid)
+        if (!t) continue
+        rows.push({
+          teacherId: tid, teacherName: t.name,
+          subjectId: subject?.id || '', subjectName,
+          classId: lb.class_id, className: cls?.name || lb.class_id,
+          grade, room, periods,
+        })
+      }
+    }
+    // คาบดูแลกิจกรรม (fixed slots) — นับ 1 คาบ/ครู/กิจกรรม (เฉพาะห้องแรกที่ดูแล)
+    for (const fs of fixedSlots) {
+      const effective = new Set([fs.period, ...(fs.periods || [])])
+      const seen = new Set()
+      for (const [cid, tids] of Object.entries(normalizeClassTeachers(fs.class_teachers))) {
+        const cls = classMap.get(cid)
+        const { grade, room } = classGradeRoom(cls)
+        for (const tid of tids) {
+          if (seen.has(tid)) continue
+          seen.add(tid)
+          const t = teacherMap.get(tid)
+          if (!t) continue
+          rows.push({
+            teacherId: tid, teacherName: t.name,
+            subjectId: '', subjectName: fs.name || 'กิจกรรม',
+            classId: cid, className: cls?.name || cid,
+            grade, room, periods: effective.size, isActivity: true,
+          })
+        }
+      }
+    }
+    return rows
+  }, [lessonBlocks, fixedSlots, subjectMap, classMap, teacherMap])
+
+  // 1 แถว = 1 ครู (badge วิชากลุ่มห้อง + สถานะภาระงาน) สำหรับตาราง + Excel
+  const groupedWorkload = useMemo(
+    () => buildGroupedWorkload({
+      assignments: teacherWorkloadRows,
+      teachers,
+      classes,
+      subjectMap,
+      defaultMaxPeriods: fixtureData?.schedule_config?.default_max_periods_per_week,
+    }),
+    [teacherWorkloadRows, teachers, classes, subjectMap, fixtureData?.schedule_config?.default_max_periods_per_week],
+  )
+
+  const filteredGroups = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return groupedWorkload
+    return groupedWorkload.filter((g) => g.teacherName.toLowerCase().includes(q))
+  }, [groupedWorkload, searchQuery])
 
   const filteredClassrooms = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -316,6 +385,14 @@ export default function VerificationStep() {
   const handleMatrixExportExcel = () => { exportMatrixExcel(matrixExportBase) }
   const handleMatrixExportPdf = () => { exportMatrixPDF(matrixExportBase) }
 
+  const handleWorkloadExportExcel = () => {
+    exportWorkloadExcel({
+      title: 'ตารางภาระงานครู',
+      groups: groupedWorkload,
+      detailAssignments: teacherWorkloadRows,
+    })
+  }
+
   return (
     <div className="space-y-6 pb-24">
       {/* Header */}
@@ -458,9 +535,9 @@ export default function VerificationStep() {
         {/* Tab Content */}
         <div className="transition-opacity duration-200">
           {activeTab === 'teachers' && (
-            <TeacherSummaryTable
-              teachers={filteredTeachers}
-              progressColor={progressColor}
+            <TeacherWorkloadTable
+              groups={filteredGroups}
+              onExportExcel={handleWorkloadExportExcel}
               subjectColorClass={subjectColorClass}
             />
           )}
