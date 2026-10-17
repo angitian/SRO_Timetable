@@ -295,8 +295,8 @@ export const SOLVER_PRESETS = {
     icon: '⚡',
     name: 'เร็ว (Fast)',
     shortName: 'เร็ว',
-    timeLimit: 5,
-    description: 'ใช้เวลา ~5 วินาที เน้นได้ตารางครบ ไม่คำนึงถึงการเกลี่ยคาบ',
+    timeLimit: 15,
+    description: 'ใช้เวลา ~15 วินาที เน้นได้ตารางครบ ไม่คำนึงถึงการเกลี่ยคาบ',
     optimizeGaps: false,
   },
   BALANCED: {
@@ -304,8 +304,8 @@ export const SOLVER_PRESETS = {
     icon: '🎯',
     name: 'สมดุล (Balanced)',
     shortName: 'สมดุล',
-    timeLimit: 20,
-    description: 'ใช้เวลา ~20 วินาที แนะนำ: ตารางสมดุล ลดคาบว่างครู',
+    timeLimit: 60,
+    description: 'ใช้เวลา ~60 วินาที แนะนำ: ตารางสมดุล ลดคาบว่างครู',
     optimizeGaps: true,
   },
   DEEP: {
@@ -313,8 +313,17 @@ export const SOLVER_PRESETS = {
     icon: '💎',
     name: 'ประณีต (Deep)',
     shortName: 'ประณีต',
+    timeLimit: 120,
+    description: 'ใช้เวลา ~2 นาที คุณภาพสูงสุด เหมาะกับตารางที่ช่องว่างน้อย (คาบพิเศษล็อกเยอะ)',
+    optimizeGaps: true,
+  },
+  CUSTOM: {
+    id: 'custom',
+    icon: '⏱️',
+    name: 'กำหนดเวลาเอง (Custom)',
+    shortName: 'กำหนดเอง',
     timeLimit: 60,
-    description: 'ใช้เวลา ~45-60 วินาที คุณภาพสูงสุด เกลี่ยวิชาเช้าและตารางครูเนียนที่สุด',
+    description: 'ปรับเวลาเอง 15–600 วินาที + เลือกโหมด สมดุล/ประณีต (สำหรับโรงเรียนใหญ่ เงื่อนไขเยอะ)',
     optimizeGaps: true,
   },
 }
@@ -329,19 +338,38 @@ export function getPreset(id) {
   return SOLVER_PRESETS[key] || SOLVER_PRESETS.BALANCED
 }
 
+// Limits for the "กำหนดเวลาเอง" preset (must stay within the backend cap,
+// models.py: solver_time_limit_seconds le=600).
+export const CUSTOM_TIME_MIN = 15
+export const CUSTOM_TIME_MAX = 600
+export const CUSTOM_TIME_STEP = 15
+
 /**
- * Resolve the effective time limit and optimization mode for a given preset + custom value.
+ * Resolve the effective time limit and optimization mode for a given preset.
  *
- * @param {string} presetId
- * @param {number} customTimeLimit
- * @returns {{ timeLimitSeconds: number, optimizationMode: 'FAST'|'BALANCED' }}
+ * @param {string} presetId - 'fast' | 'balanced' | 'deep' | 'custom'
+ * @param {number} [customTimeLimit] - seconds, only used when presetId === 'custom'
+ * @param {string} [customMode] - 'BALANCED' | 'DEEP', only when presetId === 'custom'
+ * @returns {{ timeLimitSeconds: number, optimizationMode: 'BALANCED'|'DEEP' }}
  */
-export function resolveSolverParams(presetId) {
+export function resolveSolverParams(presetId, customTimeLimit, customMode) {
+  if (presetId === 'custom') {
+    const t = Number(customTimeLimit)
+    const timeLimitSeconds = Number.isFinite(t)
+      ? Math.min(CUSTOM_TIME_MAX, Math.max(CUSTOM_TIME_MIN, t))
+      : CUSTOM_TIME_MIN
+    return {
+      timeLimitSeconds,
+      optimizationMode: customMode === 'DEEP' ? 'DEEP' : 'BALANCED',
+    }
+  }
   const preset = getPreset(presetId)
   const timeLimitSeconds = preset.timeLimit
+  // 'fast' preset intentionally uses BALANCED mode: backend FAST stops at the
+  // first feasible solution which may leave periods unplaced on dense data
+  // (period count is a soft constraint), while BALANCED keeps optimizing.
   const optimizationMode =
-    preset.id === 'fast' ? 'FAST'
-    : preset.id === 'deep' ? 'DEEP'
+    preset.id === 'deep' ? 'DEEP'
     : 'BALANCED'
   return { timeLimitSeconds, optimizationMode }
 }

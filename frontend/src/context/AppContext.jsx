@@ -45,6 +45,8 @@ const initialState = {
   cacheHint: null, // { cacheKey, lastCachedAt }
   optimizationMode: 'BALANCED',
   solverPreset: 'balanced',
+  solverCustomTime: 60, // seconds — used when solverPreset === 'custom'
+  solverCustomMode: 'BALANCED', // 'BALANCED' | 'DEEP' — used when solverPreset === 'custom'
   // userPlacements: { [lesson_block_id]: [{ day, period }] }
   // Tracks lesson blocks the user manually dragged onto the grid (📌 pre-assigned).
   userPlacements: {},
@@ -106,6 +108,10 @@ function reducer(state, action) {
       return { ...state, optimizationMode: action.payload }
     case 'SET_SOLVER_PRESET':
       return { ...state, solverPreset: action.payload }
+    case 'SET_SOLVER_CUSTOM_TIME':
+      return { ...state, solverCustomTime: action.payload }
+    case 'SET_SOLVER_CUSTOM_MODE':
+      return { ...state, solverCustomMode: action.payload }
     case 'SET_FIXTURE_DATA_DIRECT':
       return {
         ...state,
@@ -380,6 +386,8 @@ function reducer(state, action) {
         substitutes: action.payload.substitutes || [],
         selectedFixture: action.payload.fixtureName || 'custom',
         solverPreset: action.payload.solverPreset || state.solverPreset,
+        solverCustomTime: action.payload.solverCustomTime ?? state.solverCustomTime,
+        solverCustomMode: action.payload.solverCustomMode || state.solverCustomMode,
         activeSnapshotId: action.payload.id,
         activeSnapshotLabel: action.payload.label,
         isSnapshotDirty: false,
@@ -437,6 +445,8 @@ function reducer(state, action) {
         userPlacements: ws.userPlacements || {},
         substitutes: ws.substitutes || [],
         solverPreset: ws.solverPreset || 'balanced',
+        solverCustomTime: ws.solverCustomTime ?? 60,
+        solverCustomMode: ws.solverCustomMode || 'BALANCED',
         activeCloudWorkspaceId: action.payload._cloudId || null,
         // Reset local snapshot tracking — cloud workspace is separate
         activeSnapshotId: null,
@@ -769,6 +779,8 @@ export function AppProvider({ children }) {
     // Resolve time limit + optimization mode from the selected preset
     const { timeLimitSeconds, optimizationMode } = resolveSolverParams(
       state.solverPreset,
+      state.solverCustomTime,
+      state.solverCustomMode,
     )
     // Keep optimizationMode in sync for any legacy consumers
     if (state.optimizationMode !== optimizationMode) {
@@ -891,6 +903,14 @@ export function AppProvider({ children }) {
 
   const setSolverPreset = useCallback((preset) => {
     dispatch({ type: 'SET_SOLVER_PRESET', payload: preset })
+  }, [])
+
+  const setSolverCustomTime = useCallback((seconds) => {
+    dispatch({ type: 'SET_SOLVER_CUSTOM_TIME', payload: seconds })
+  }, [])
+
+  const setSolverCustomMode = useCallback((mode) => {
+    dispatch({ type: 'SET_SOLVER_CUSTOM_MODE', payload: mode })
   }, [])
 
   const setFixtureDataDirect = useCallback((data) => {
@@ -1070,6 +1090,8 @@ export function AppProvider({ children }) {
       userPlacements: state.userPlacements,
       substitutes: state.substitutes,
       solverPreset: state.solverPreset,
+      solverCustomTime: state.solverCustomTime,
+      solverCustomMode: state.solverCustomMode,
       description: opts.description || '',
     })
     // If we have an active snapshot, update it instead of creating new
@@ -1083,7 +1105,7 @@ export function AppProvider({ children }) {
       dispatch({ type: 'SET_ACTIVE_SNAPSHOT', payload: { id: snap.id, label: snap.label } })
     }
     return result
-  }, [state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.snapshots.length, state.activeSnapshotId, state.lastSnapshotSaveAt])
+  }, [state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.solverCustomTime, state.solverCustomMode, state.snapshots.length, state.activeSnapshotId, state.lastSnapshotSaveAt])
 
   const doLoadSnapshot = useCallback((id) => {
     const snap = loadSnapshot(id)
@@ -1107,10 +1129,12 @@ export function AppProvider({ children }) {
       userPlacements: state.userPlacements,
       substitutes: state.substitutes,
       solverPreset: state.solverPreset,
+      solverCustomTime: state.solverCustomTime,
+      solverCustomMode: state.solverCustomMode,
     })
     if (!snap) return
     exportToFile(snap)
-  }, [state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset])
+  }, [state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.solverCustomTime, state.solverCustomMode])
 
   const doImportSnapshot = useCallback(async (file) => {
     try {
@@ -1157,6 +1181,8 @@ export function AppProvider({ children }) {
         userPlacements: state.userPlacements,
       substitutes: state.substitutes,
         solverPreset: state.solverPreset,
+        solverCustomTime: state.solverCustomTime,
+        solverCustomMode: state.solverCustomMode,
       })
       snap.id = state.activeSnapshotId
       snap.createdAt = state.lastSnapshotSaveAt || Date.now()
@@ -1168,7 +1194,7 @@ export function AppProvider({ children }) {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     }
-  }, [state.isSnapshotDirty, state.activeSnapshotId, state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.lastSnapshotSaveAt])
+  }, [state.isSnapshotDirty, state.activeSnapshotId, state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.solverCustomTime, state.solverCustomMode, state.lastSnapshotSaveAt])
 
   // Persist userPlacements to localStorage
   useEffect(() => {
@@ -1327,6 +1353,8 @@ export function AppProvider({ children }) {
         userPlacements: state.userPlacements,
       substitutes: state.substitutes,
         solverPreset: state.solverPreset,
+        solverCustomTime: state.solverCustomTime,
+        solverCustomMode: state.solverCustomMode,
         optimizationMode: state.optimizationMode,
       }
       const result = await saveWorkspaceToCloud({
@@ -1383,6 +1411,8 @@ export function AppProvider({ children }) {
         setGridFilter,
         setOptimizationMode,
         setSolverPreset,
+        setSolverCustomTime,
+        setSolverCustomMode,
         clearResult,
         setFixtureDataDirect,
         updateFixtureData,

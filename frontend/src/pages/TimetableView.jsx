@@ -31,6 +31,10 @@ export default function TimetableView() {
     isGenerating,
     solverPreset,
     setSolverPreset,
+    solverCustomTime,
+    setSolverCustomTime,
+    solverCustomMode,
+    setSolverCustomMode,
     userPlacements,
     placeLessonBlock,
     clearPlacements,
@@ -235,7 +239,23 @@ export default function TimetableView() {
       }
     }
 
-    return { totalMissing, classRows, teacherRows, hardRules }
+    // Zero-slack detection: no class/teacher actually exceeds capacity, but at
+    // least one class is saturated (needed == avail or ≤2 spare). In that case
+    // the data is feasible — the solver just needs more search time.
+    const noOverflow =
+      classRows.every((r) => r.needed <= r.avail) &&
+      teacherRows.every((r) => r.needed <= r.avail)
+    const tightClasses = classRows.filter((r) => r.needed <= r.avail && r.avail - r.needed <= 2)
+
+    return {
+      totalMissing,
+      classRows,
+      teacherRows,
+      hardRules,
+      solverStatus: result?.metrics?.status || 'UNKNOWN',
+      noOverflow,
+      tightClassNames: tightClasses.map((r) => r.name),
+    }
   }, [result, resultSlots, fixtureData, lesson_blocks, classes, teachers, subjects, fixed_slots, schedule_blocks, schedule_config])
 
   // ── Derive grid structure from actual schedule_blocks data ────────
@@ -805,6 +825,16 @@ export default function TimetableView() {
               <span className="text-amber-700"> — ลองเปลี่ยนเป็น Soft หรือปิด แล้วจัดใหม่</span>
             </div>
           )}
+          {unplacedReport.noOverflow && unplacedReport.solverStatus !== 'OPTIMAL' && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-900 rounded-lg px-3 py-2">
+              <b>ช่องว่างยังพอ — ระบบพยายามจัดให้ครบแล้ว แต่เวลาคำนวณไม่พอ:</b> ไม่มีห้อง/ครูที่คาบเกินช่องว่าง
+              {unplacedReport.tightClassNames.length > 0 && (
+                <> (ห้อง {unplacedReport.tightClassNames.join(', ')} ใช้คาบพอดีเป๊ะ ไม่เหลือเผื่อ)</>
+              )}
+              {' '}ทำให้ solver ต้องใช้เวลาค้นหานานกว่าปกติ — แนะนำเปลี่ยน preset เป็น <b>ประณีต (~2 นาที)</b>
+              หรือ <b>กำหนดเวลาเอง (สูงสุด 10 นาที)</b> แล้วกดจัดใหม่ หรือลดจำนวนคาบล็อกกิจกรรมในห้องที่เต็ม
+            </div>
+          )}
           <p className="text-amber-700 italic">
             หมายเหตุ: การปิดเงื่อนไขใน "เงื่อนไขระดับระบบ" ไม่ได้ปลดคาบล็อกกิจกรรม / ช่องไม่สะดวกของครู / พื้นที่ห้องเรียน —
             คาบที่ลงไม่ได้อาจมาจากพื้นที่จริงไม่พอ (ต้องลดวิชาในห้อง หรือปลดล็อก)
@@ -815,7 +845,11 @@ export default function TimetableView() {
       {/* Top 4-Card Toolbar — below dirty banner, above tab content */}
       <SolverToolbar
         solverPreset={solverPreset}
+        solverCustomTime={solverCustomTime}
+        solverCustomMode={solverCustomMode}
         onPresetChange={setSolverPreset}
+        onCustomTimeChange={setSolverCustomTime}
+        onCustomModeChange={setSolverCustomMode}
         onGenerate={handleGenerateRemaining}
         isGenerating={isGenerating}
         disabled={!fixtureData}

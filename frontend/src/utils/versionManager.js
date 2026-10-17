@@ -90,7 +90,7 @@ function writeAllSnapshots(snapshots) {
 /**
  * Build a snapshot object from the current workspace state.
  */
-export function buildSnapshot({ label, status, fixtureName, fixtureData, result, userPlacements, solverPreset, description, version }) {
+export function buildSnapshot({ label, status, fixtureName, fixtureData, result, userPlacements, solverPreset, solverCustomTime, solverCustomMode, description, version }) {
   const now = Date.now()
   const snap = {
     id: `snap_${now}_${Math.random().toString(36).slice(2, 8)}`,
@@ -103,6 +103,8 @@ export function buildSnapshot({ label, status, fixtureName, fixtureData, result,
     result: result || null,
     userPlacements: userPlacements || {},
     solverPreset: solverPreset || 'balanced',
+    solverCustomTime: solverCustomTime ?? 60,
+    solverCustomMode: solverCustomMode || 'BALANCED',
     description: description || '',
     createdAt: now,
     updatedAt: now,
@@ -240,6 +242,8 @@ export function importFromFile(file) {
           result: data.result || null,
           userPlacements: data.userPlacements || {},
           solverPreset: data.solverPreset || 'balanced',
+          solverCustomTime: data.solverCustomTime ?? 60,
+          solverCustomMode: data.solverCustomMode || 'BALANCED',
           description: data.description || '',
           createdAt: data.createdAt || Date.now(),
           updatedAt: Date.now(),

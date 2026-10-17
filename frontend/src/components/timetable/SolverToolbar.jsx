@@ -25,7 +25,7 @@ import {
   Printer,
   Cloud,
 } from 'lucide-react'
-import { SOLVER_PRESETS, getPreset } from '../../utils/scoreCalculator.js'
+import { SOLVER_PRESETS, getPreset, CUSTOM_TIME_MIN, CUSTOM_TIME_MAX, CUSTOM_TIME_STEP } from '../../utils/scoreCalculator.js'
 import { formatSnapshotDate, generateLabel } from '../../utils/versionManager.js'
 
 /**
@@ -247,7 +247,11 @@ const ACTIONS_REQUIRING_SELECTION = new Set([
 
 export default function SolverToolbar({
   solverPreset = 'balanced',
+  solverCustomTime = 60,
+  solverCustomMode = 'BALANCED',
   onPresetChange,
+  onCustomTimeChange,
+  onCustomModeChange,
   onGenerate,
   isGenerating = false,
   disabled = false,
@@ -366,6 +370,13 @@ export default function SolverToolbar({
     onPresetChange?.(presetId)
   }
 
+  // Clamp "กำหนดเวลาเอง" input to the allowed range (backend cap: 600s).
+  function handleCustomTimeInput(val) {
+    const n = Number(val)
+    if (!Number.isFinite(n)) return
+    onCustomTimeChange?.(Math.min(CUSTOM_TIME_MAX, Math.max(CUSTOM_TIME_MIN, n)))
+  }
+
   const confirmMessage = buildConfirmMessage(
     pendingAction, selectedTeacherId, selectedClassId, teachers, classes,
   )
@@ -377,6 +388,9 @@ export default function SolverToolbar({
 
   // Build time hint for each preset option in the dropdown
   function presetTimeHint(preset) {
+    if (preset.id === 'custom') {
+      return `ปรับเวลาเอง ${CUSTOM_TIME_MIN}–${CUSTOM_TIME_MAX} วินาที`
+    }
     return `~${preset.timeLimit} วินาที`
   }
 
@@ -944,7 +958,7 @@ export default function SolverToolbar({
                   {currentPreset.shortName}
                 </span>
                 <span className="text-[10px] text-gray-500 shrink-0 whitespace-nowrap">
-                  (~{currentPreset.timeLimit}วิ)
+                  (~{solverPreset === 'custom' ? solverCustomTime : currentPreset.timeLimit}วิ)
                 </span>
                 <ChevronDown
                   className={`w-3 h-3 text-gray-500 transition-transform shrink-0
@@ -973,6 +987,52 @@ export default function SolverToolbar({
                 </>
               )}
             </div>
+
+            {/* Custom time controls — เวลา + โหมดเมื่อเลือก "กำหนดเวลาเอง" */}
+            {solverPreset === 'custom' && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-gray-700 shrink-0">เวลา</span>
+                  <input
+                    type="number"
+                    min={CUSTOM_TIME_MIN}
+                    max={CUSTOM_TIME_MAX}
+                    step={CUSTOM_TIME_STEP}
+                    value={solverCustomTime}
+                    onChange={(e) => handleCustomTimeInput(e.target.value)}
+                    disabled={isGenerating}
+                    className="w-16 px-1.5 py-0.5 rounded border border-gray-300 text-xs text-center disabled:opacity-50"
+                  />
+                  <span className="text-gray-500 shrink-0">วินาที</span>
+                  <input
+                    type="range"
+                    min={CUSTOM_TIME_MIN}
+                    max={CUSTOM_TIME_MAX}
+                    step={CUSTOM_TIME_STEP}
+                    value={solverCustomTime}
+                    onChange={(e) => handleCustomTimeInput(e.target.value)}
+                    disabled={isGenerating}
+                    className="flex-1 min-w-0 h-1 accent-blue-600 disabled:opacity-50"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-gray-700 shrink-0">โหมด</span>
+                  {['BALANCED', 'DEEP'].map((mode) => (
+                    <label key={mode} className="flex items-center gap-1 cursor-pointer text-gray-700">
+                      <input
+                        type="radio"
+                        name="solver-custom-mode"
+                        checked={solverCustomMode === mode}
+                        onChange={() => onCustomModeChange?.(mode)}
+                        disabled={isGenerating}
+                        className="accent-blue-600 disabled:opacity-50"
+                      />
+                      {mode === 'BALANCED' ? 'สมดุล' : 'ประณีต'}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Bottom: Pin + Clear side by side */}
             <div className="grid grid-cols-2 gap-1">

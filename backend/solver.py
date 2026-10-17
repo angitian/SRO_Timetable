@@ -24,6 +24,12 @@ from utils import (
 )
 
 
+# Soft-fallback weight for an unplaced lesson period. Chosen far above any
+# possible sum of quality penalties (weights 1-50) so the fallback phase is
+# lexicographic: maximize placed periods first, quality second.
+UNDER_WEIGHT = 1_000_000
+
+
 class _FirstSolutionCallback(cp_model.CpSolverSolutionCallback):
     """Callback that stops the search after the first feasible solution is found.
 
@@ -99,6 +105,10 @@ class TimetableSolver:
 
         self._penalty_terms: list[tuple[cp_model.LinearExpr, int]] = []
         self._num_constraints = 0
+        # When True, H4 period count is a hard constraint (every returned
+        # solution places ALL periods). When False it is soft with a heavy
+        # under-assignment penalty (fallback phase for over-constrained data).
+        self._h4_hard = True
 
     # ── Initialization helpers (extracted from __init__) ───────────────
 
@@ -437,10 +447,14 @@ class TimetableSolver:
     def _add_h4_period_count(self) -> None:
         """Each lesson block should be scheduled exactly periods_per_week times.
 
-        Uses a SOFT constraint (<= with penalty for under-assignment) so that
-        when a class has more lesson periods than available slots, the solver
-        still produces a partial timetable instead of going INFEASIBLE. The
-        penalty encourages the solver to place as many periods as possible.
+        Two modes, selected by self._h4_hard:
+        - HARD (Phase A, default): total == periods_per_week. Any solution the
+          solver returns is complete — a partial timetable is never returned
+          for data that actually has enough capacity.
+        - SOFT (Phase B fallback): <= plus a huge under-assignment penalty
+          (UNDER_WEIGHT), used only when the hard phase found no complete
+          solution within the time limit (genuinely over-constrained data),
+          so the user still gets the best partial timetable.
         """
         for i, lb in enumerate(self.lb_list):
             if lb.is_double_period:
@@ -449,35 +463,26 @@ class TimetableSolver:
                 if pair_vars and single_vars:
                     # Mixed: pairs (2 periods each) + singles (1 period each)
                     total = sum(pair_vars) * 2 + sum(single_vars)
-                    self.model.Add(total <= lb.periods_per_week)
-                    self._num_constraints += 1
-                    # Penalize under-assignment
-                    under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
-                    self.model.Add(total + under == lb.periods_per_week)
-                    self._penalty_terms.append((under, 50))
                 elif pair_vars:
                     total = sum(pair_vars) * 2
-                    self.model.Add(total <= lb.periods_per_week)
-                    self._num_constraints += 1
-                    under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
-                    self.model.Add(total + under == lb.periods_per_week)
-                    self._penalty_terms.append((under, 50))
                 elif single_vars:
                     total = sum(single_vars)
-                    self.model.Add(total <= lb.periods_per_week)
-                    self._num_constraints += 1
-                    under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
-                    self.model.Add(total + under == lb.periods_per_week)
-                    self._penalty_terms.append((under, 50))
+                else:
+                    continue
             else:
                 single_vars = [v for (ii, d, p), v in self.x.items() if ii == i]
-                if single_vars:
-                    total = sum(single_vars)
-                    self.model.Add(total <= lb.periods_per_week)
-                    self._num_constraints += 1
-                    under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
-                    self.model.Add(total + under == lb.periods_per_week)
-                    self._penalty_terms.append((under, 50))
+                if not single_vars:
+                    continue
+                total = sum(single_vars)
+
+            if self._h4_hard:
+                self.model.Add(total == lb.periods_per_week)
+            else:
+                self.model.Add(total <= lb.periods_per_week)
+                under = self.model.NewIntVar(0, lb.periods_per_week, f"under_{i}")
+                self.model.Add(total + under == lb.periods_per_week)
+                self._penalty_terms.append((under, UNDER_WEIGHT))
+            self._num_constraints += 1
 
     def _add_h5_max_per_day(self) -> None:
         """Limit periods per day per lesson block (spread across days)."""
@@ -1141,6 +1146,50 @@ class TimetableSolver:
 
     # ── Solve ──────────────────────────────────────────────────────────────
 
+    def _reset_model(self, h4_hard: bool) -> None:
+        """Rebuild a fresh CP model for the next solve phase.
+
+        Clears variables, penalty terms and the constraint counter so the
+        model can be reconstructed with a different H4 strictness.
+        """
+        self.model = cp_model.CpModel()
+        self.solver = cp_model.CpSolver()
+        self.x = {}
+        self.pair = {}
+        self._penalty_terms = []
+        self._num_constraints = 0
+        self._h4_hard = h4_hard
+
+    def _solve_model(self, time_limit: float) -> Any:
+        """Build the CP model (per the current _h4_hard flag) and run CP-SAT."""
+        self._create_variables()
+        self._add_hard_constraints()
+        self._add_objective()
+
+        self.solver.parameters.max_time_in_seconds = time_limit
+        self.solver.parameters.num_search_workers = 8
+
+        # FAST mode: stop at first feasible solution
+        # BALANCED/DEEP: let solver run full time limit for optimization
+        from models import OptimizationMode
+
+        callback = None
+        if self.req.optimization_mode == OptimizationMode.FAST:
+            callback = _FirstSolutionCallback()
+            self.solver.parameters.enumerate_all_solutions = False
+
+        return self.solver.Solve(self.model, callback)
+
+    def _missing_period_count(self, slots: list[ScheduledSlot]) -> int:
+        """How many lesson periods remain unplaced in the returned slots."""
+        placed: dict[str, int] = {}
+        for s in slots:
+            placed[s.lesson_block_id] = placed.get(s.lesson_block_id, 0) + 1
+        return sum(
+            max(0, lb.periods_per_week - placed.get(lb.id, 0))
+            for lb in self.lb_list
+        )
+
     def solve(self) -> TimetableResponse:
         # Pre-flight validation: catch data-level conflicts (e.g. class over
         # capacity, teacher over max load, fixed slot collisions) before
@@ -1166,31 +1215,36 @@ class TimetableSolver:
                 diagnostics=diagnostics,
             )
 
-        self._create_variables()
-        self._add_hard_constraints()
-        self._add_objective()
-
-        self.solver.parameters.max_time_in_seconds = self.req.solver_time_limit_seconds
-        self.solver.parameters.num_search_workers = 8
-
-        # FAST mode: stop at first feasible solution
-        # BALANCED mode: let solver run full time limit for optimization
-        from models import OptimizationMode
-
-        callback = None
-        if self.req.optimization_mode == OptimizationMode.FAST:
-            callback = _FirstSolutionCallback()
-            self.solver.parameters.enumerate_all_solutions = False
-
-        status = self.solver.Solve(self.model, callback)
-
         status_map = {
             cp_model.OPTIMAL: "OPTIMAL",
             cp_model.FEASIBLE: "FEASIBLE",
             cp_model.INFEASIBLE: "INFEASIBLE",
             cp_model.UNKNOWN: "UNKNOWN",
         }
+
+        # ── Phase A: completion-first ─────────────────────────────────────
+        # H4 (period count) is HARD: every solution the solver can return
+        # places ALL lesson periods. A partial timetable can never "succeed"
+        # while a complete one exists — the solver keeps searching until it
+        # finds a complete solution or proves none within the time limit.
+        self._reset_model(h4_hard=True)
+        status = self._solve_model(self.req.solver_time_limit_seconds)
+        wall_time = self.solver.WallTime()
         status_str = status_map.get(status, "UNKNOWN")
+        hard_phase_failed = status not in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+        # ── Phase B: fallback (only when no complete solution was found) ──
+        # Genuinely over-constrained data (preflight passed but the dense
+        # interactions are still impossible — or the hard phase just ran out
+        # of time) must not leave the user empty-handed: rerun with H4 soft +
+        # lexicographic under-weight so the solver returns the most-complete
+        # timetable it can find.
+        if hard_phase_failed:
+            self._reset_model(h4_hard=False)
+            extra_limit = min(30.0, float(self.req.solver_time_limit_seconds))
+            status = self._solve_model(extra_limit)
+            wall_time += self.solver.WallTime()
+            status_str = status_map.get(status, "UNKNOWN")
 
         slots: list[ScheduledSlot] = []
         teacher_loads: list[TeacherLoadSummary] = []
@@ -1204,19 +1258,26 @@ class TimetableSolver:
         metrics = SolverMetrics(
             status=status_str,
             objective_value=self.solver.ObjectiveValue() if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) else 0,
-            wall_time_seconds=round(self.solver.WallTime(), 4),
+            wall_time_seconds=round(wall_time, 4),
             num_variables=len(self.x) + len(self.pair),
             num_constraints=self._num_constraints,
             hard_violations=hard_violations,
             soft_violations=0,
         )
 
-        # If solver still returned INFEASIBLE despite passing pre-flight,
-        # attach a fallback diagnostics note so the user gets a hint.
-        # Merge any pre-flight notes (e.g. hard-rule hints) so they surface.
+        # Diagnostics notes for non-ideal outcomes:
+        # - hard phase fell back to soft: explain the partial timetable.
+        # - INFEASIBLE despite passing pre-flight: generic hint.
+        preflight_notes = list(diagnostics.notes or [])
         post_diagnostics: DiagnosticsReport | None = None
-        if status_str == "INFEASIBLE":
-            preflight_notes = list(diagnostics.notes or [])
+        if hard_phase_failed and status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            missing = self._missing_period_count(slots)
+            post_diagnostics = DiagnosticsReport(notes=preflight_notes + [
+                f"ยังไม่พบตารางที่วางครบทุกคาบภายในเวลาที่กำหนด — นี่คือตารางที่วางได้มากที่สุด "
+                f"(ขาด {missing} คาบ) แนะนำเพิ่มเวลาคำนวณ (preset ประณีต) "
+                f"หรือลดคาบล็อกกิจกรรม/วิชาในห้องที่เต็ม"
+            ])
+        elif status_str == "INFEASIBLE":
             post_diagnostics = DiagnosticsReport(
                 notes=preflight_notes + [
                     "Pre-flight ไม่พบสาเหตุชัด แต่ solver ยังคืน INFEASIBLE — "

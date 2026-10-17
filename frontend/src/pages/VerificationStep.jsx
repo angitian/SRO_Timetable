@@ -134,27 +134,78 @@ export default function VerificationStep() {
     return map
   }, [scheduleBlocks])
 
-  // Classes whose total lesson periods exceed the block's weekly capacity.
-  // These would provably make the solver return INFEASIBLE, so we block
-  // the "generate" button and tell the user exactly which classes to fix.
+  // Study periods locked per class by fixed slots (กิจกรรมพิเศษ/ลูกเสือ) —
+  // only STUDY periods inside the class's own schedule block reduce capacity.
+  const lockedPeriodsByClass = useMemo(() => {
+    const studySetByClass = {}
+    const daysByClass = {}
+    for (const c of classes) {
+      const blk = blockMap.get(classBlockMap[c.id])
+      studySetByClass[c.id] = new Set(
+        (blk?.periods || []).filter((p) => p.type === 'STUDY').map((p) => p.period_no),
+      )
+      daysByClass[c.id] = blk?.days_per_week || 5
+    }
+    const map = {}
+    for (const fs of fixedSlots) {
+      const targets = fs.class_ids?.length ? fs.class_ids : classes.map((c) => c.id)
+      const fsPeriods = [fs.period, ...(fs.periods || [])]
+      for (const cid of targets) {
+        const studySet = studySetByClass[cid]
+        if (!studySet || (fs.day || 0) > (daysByClass[cid] || 5)) continue
+        if (!map[cid]) map[cid] = new Set()
+        for (const p of fsPeriods) {
+          if (studySet.has(p)) map[cid].add(`${fs.day}-${p}`)
+        }
+      }
+    }
+    const counts = {}
+    for (const [cid, keys] of Object.entries(map)) counts[cid] = keys.size
+    return counts
+  }, [classes, fixedSlots, classBlockMap, blockMap])
+
+  // Classes whose total lesson periods exceed usable weekly capacity
+  // (block capacity minus fixed-slot locks). These would provably make the
+  // solver return INFEASIBLE, so we flag them for the user to fix.
   const overCapacityClasses = useMemo(() => {
     return classroomDensity
       .map((entry) => {
         const blockId = classBlockMap[entry.class.id]
         const maxPeriods = blockId ? blockMaxPeriods[blockId] || 0 : 0
-        const isOver = maxPeriods > 0 && entry.total > maxPeriods
+        const locked = lockedPeriodsByClass[entry.class.id] || 0
+        const available = maxPeriods - locked
+        const isOver = maxPeriods > 0 && entry.total > available
         return isOver
           ? {
               classId: entry.class.id,
               className: entry.class.name,
               total: entry.total,
-              maxPeriods,
-              overflow: entry.total - maxPeriods,
+              maxPeriods: available,
+              locked,
+              overflow: entry.total - available,
             }
           : null
       })
       .filter(Boolean)
-  }, [classroomDensity, classBlockMap, blockMaxPeriods])
+  }, [classroomDensity, classBlockMap, blockMaxPeriods, lockedPeriodsByClass])
+
+  // Classes with zero/near-zero slack (needed == available, or ≤2 spare).
+  // Feasible but very hard for the solver — warn so the user picks a longer
+  // preset instead of being surprised by "จัดไม่ครบ" later.
+  const tightCapacityClasses = useMemo(() => {
+    return classroomDensity
+      .map((entry) => {
+        const blockId = classBlockMap[entry.class.id]
+        const maxPeriods = blockId ? blockMaxPeriods[blockId] || 0 : 0
+        const locked = lockedPeriodsByClass[entry.class.id] || 0
+        const available = maxPeriods - locked
+        const slack = available - entry.total
+        return maxPeriods > 0 && slack >= 0 && slack <= 2
+          ? { className: entry.class.name, total: entry.total, available, slack }
+          : null
+      })
+      .filter(Boolean)
+  }, [classroomDensity, classBlockMap, blockMaxPeriods, lockedPeriodsByClass])
 
   const hasBlockingIssue = overCapacityClasses.length > 0 || overCount > 0
 
@@ -444,6 +495,32 @@ export default function VerificationStep() {
         </div>
       )}
 
+      {/* Zero-slack warning — จัดได้แต่ solver ต้องใช้เวลามาก */}
+      {tightCapacityClasses.length > 0 && (
+        <div className="card bg-amber-50 border-amber-200">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <div className="font-bold text-amber-900 mb-1">
+                ห้องที่ใช้คาบพอดีเป๊ะ ({tightCapacityClasses.length} ห้อง) — เสี่ยง "จัดไม่ครบ"
+              </div>
+              <div className="text-amber-800">
+                {tightCapacityClasses.map((c) => (
+                  <div key={c.className}>
+                    • {c.className}: วิชา {c.total} คาบ เท่ากับช่องว่างที่เหลือ {c.available} คาบพอดี (หักคาบล็อกแล้ว)
+                  </div>
+                ))}
+              </div>
+              <div className="text-amber-700 mt-2 text-xs">
+                ข้อมูลจัดได้ แต่ไม่มีช่องว่างเผื่อ — solver ต้องใช้เวลาค้นหานานกว่าปกติ
+                แนะนำใช้ preset <b>"ประณีต" (~2 นาที)</b> หรือ <b>"กำหนดเวลาเอง" (สูงสุด 10 นาที)</b> ในหน้าจัดตาราง
+                หรือลดคาบล็อกกิจกรรม/วิชาในห้องเหล่านี้ให้เหลือช่องว่างอย่างน้อย 1-2 คาบ
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Cross-block teachers info */}
       {crossBlockTeachers.length > 0 && (
         <div className="card bg-purple-50 border-purple-200">
@@ -547,6 +624,7 @@ export default function VerificationStep() {
               classrooms={filteredClassrooms}
               classBlockMap={classBlockMap}
               blockMaxPeriods={blockMaxPeriods}
+              lockedPeriodsByClass={lockedPeriodsByClass}
               progressColor={progressColor}
               subjectColorClass={subjectColorClass}
             />
