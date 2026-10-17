@@ -612,6 +612,15 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
     { key: 'is_double', label: 'คาบคู่ (optional)' },
   ]
 
+  // แปลง error ฝั่ง network (fetch ล้มเพราะ backend ยังไม่รัน/ปิด port) เป็นข้อความไทยที่บอกสาเหตุชัดเจน
+  function friendlyFetchError(err) {
+    const msg = String(err?.message || err || '')
+    if (/failed to fetch|networkerror|load failed|network request failed|aborted|connection refused/i.test(msg)) {
+      return `ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ (${BASE_URL}) ได้ — ตรวจสอบว่า backend กำลังรันอยู่ (เช่น cd backend && python main.py) แล้วลองใหม่`
+    }
+    return msg
+  }
+
   async function handleFileSelect(selectedFile) {
     if (!selectedFile) return
     setFile(selectedFile)
@@ -636,7 +645,7 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
         setStep('mapping')
       }
     } catch (err) {
-      setError(err.message)
+      setError(friendlyFetchError(err))
     }
     setLoading(false)
   }
@@ -663,7 +672,7 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
       setImportResult(data)
       clearResult()
 
-      const defaultMax = fixtureData?.schedule_config?.default_max_periods_per_week || 22
+      const defaultMax = fixtureData?.schedule_config?.default_max_periods_per_week || 30
       const teachers = (data.teachers || []).map((t) => ({
         id: t.id, name: t.name,
         max_periods_per_week: t.max_periods_per_week || defaultMax,
@@ -696,7 +705,7 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
       })
       setStep('done')
     } catch (err) {
-      setError(err.message)
+      setError(friendlyFetchError(err))
     }
     setLoading(false)
   }
@@ -718,7 +727,7 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
       setImportResult(data)
       clearResult()
 
-      const defaultMax = fixtureData?.schedule_config?.default_max_periods_per_week || 22
+      const defaultMax = fixtureData?.schedule_config?.default_max_periods_per_week || 30
       const teachers = (data.teachers || []).map((t) => ({
         id: t.id, name: t.name,
         max_periods_per_week: t.max_periods_per_week || defaultMax,
@@ -751,7 +760,7 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
       })
       setStep('done')
     } catch (err) {
-      setError(err.message)
+      setError(friendlyFetchError(err))
     }
     setLoading(false)
   }
