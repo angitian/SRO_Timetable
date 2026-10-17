@@ -1,13 +1,14 @@
-import { useState, useMemo, useEffect, Fragment } from 'react'
+import { useState, useMemo, useEffect, useRef, Fragment } from 'react'
 import {
   Plus, Trash2, ArrowRight, ArrowLeft, Clock, Layers, BookOpen, Coffee,
   UtensilsCrossed, X, Check, ChevronDown, ZoomIn, ZoomOut, Edit2, CalendarHeart, Star, Calendar,
-  AlertTriangle, Users,
+  AlertTriangle, Users, Upload, FileSpreadsheet,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { generatePeriods, createDefaultBlock, buildClassBlockMap, insertBreakPeriod } from '../utils/periods.js'
 import { getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
 import { normalizeClassTeachers } from '../utils/teacherLoad.js'
+import { parseSpecialActivitiesExcel, resolveToFixedSlots } from '../utils/specialActivitiesImport.js'
 
 const PERIOD_TYPE_CONFIG = {
   STUDY: { label: 'คาบเรียน', icon: BookOpen, color: 'bg-blue-100 text-blue-700 border-blue-300' },
@@ -1021,6 +1022,37 @@ function SpecialActivitiesSection() {
   const [classTeachers, setClassTeachers] = useState({})
   const [showAssignModal, setShowAssignModal] = useState(false)
 
+  // ── Excel import (คาบพิเศษจากไฟล์ xlsx) ──
+  const fileInputRef = useRef(null)
+  const [importBusy, setImportBusy] = useState(false)
+  const [importPreview, setImportPreview] = useState(null) // { slots, warnings, fileName, totalRows, error? }
+  const [importNotice, setImportNotice] = useState(null)
+
+  async function handleImportFile(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImportBusy(true)
+    setImportNotice(null)
+    try {
+      const buf = await file.arrayBuffer()
+      const { rows } = await parseSpecialActivitiesExcel(buf)
+      const { slots, warnings } = resolveToFixedSlots(rows, { classes, teachers })
+      setImportPreview({ slots, warnings, fileName: file.name, totalRows: rows.length })
+    } catch (err) {
+      setImportPreview({ slots: [], warnings: [err.message || 'อ่านไฟล์ไม่สำเร็จ'], fileName: file.name, totalRows: 0, error: true })
+    }
+    setImportBusy(false)
+  }
+
+  function confirmImport() {
+    const n = importPreview?.slots?.length || 0
+    if (n === 0) return
+    updateFixtureData({ fixed_slots: [...activities, ...importPreview.slots] })
+    setImportPreview(null)
+    setImportNotice(`นำเข้าแล้ว ${n} กิจกรรมจาก ${importPreview.fileName}`)
+  }
+
   // Effective periods for the form: contiguous range + extra selections
   function getEffectivePeriods() {
     const range = []
@@ -1300,15 +1332,44 @@ function SpecialActivitiesSection() {
           <h3 className="font-bold text-gray-900">กิจกรรมพิเศษ (ล็อกสล็อต)</h3>
         </div>
         {!showForm && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="btn-secondary flex items-center gap-1"
-          >
-            <Plus className="w-4 h-4" />
-            เพิ่มกิจกรรม
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importBusy}
+              className="btn-secondary flex items-center gap-1 disabled:opacity-50"
+              title="อัปโหลดไฟล์ Excel คาบพิเศษ — คอลัมน์: ชื่อกิจกรรม, ช่วงชั้น/ห้อง, วัน, คาบ, จำนวนคาบ, ครูผู้สอน, ตรึงคาบ"
+            >
+              <Upload className="w-4 h-4" />
+              {importBusy ? 'กำลังอ่านไฟล์…' : 'อัปโหลดจาก Excel'}
+            </button>
+            <button
+              onClick={() => setShowForm(true)}
+              className="btn-secondary flex items-center gap-1"
+            >
+              <Plus className="w-4 h-4" />
+              เพิ่มกิจกรรม
+            </button>
+          </div>
         )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx"
+          className="hidden"
+          onChange={handleImportFile}
+        />
       </div>
+
+      {importNotice && (
+        <div className="flex items-center justify-between gap-2 text-xs bg-green-50 border border-green-200 text-green-700 rounded-lg px-3 py-2">
+          <span className="flex items-center gap-1.5">
+            <Check className="w-3.5 h-3.5" /> {importNotice}
+          </span>
+          <button onClick={() => setImportNotice(null)} className="text-green-500 hover:text-green-700" aria-label="ปิด">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {activities.length === 0 && !showForm && (
         <p className="text-gray-400 text-center py-4">
@@ -1750,6 +1811,115 @@ function SpecialActivitiesSection() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Import Preview Modal */}
+      {importPreview && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setImportPreview(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 sticky top-0 bg-white rounded-t-2xl z-10">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-purple-600" />
+                <h3 className="text-lg font-bold text-gray-900">นำเข้าคาบพิเศษจาก Excel</h3>
+                <span className="text-xs text-gray-400 truncate max-w-[200px]">{importPreview.fileName}</span>
+              </div>
+              <button onClick={() => setImportPreview(null)} className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600" aria-label="ปิด">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+              {importPreview.error ? (
+                <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <div>{importPreview.warnings[0]}</div>
+                </div>
+              ) : (
+                <>
+                  {/* Preview table */}
+                  {importPreview.slots.length > 0 ? (
+                    <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left font-semibold text-gray-600">กิจกรรม</th>
+                            <th className="px-3 py-2 text-left font-semibold text-gray-600">ประเภท</th>
+                            <th className="px-3 py-2 text-left font-semibold text-gray-600">ชั้น</th>
+                            <th className="px-3 py-2 text-left font-semibold text-gray-600">วัน</th>
+                            <th className="px-3 py-2 text-left font-semibold text-gray-600">คาบ</th>
+                            <th className="px-3 py-2 text-left font-semibold text-gray-600">ครูดูแล</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {importPreview.slots.map((s) => {
+                            const gradeLabels = classIdsToGradeLabels(s.class_ids)
+                            const teacherCount = new Set(Object.values(s.class_teachers || {}).flat()).size
+                            return (
+                              <tr key={s.id} className="hover:bg-gray-50">
+                                <td className="px-3 py-2 font-medium text-gray-900">{s.name}</td>
+                                <td className="px-3 py-2 text-gray-600">{SLOT_TYPE_LABELS[s.slot_type] || s.slot_type}</td>
+                                <td className="px-3 py-2">
+                                  {gradeLabels.length > 0 ? (
+                                    <span className="text-purple-700">{gradeLabels.join(', ')}</span>
+                                  ) : (
+                                    <span className="text-gray-500">ทุกห้อง</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-gray-600">{DAY_NAMES[(s.day || 1) - 1]}</td>
+                                <td className="px-3 py-2 text-gray-600">
+                                  {formatPeriodsText([s.period, ...(s.periods || [])])}
+                                </td>
+                                <td className="px-3 py-2 text-emerald-700">
+                                  {teacherCount > 0 ? `${teacherCount} คน` : '—'}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500 text-center py-4">ไม่มีกิจกรรมที่นำเข้าได้</p>
+                  )}
+
+                  {/* Warnings */}
+                  {importPreview.warnings.length > 0 && (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5">
+                      <div className="font-bold flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5" /> คำเตือน ({importPreview.warnings.length})
+                      </div>
+                      <ul className="list-disc pl-5 space-y-0.5 max-h-32 overflow-y-auto">
+                        {importPreview.warnings.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={confirmImport}
+                      disabled={importPreview.slots.length === 0}
+                      className="btn-primary flex items-center gap-1.5 disabled:opacity-40"
+                    >
+                      <Check className="w-4 h-4" />
+                      นำเข้า {importPreview.slots.length} กิจกรรม
+                    </button>
+                    <button onClick={() => setImportPreview(null)} className="btn-secondary">
+                      ยกเลิก
+                    </button>
+                    <span className="ml-auto text-xs text-gray-400">
+                      {importPreview.slots.length}/{importPreview.totalRows} แถวนำเข้าได้
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
