@@ -42,7 +42,7 @@ export default function TeacherWorkloadStep() {
   const blockMap = useMemo(() => new Map(scheduleBlocks.map((b) => [b.id, b])), [scheduleBlocks])
 
   // Global default ceiling for new teachers / imports (editable in Global Conditions)
-  const defaultMaxPeriods = fixtureData?.schedule_config?.default_max_periods_per_week || 22
+  const defaultMaxPeriods = fixtureData?.schedule_config?.default_max_periods_per_week || 30
 
   const teacherLoadMap = useMemo(() => {
     const loads = {}
@@ -228,7 +228,7 @@ export default function TeacherWorkloadStep() {
       <GlobalConditionsCard fixtureData={fixtureData} updateFixtureData={updateFixtureData} />
 
       {teachers.map((teacher) => {
-        const load = teacherLoadMap[teacher.id] || { assigned: 0, max: 22 }
+        const load = teacherLoadMap[teacher.id] || { assigned: 0, max: 30 }
         const pct = load.max > 0 ? Math.min(100, (load.assigned / load.max) * 100) : 0
         const isOver = load.assigned > load.max
         const isExpanded = expandedTeacher === teacher.id
@@ -407,7 +407,7 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
   const subjects = fixtureData?.subjects || []
   const rules = sc.subject_time_rules || []
   const maxConsec = sc.max_consecutive_teaching || 4
-  const defaultMax = sc.default_max_periods_per_week || 22
+  const defaultMax = sc.default_max_periods_per_week || 30
   const [expanded, setExpanded] = useState(true)
   const [newRule, setNewRule] = useState({ subject_id: '', preference: 'morning', mode: 'soft' })
 
@@ -988,7 +988,7 @@ function TeacherPreferencesSection({ teacher, fixtureData, onUpdateTeacher }) {
   const spreadFree = teacher.spread_free_periods || false
   const adminRole = teacher.admin_role || 'none'
   const unavailable = teacher.unavailable_slots || []
-  const defaultMaxPeriods = fixtureData?.schedule_config?.default_max_periods_per_week || 22
+  const defaultMaxPeriods = fixtureData?.schedule_config?.default_max_periods_per_week || 30
   const maxPeriods = teacher.max_periods_per_week != null ? teacher.max_periods_per_week : defaultMaxPeriods
   const minPeriods = teacher.min_periods_per_week || 0
   const globalAmPmMode = fixtureData?.schedule_config?.am_pm_free_mode || 'off'

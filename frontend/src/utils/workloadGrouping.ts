@@ -80,7 +80,7 @@ export const CATEGORY_DEPARTMENT: Record<string, string> = {
   admin: 'กิจกรรมพัฒนาผู้เรียน',
 }
 
-const DEFAULT_MAX_PERIODS = 22
+const DEFAULT_MAX_PERIODS = 30
 const UNDERLOAD_RATIO = 0.75
 
 function departmentLabel(category?: string): string {

@@ -19,13 +19,19 @@ export function computeTeacherAvailableSlots(teacher, lessonBlocks, scheduleBloc
   const { days, dayPeriods } = deriveDayPeriods(scheduleBlocks, scheduleConfig)
   if (dayPeriods.length === 0) return 0
 
-  const blocked = new Set()
+  // Fixed slots per taught class: classId -> Set of "day-period" strings.
+  // class_ids empty = assembly-style slot that blocks EVERY class.
+  const fixedByClass = new Map()
   for (const fs of fixedSlots || []) {
-    const applies = !fs.class_ids || fs.class_ids.length === 0
-      || fs.class_ids.some((cid) => taughtClassIds.has(cid))
-    if (!applies) continue
-    for (const p of [fs.period, ...(fs.periods || [])]) {
-      blocked.add(`${fs.day}-${p}`)
+    const periods = [fs.period, ...(fs.periods || [])]
+    const isGlobal = !fs.class_ids || fs.class_ids.length === 0
+    const targets = isGlobal ? taughtClassIds : fs.class_ids.filter((cid) => taughtClassIds.has(cid))
+    for (const p of periods) {
+      const key = `${fs.day}-${p}`
+      for (const cid of targets) {
+        if (!fixedByClass.has(cid)) fixedByClass.set(cid, new Set())
+        fixedByClass.get(cid).add(key)
+      }
     }
   }
   const busy = new Set([
@@ -42,10 +48,17 @@ export function computeTeacherAvailableSlots(teacher, lessonBlocks, scheduleBloc
     }
   }
 
+  // A slot counts as available when the teacher is free AND at least one class
+  // they teach is free there (mirrors the backend preflight: the solver checks
+  // per lesson block, so a fixed slot in one class must not block the teacher
+  // from teaching their other classes at the same time).
   let available = 0
   for (let d = 1; d <= days; d++) {
     for (const p of dayPeriods) {
-      if (!blocked.has(`${d}-${p}`) && !busy.has(`${d}-${p}`)) available++
+      const key = `${d}-${p}`
+      if (busy.has(key)) continue
+      const anyClassFree = [...taughtClassIds].some((cid) => !fixedByClass.get(cid)?.has(key))
+      if (anyClassFree) available++
     }
   }
   return available

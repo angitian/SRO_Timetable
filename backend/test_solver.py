@@ -24,6 +24,7 @@ from models import (
     ScheduleBlock,
     SchedulePeriod,
     SubjectTimeRule,
+    PeriodType,
 )
 from solver import TimetableSolver
 from preflight import run_preflight
@@ -231,6 +232,15 @@ def main():
     all_pass = all_pass and success
 
     success = test_preflight_passes_valid_request()
+    all_pass = all_pass and success
+
+    success = test_preflight_multi_class_fixed_slot_no_false_positive()
+    all_pass = all_pass and success
+
+    success = test_preflight_lunch_guard_single_block()
+    all_pass = all_pass and success
+
+    success = test_preflight_supervision_not_double_counted()
     all_pass = all_pass and success
 
     # New feature tests (fixed-slot class separation, multi-period, co-teacher, am/pm free)
@@ -640,6 +650,184 @@ def test_preflight_passes_valid_request() -> bool:
         print(f"  ⚠️  Diagnostics should be None on success, got: {result.diagnostics}")
         return False
     print(f"  ✅ PASS: status={result.metrics.status}, diagnostics=None (pre-flight passed through)")
+    return True
+
+
+def _single_block_periods() -> list[SchedulePeriod]:
+    """6 study periods/day with a shared 12:00-13:00 lunch at period 4."""
+    return [
+        SchedulePeriod(period_no=1, start_time="08:30", end_time="09:20", type=PeriodType.STUDY),
+        SchedulePeriod(period_no=2, start_time="09:20", end_time="10:10", type=PeriodType.STUDY),
+        SchedulePeriod(period_no=3, start_time="10:10", end_time="11:00", type=PeriodType.STUDY),
+        SchedulePeriod(period_no=4, start_time="12:00", end_time="13:00", type=PeriodType.LUNCH),
+        SchedulePeriod(period_no=5, start_time="13:00", end_time="13:50", type=PeriodType.STUDY),
+        SchedulePeriod(period_no=6, start_time="13:50", end_time="14:40", type=PeriodType.STUDY),
+        SchedulePeriod(period_no=7, start_time="14:40", end_time="15:30", type=PeriodType.STUDY),
+    ]
+
+
+def test_preflight_multi_class_fixed_slot_no_false_positive() -> bool:
+    """Preflight must not block a teacher who teaches several classes when a
+    *different* class has a fixed slot at a given (day, period).
+
+    Regression: the system returned INFEASIBLE (over_available) even though
+    CP-SAT can schedule the lessons — the per-teacher available-slot count
+    treated a slot as unusable if ANY taught class was locked there, while the
+    solver only checks the lesson's own class.
+    """
+    print(f"\n{'='*60}")
+    print("  TEST: preflight multi-class teacher + per-class fixed slots (no false positive)")
+    print(f"{'='*60}")
+
+    block = ScheduleBlock(id="B1", name="Block", target_classes=["C1", "C2"], days_per_week=5,
+                          start_time="08:30", period_duration_mins=50, break_duration_mins=10,
+                          periods=_single_block_periods(), apply_to_all_days=True)
+    teacher = Teacher(id="T1", name="ครู A", max_periods_per_week=30, min_periods_per_week=0)
+    subj = Subject(id="S1", name="คณิตศาสตร์", category=SubjectCategory.CORE)
+    classes = [ClassGroup(id="C1", name="ป.1/1", grade_level=1),
+               ClassGroup(id="C2", name="ป.1/2", grade_level=1)]
+    lesson_blocks = [
+        LessonBlock(id="LB1", subject_id="S1", teacher_id="T1", class_id="C1",
+                    room_id="R_C1", periods_per_week=10, block_id="B1"),
+        LessonBlock(id="LB2", subject_id="S1", teacher_id="T1", class_id="C2",
+                    room_id="R_C2", periods_per_week=10, block_id="B1"),
+    ]
+    fixed_slots: list[FixedSlot] = []
+    for d in range(1, 6):
+        fixed_slots.append(FixedSlot(id=f"FS_C1_{d}", name="โฮมรูม", slot_type=FixedSlotType.HOMEROOM,
+                                     day=d, period=1, class_ids=["C1"]))
+        fixed_slots.append(FixedSlot(id=f"FS_C2_{d}", name="โฮมรูม", slot_type=FixedSlotType.HOMEROOM,
+                                     day=d, period=7, class_ids=["C2"]))
+    request = TimetableRequest(
+        teachers=[teacher],
+        rooms=[Room(id="R_C1", name="R_C1"), Room(id="R_C2", name="R_C2")],
+        subjects=[subj], classes=classes, lesson_blocks=lesson_blocks,
+        fixed_slots=fixed_slots, schedule_blocks=[block],
+    )
+
+    report = run_preflight(request)
+    if report.has_blocking_issues():
+        for t in report.teacher_overloads:
+            print(f"  ❌ FAIL: {t.teacher_name} needed={t.needed_periods} "
+                  f"available={t.available_slots} reason={t.reason}")
+        return False
+
+    result = TimetableSolver(request).solve()
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: solver returned INFEASIBLE after preflight passed")
+        return False
+    print(f"  ✅ PASS: preflight clean, solver={result.metrics.status}, slots={len(result.slots)}")
+    return True
+
+
+def test_preflight_lunch_guard_single_block() -> bool:
+    """Single-block schedule: the lunch guarantee must not shrink a teacher's
+    available slots.
+
+    The solver only reserves a free lunch-window slot per day when the teacher
+    could actually be scheduled at a lunch-window period of their own block
+    (staggered-lunch multi-block setups). With one shared lunch period (a LUNCH
+    slot, never a STUDY slot) no reservation is imposed — preflight must not
+    subtract 1 slot/day either.
+    """
+    print(f"\n{'='*60}")
+    print("  TEST: preflight lunch guard single-block (no slot deduction)")
+    print(f"{'='*60}")
+
+    block = ScheduleBlock(id="B1", name="Block", target_classes=["C1"], days_per_week=5,
+                          start_time="08:30", period_duration_mins=50, break_duration_mins=10,
+                          periods=_single_block_periods(), apply_to_all_days=True)
+    teacher = Teacher(id="T1", name="ครู A", max_periods_per_week=30, min_periods_per_week=0)
+    subj = Subject(id="S1", name="คณิตศาสตร์", category=SubjectCategory.CORE)
+    classes = [ClassGroup(id="C1", name="ป.1/1", grade_level=1)]
+    lesson_blocks = [
+        LessonBlock(id="LB1", subject_id="S1", teacher_id="T1", class_id="C1",
+                    room_id="R_C1", periods_per_week=5, block_id="B1"),
+    ]
+    request = TimetableRequest(
+        teachers=[teacher],
+        rooms=[Room(id="R_C1", name="R_C1")],
+        subjects=[subj], classes=classes, lesson_blocks=lesson_blocks,
+        fixed_slots=[], schedule_blocks=[block],
+    )
+
+    from preflight import (
+        _count_teacher_available_slots,
+        _build_class_to_block,
+        _build_assembly_and_class_blocks,
+        _build_fixed_slot_teacher_map,
+    )
+    ctb = _build_class_to_block(request)
+    bby = {b.id: b for b in request.schedule_blocks}
+    asm, fpc = _build_assembly_and_class_blocks(request)
+    fpt = _build_fixed_slot_teacher_map(request)
+    avail = _count_teacher_available_slots(teacher, request, ctb, bby, asm, fpc, fpt)
+
+    # 6 study periods/day x 5 days = 30; lunch guard must NOT deduct anything.
+    if avail != 30:
+        print(f"  ❌ FAIL: expected 30 available slots (6 study/day x 5 days), got {avail}")
+        return False
+    report = run_preflight(request)
+    if report.has_blocking_issues():
+        print(f"  ❌ FAIL: unexpected blocking issues: {report.model_dump()}")
+        return False
+    print(f"  ✅ PASS: available={avail} (lunch guard correctly not applied)")
+    return True
+
+
+def test_preflight_supervision_not_double_counted() -> bool:
+    """Supervision periods must not be double-counted in the over_available check.
+
+    Supervision slots are already subtracted from the teacher's available
+    teaching slots (the teacher is busy supervising then), so only the pure
+    teaching load has to fit into `available`. Comparing the supervision-
+    inclusive total against `available` would falsely block a feasible
+    timetable (e.g. teach 24 periods in 25 remaining slots + supervise 5).
+    """
+    print(f"\n{'='*60}")
+    print("  TEST: preflight supervision not double-counted (no false positive)")
+    print(f"{'='*60}")
+
+    block = ScheduleBlock(id="B1", name="Block", target_classes=["C1"], days_per_week=5,
+                          start_time="08:30", period_duration_mins=50, break_duration_mins=10,
+                          periods=_single_block_periods(), apply_to_all_days=True)
+    teacher = Teacher(id="T1", name="ครู A", max_periods_per_week=30, min_periods_per_week=0)
+    subj = Subject(id="S1", name="คณิตศาสตร์", category=SubjectCategory.CORE)
+    classes = [ClassGroup(id="C1", name="ป.1/1", grade_level=1)]
+    lesson_blocks = [
+        LessonBlock(id="LB1", subject_id="S1", teacher_id="T1", class_id="C1",
+                    room_id="R_C1", periods_per_week=10, block_id="B1"),
+        LessonBlock(id="LB2", subject_id="S1", teacher_id="T1", class_id="C1",
+                    room_id="R_C1", periods_per_week=10, block_id="B1"),
+        LessonBlock(id="LB3", subject_id="S1", teacher_id="T1", class_id="C1",
+                    room_id="R_C1", periods_per_week=4, block_id="B1"),
+    ]
+    # T1 supervises homeroom at period 1 every day (5 slots) — busy then.
+    fixed_slots: list[FixedSlot] = []
+    for d in range(1, 6):
+        fixed_slots.append(FixedSlot(id=f"FS{d}", name="โฮมรูม", slot_type=FixedSlotType.HOMEROOM,
+                                     day=d, period=1, class_ids=["C1"],
+                                     class_teachers={"C1": "T1"}))
+    request = TimetableRequest(
+        teachers=[teacher],
+        rooms=[Room(id="R_C1", name="R_C1")],
+        subjects=[subj], classes=classes, lesson_blocks=lesson_blocks,
+        fixed_slots=fixed_slots, schedule_blocks=[block],
+    )
+
+    report = run_preflight(request)
+    if report.has_blocking_issues():
+        for t in report.teacher_overloads:
+            print(f"  ❌ FAIL: {t.teacher_name} needed={t.needed_periods} "
+                  f"available={t.available_slots} reason={t.reason}")
+        return False
+
+    result = TimetableSolver(request).solve()
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: solver returned INFEASIBLE after preflight passed")
+        return False
+    print(f"  ✅ PASS: preflight clean (teaching 24 <= 25 free slots, supervision 5 counted once), "
+          f"solver={result.metrics.status}, slots={len(result.slots)}")
     return True
 
 

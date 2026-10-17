@@ -160,7 +160,7 @@ function ExcelImportPanel({ setFixtureDataDirect, clearResult, onDone }) {
       setImportResult(data)
       clearResult()
 
-      const currentDefault = fixtureData?.schedule_config?.default_max_periods_per_week || 22
+      const currentDefault = fixtureData?.schedule_config?.default_max_periods_per_week || 30
       const teachers = (data.teachers || []).map((t) => ({
         id: t.id,
         name: t.name,

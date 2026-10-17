@@ -317,30 +317,67 @@ def _count_teacher_available_slots(
             # ครูผู้ดูแลกิจกรรม: ต้องว่างช่วงที่ดูแลกิจกรรม (ห้ามจัดคาบอื่นชน)
             if (d, p) in (fixed_slots_per_teacher or {}).get(teacher.id, set()):
                 continue
-            # Class-specific fixed slot: if ANY class the teacher teaches
-            # is blocked at (d, p), the teacher can't teach then
-            blocked_by_class = False
-            for cid in taught_class_ids:
-                cls_blocks = fixed_slots_per_class.get(cid, set())
-                if (d, p) in cls_blocks:
-                    blocked_by_class = True
-                    break
-            if blocked_by_class:
+            # Class-specific fixed slot: the slot is usable if AT LEAST ONE
+            # class the teacher teaches is free at (d, p). The solver checks
+            # per lesson block (only the lesson's own class), so treating the
+            # slot as unavailable because a *different* taught class has an
+            # activity there would falsely shrink the teacher's capacity and
+            # block scheduling that is actually possible.
+            if not any(
+                (d, p) not in fixed_slots_per_class.get(cid, set())
+                for cid in taught_class_ids
+            ):
                 continue
             day_usable += 1
 
-        # Lunch guarantee: reserve >= 1 lunch slot per day in window
-        # across all blocks the teacher teaches in
+        # Lunch guarantee: mirror TimetableSolver._add_teacher_lunch_guarantee —
+        # the solver only reserves >= 1 free lunch-window slot per day when the
+        # teacher can actually be scheduled at a lunch-window period of one of
+        # their own blocks (i.e. that period is also a valid STUDY period that
+        # day, which only happens when blocks have staggered lunch times). In
+        # the common case (all classes share the same lunch period, which is a
+        # LUNCH slot and never a STUDY slot) the solver adds no constraint, so
+        # we must not subtract a slot here either.
         if teacher_blocks:
-            lunch_slots_in_window: set[tuple[str, int]] = set()
+            classes_in_block: dict[str, set[str]] = {}
+            for cid in taught_class_ids:
+                bid = class_to_block.get(cid)
+                if bid:
+                    classes_in_block.setdefault(bid, set()).add(cid)
+            # Global union of STUDY periods for this day (mirrors the solver's
+            # valid_periods_by_day used when creating lesson variables).
+            global_day_study: set[int] = set()
+            for blk in request.schedule_blocks:
+                for p in _valid_periods_for_day(blk, d):
+                    global_day_study.add(p)
+            lunch_reserved = False
             for bid in teacher_blocks:
                 blk = block_by_id.get(bid)
                 if not blk:
                     continue
                 for lp in _lunch_periods_in_window(blk, d):
-                    lunch_slots_in_window.add((bid, lp))
-            # Reserve 1 slot per day if any lunch-window slot exists
-            if lunch_slots_in_window and day_usable > 0:
+                    if lp not in global_day_study:
+                        continue
+                    key = f"{d}-{lp}"
+                    if key in unavailable or key in admin_free:
+                        continue
+                    if teacher.no_first_period and lp == 1:
+                        continue
+                    if teacher.no_last_period and lp == max_period_this_day:
+                        continue
+                    if (d, lp) in assembly_set:
+                        continue
+                    if (d, lp) in (fixed_slots_per_teacher or {}).get(teacher.id, set()):
+                        continue
+                    if any(
+                        (d, lp) not in fixed_slots_per_class.get(cid, set())
+                        for cid in classes_in_block.get(bid, set())
+                    ):
+                        lunch_reserved = True
+                        break
+                if lunch_reserved:
+                    break
+            if lunch_reserved and day_usable > 0:
                 day_usable -= 1
 
         total += day_usable
@@ -463,7 +500,11 @@ def _check_teacher_overloads(
         reason = ""
         if teacher.max_periods_per_week > 0 and needed > teacher.max_periods_per_week:
             reason = "over_max"
-        elif needed > available:
+        # คาบดูแลกิจกรรม (supervision) ถูกหักออกจาก available แล้ว (ครูยุ่งช่วงนั้น
+        # จัดคาบอื่นไม่ได้) ดังนั้นเช็คความพอดีของช่องวางคาบด้วยเฉพาะคาบสอน —
+        # ภาระรวม (needed) เทียบกับ available จะนับ supervision ซ้ำ และบล็อก
+        # ตารางที่จริงแล้วจัดได้ (ครูสอน 24 คาบใน 25 ช่องที่เหลือ + ดูแล 5 คาบ)
+        elif (needed - (supervision_counts or {}).get(teacher.id, 0)) > available:
             reason = "over_available"
         elif teacher.min_periods_per_week > 0 and needed < teacher.min_periods_per_week:
             reason = "under_min"

@@ -235,7 +235,7 @@ class ScheduleConfig(BaseModel):
         description="Soft constraint: max consecutive periods a teacher can teach",
     )
     default_max_periods_per_week: int = Field(
-        default=22,
+        default=30,
         ge=0,
         le=60,
         description="Default max_periods_per_week used for NEW teachers / imports / fallbacks (editable in Global Conditions UI)",

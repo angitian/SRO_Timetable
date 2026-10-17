@@ -33,7 +33,7 @@ export default function TeacherConstraintsPage() {
     return {
       unavailable_slots: t.unavailable_slots || [],
       admin_role: t.admin_role || 'none',
-      max_periods_per_week: t.max_periods_per_week || 22,
+      max_periods_per_week: t.max_periods_per_week || 30,
     }
   }
 
