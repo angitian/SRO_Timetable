@@ -142,6 +142,11 @@ export default function GridCell({
                   {s.className || s.class_id} · {s.subjectName || s.subject_id}
                   {s.isSubstitute && <span className="ml-1 text-[9px] text-orange-600 bg-orange-100 rounded px-1">สอนแทน</span>}
                 </div>
+                {s.coTeacherName && (
+                  <div className="text-[10px] font-medium text-slate-500 truncate w-full leading-tight">
+                    👥 {s.mainTeacherName || s.teacher_id} + {s.coTeacherName}
+                  </div>
+                )}
                 {onTogglePinSlot && (
                   <button
                     onClick={(e) => { e.stopPropagation(); onTogglePinSlot(s) }}
@@ -164,7 +169,12 @@ export default function GridCell({
             bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap shadow-lg
             pointer-events-none">
             {slots.map((s, i) => (
-              <div key={i}>{s.className || s.class_id} · {s.subjectName || s.subject_id}</div>
+              <div key={i}>
+                {s.className || s.class_id} · {s.subjectName || s.subject_id}
+                {s.coTeacherName && (
+                  <span className="text-slate-400"> — {s.mainTeacherName || s.teacher_id} + {s.coTeacherName}</span>
+                )}
+              </div>
             ))}
           </div>
         )}

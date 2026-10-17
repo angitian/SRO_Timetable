@@ -5,6 +5,7 @@ import GridLegend from './GridLegend.jsx'
 import { DAY_LABELS } from './GridLegend.jsx'
 import CellContextMenu from './CellContextMenu.jsx'
 import CellRoomEditModal from './CellRoomEditModal.jsx'
+import { teacherSupervisesFixedSlot } from '../../utils/teacherLoad.js'
 
 export default function TimetableGrid({
   slots = [],
@@ -146,16 +147,18 @@ export default function TimetableGrid({
     return getFixedSlotsFor(d, p, classId)[0] || null
   }
 
-  // Fixed slots that apply to this teacher's classes at (day, period)
+  // Fixed slots this teacher SUPERVISES at (day, period) — only กิจกรรมที่ครู
+  // คนนี้อยู่ใน fs.class_teachers เท่านั้นที่โผล่ในตารางครู ไม่ใช่ทุกอันที่
+  // ตรงกับห้องที่ครูสอน (เดิมแสดงคาบพิเศษให้ครูที่ไม่ได้ดูแลด้วย)
+  // Iterate fixedSlots directly so supervisors who teach none of the slot's
+  // classes (e.g. ครูประจำชั้นที่ไม่สอนห้องนั้น) are still covered.
   function getFixedSlotsForTeacher(d, p) {
-    const result = [...(fixedSlotMap.get(`${d}-${p}`) || [])]
-    if (activeTeacherId) {
-      for (const cid of teacherClassIds) {
-        result.push(...(fixedSlotMap.get(`${d}-${p}-${cid}`) || []))
-      }
-    }
-    const seen = new Set()
-    return result.filter((fs) => (seen.has(fs.id) ? false : (seen.add(fs.id), true)))
+    if (!activeTeacherId || !fixedSlots) return []
+    return fixedSlots.filter((fs) => {
+      if (fs.day !== d) return false
+      const periods = [fs.period, ...(fs.periods || [])]
+      return periods.includes(p) && teacherSupervisesFixedSlot(fs, activeTeacherId)
+    })
   }
 
   // Substitute lookup: "day-period-classId" → substitute entry (สอนแทน)
@@ -217,11 +220,6 @@ export default function TimetableGrid({
     return classes.filter((c) => classIds.has(c.id))
   }, [activeTeacherId, localSlots, classes, userPlacements, lessonBlockMap])
 
-  const teacherClassIds = useMemo(
-    () => new Set(teacherClasses.map((c) => c.id)),
-    [teacherClasses],
-  )
-
   const classColorMap = useMemo(() => {
     const map = {}
     teacherClasses.forEach((c, i) => { map[c.id] = i })
@@ -274,30 +272,64 @@ export default function TimetableGrid({
   }
 
   // Teacher mode: get all slots for this teacher at day-period, enriched with names.
-  // Includes slots where the teacher is the co-teacher, plus substitute (สอนแทน)
-  // duties where the teacher is covering another teacher's slot.
+  // Includes slots where the teacher is the co-teacher (resolved from the lesson
+  // block, or the slot's own co_teacher_id from newer backends), user placements
+  // placed manually, plus substitute (สอนแทน) duties where the teacher is covering
+  // another teacher's slot.
   function getTeacherSlots(d, p) {
     const all = slotMap.get(`${d}-${p}`) || []
     const mapped = all
       .filter((s) => {
         if (s.teacher_id === activeTeacherId) return true
+        if (s.co_teacher_id === activeTeacherId) return true
         const lb = lessonBlockMap.get(s.lesson_block_id)
         return !!(lb && lb.co_teacher_id === activeTeacherId)
       })
       .map((s) => {
         const lb = lessonBlockMap.get(s.lesson_block_id)
+        const coTeacherId = lb?.co_teacher_id || s.co_teacher_id || null
         return {
           ...s,
           className: classMap.get(s.class_id)?.name || s.class_id,
           subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
           subjectCategory: subjectMap.get(s.subject_id)?.category,
-          coTeacherId: lb?.co_teacher_id || null,
+          coTeacherId,
+          // Names of BOTH teachers for co-taught entries (ตารางครูต้องโชว์ 2 ชื่อ)
+          mainTeacherName: teacherMap.get(s.teacher_id)?.name || s.teacher_id,
+          coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
           isPreAssigned: (() => {
             const placements = userPlacements[s.lesson_block_id]
             return !!(placements && placements.some((pp) => pp.day === s.day && pp.period === s.period))
           })(),
         }
       })
+    // User placements (วางด้วยมือ/ปักหมุด) that have no solver slot yet —
+    // without this they are invisible in teacher mode and the period count
+    // doesn't match the teacher's actual workload.
+    for (const up of userPlacementMap.values()) {
+      const lb = up.lessonBlock
+      if (!lb || up.day !== d || up.period !== p) continue
+      if (lb.teacher_id !== activeTeacherId && lb.co_teacher_id !== activeTeacherId) continue
+      const already = mapped.some((m) => m.lesson_block_id === lb.id && m.day === d && m.period === p)
+      if (already) continue
+      const coTeacherId = lb.co_teacher_id || null
+      mapped.push({
+        lesson_block_id: lb.id,
+        day: d,
+        period: p,
+        subject_id: lb.subject_id,
+        teacher_id: lb.teacher_id,
+        class_id: lb.class_id,
+        room_id: lb.room_id,
+        className: classMap.get(lb.class_id)?.name || lb.class_id,
+        subjectName: subjectMap.get(lb.subject_id)?.name || lb.subject_id,
+        subjectCategory: subjectMap.get(lb.subject_id)?.category,
+        coTeacherId,
+        mainTeacherName: teacherMap.get(lb.teacher_id)?.name || lb.teacher_id,
+        coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+        isPreAssigned: true,
+      })
+    }
     // Substitute duties for this teacher at (d, p)
     for (const sub of substitutes || []) {
       if (sub.day !== d || sub.period !== p || sub.substitute_teacher_id !== activeTeacherId) continue
@@ -597,12 +629,12 @@ export default function TimetableGrid({
                   let displayClass = slot ? classMap.get(slot.class_id) : null
                   let isPreAssigned = false
 
-                  // Resolve co-teacher name from the lesson block (if any)
-                  const resolveCoTeacher = (lb) => {
-                    if (lb && lb.co_teacher_id) {
-                      return teacherMap.get(lb.co_teacher_id) || null
-                    }
-                    return null
+                  // Resolve co-teacher name from the lesson block (if any),
+                  // falling back to the slot's own co_teacher_id (newer backends
+                  // send it, useful when the lesson block lookup misses).
+                  const resolveCoTeacher = (lb, slot) => {
+                    const coId = lb?.co_teacher_id || slot?.co_teacher_id || null
+                    return coId ? (teacherMap.get(coId) || null) : null
                   }
 
                   if (!slot && userPlacement) {
@@ -624,7 +656,7 @@ export default function TimetableGrid({
                   } else if (slot) {
                     // Solver slot that also has a user placement at this exact (day, period) → pinned
                     const lb = lessonBlockMap.get(slot.lesson_block_id)
-                    displayCoTeacher = resolveCoTeacher(lb)
+                    displayCoTeacher = resolveCoTeacher(lb, slot)
                     const placements = userPlacements[slot.lesson_block_id]
                     if (placements && placements.some((p) => p.day === slot.day && p.period === slot.period)) {
                       isPreAssigned = true

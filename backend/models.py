@@ -375,6 +375,10 @@ class ScheduledSlot(BaseModel):
     period: int
     subject_id: str
     teacher_id: str
+    co_teacher_id: Optional[str] = Field(
+        default=None,
+        description="Co-teacher (second teacher) teaching simultaneously, copied from the lesson block",
+    )
     class_id: str
     room_id: Optional[str] = None
 

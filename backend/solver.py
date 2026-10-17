@@ -1305,6 +1305,7 @@ class TimetableSolver:
                     period=p,
                     subject_id=lb.subject_id,
                     teacher_id=lb.teacher_id,
+                    co_teacher_id=lb.co_teacher_id,
                     class_id=lb.class_id,
                     room_id=lb.room_id,
                 ))
@@ -1318,6 +1319,7 @@ class TimetableSolver:
                         period=pp,
                         subject_id=lb.subject_id,
                         teacher_id=lb.teacher_id,
+                        co_teacher_id=lb.co_teacher_id,
                         class_id=lb.class_id,
                         room_id=lb.room_id,
                     ))

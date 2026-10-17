@@ -131,6 +131,7 @@ function buildMergedSlots(lessonBlocks, placements, resultSlots) {
         period: p.period,
         subject_id: lb?.subject_id ?? template?.subject_id ?? '',
         teacher_id: lb?.teacher_id ?? template?.teacher_id ?? '',
+        co_teacher_id: lb?.co_teacher_id ?? template?.co_teacher_id ?? null,
         class_id: lb?.class_id ?? template?.class_id ?? '',
         room_id: lb?.room_id ?? template?.room_id ?? null,
       })
@@ -230,6 +231,7 @@ function buildQRPayload(kind, item, ctx, gridConfig, fixedSlots, settings) {
       ? s.class_id === item.id
       : (() => {
           if (s.teacher_id === item.id) return true
+          if (s.co_teacher_id === item.id) return true
           const lb = ctx.lessonBlockMap.get(s.lesson_block_id)
           return !!(lb && lb.co_teacher_id === item.id)
         })()
@@ -240,7 +242,8 @@ function buildQRPayload(kind, item, ctx, gridConfig, fixedSlots, settings) {
   // Include the co-teachers' names too (they show on the printed cell)
   for (const s of filteredSlots) {
     const lb = ctx.lessonBlockMap.get(s.lesson_block_id)
-    if (lb && lb.co_teacher_id) teacherIds.add(lb.co_teacher_id)
+    const coId = (lb && lb.co_teacher_id) || s.co_teacher_id
+    if (coId) teacherIds.add(coId)
   }
   // For a teacher page, only embed fixed slots that affect their classes;
   // for a class page, only slots that affect that class.
@@ -259,7 +262,7 @@ function buildQRPayload(kind, item, ctx, gridConfig, fixedSlots, settings) {
     // v4 slot format: [day, period, subject_id, teacher_id, class_id, co_teacher_id]
     s: filteredSlots.map((sl) => {
       const lb = ctx.lessonBlockMap.get(sl.lesson_block_id)
-      return [sl.day, sl.period, sl.subject_id, sl.teacher_id, sl.class_id, lb?.co_teacher_id || null]
+      return [sl.day, sl.period, sl.subject_id, sl.teacher_id, sl.class_id, lb?.co_teacher_id || sl.co_teacher_id || null]
     }),
     su: (ctx.subjects || []).filter((s) => subjectIds.has(s.id)).map((s) => [s.id, s.name]),
     t: (ctx.teachers || []).filter((t) => teacherIds.has(t.id)).map((t) => [t.id, t.name]),

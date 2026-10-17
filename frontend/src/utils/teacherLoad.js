@@ -140,6 +140,15 @@ export function flattenClassTeachers(raw) {
 }
 
 /**
+ * ครูคนนี้เป็นผู้ดูแล fixed slot นี้หรือไม่ — ตรวจว่า teacherId อยู่ใน
+ * fs.class_teachers (ห้องใดห้องหนึ่ง) ใช้กรองคาบพิเศษในตารางสอนครู:
+ * โชว์กิจกรรมเฉพาะครูที่ดูแล ไม่ใช่ทุกครูที่สอนห้องนั้น
+ */
+export function teacherSupervisesFixedSlot(fs, teacherId) {
+  return flattenClassTeachers(fs?.class_teachers).has(teacherId)
+}
+
+/**
  * คาบดูแลกิจกรรม (fixed slots) ต่อครู — จาก fs.class_teachers { class_id: [teacher_id, ...] }
  * คืน { [teacher_id]: count } — นับคาบที่ไม่ซ้ำกันของแต่ละกิจกรรม (effective periods)
  * ครูที่เข้าร่วมกิจกรรมนี้ 1 ครั้ง = 1 คาบ/สัปดาห์ (ไม่คูณจำนวนห้องที่ดูแล)

@@ -17,6 +17,7 @@
 import { exportMultiPagePDF } from './exportPdf.js'
 import { exportMultiPNG } from './exportImage.js'
 import { exportMultiExcel } from './exportExcel.js'
+import { teacherSupervisesFixedSlot } from './teacherLoad.js'
 
 const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 export { DAY_LABELS }
@@ -156,6 +157,7 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, getFixedSlo
       kind: 'lesson',
       subjectName: subj?.name || slot.subject_id,
       teacherName: subTeacher ? (subTeacher.name || subTeacher.id) : (teacher?.name || ''),
+      coTeacherName: (!sub && coTeacher) ? (coTeacher.name || coTeacher.id) : null,
       originalName: sub ? subOriginal : null,
       isSubstitute: !!sub,
       isPreAssigned,
@@ -175,6 +177,7 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, getFixedSlo
       kind: 'lesson',
       subjectName: subj?.name || lb.subject_id,
       teacherName: subTeacher ? (subTeacher.name || subTeacher.id) : (teacher?.name || ''),
+      coTeacherName: (!sub && coTeacher) ? (coTeacher.name || coTeacher.id) : null,
       originalName: sub ? subOriginal : null,
       isSubstitute: !!sub,
       isPreAssigned: true,
@@ -189,14 +192,18 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, getFixedSlo
  * Resolve display data for a single cell in a teacher grid.
  * Returns { kind, slots: [{ subjectName, className, classId }] }
  */
-function resolveTeacherCell({ day, period, teacherId, teacherClassIds, slotMap, fixedMap, getFixedSlotsFor, subjectMap, classMap, lessonBlockMap, substituteMap }) {
-  // Fixed slot applies if it targets ALL classes or any class this teacher teaches
-  const fixedTargets = [...(fixedMap.get(`${day}-${period}`) || [])]
-  for (const cid of teacherClassIds) {
-    fixedTargets.push(...(fixedMap.get(`${day}-${period}-${cid}`) || []))
-  }
-  if (fixedTargets.length > 0) {
-    return { kind: 'fixed', fixedName: fixedTargets[0].name || 'กิจกรรมล็อก' }
+function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subjectMap, classMap, teacherMap, lessonBlockMap, substituteMap, userPlacementMap }) {
+  // Fixed slot shows in a teacher's timetable ONLY when they supervise it
+  // (fs.class_teachers) — not merely because it applies to a class they teach.
+  // Iterate the raw list so supervisors who teach none of the slot's classes
+  // are covered too.
+  const supervised = (fixedSlots || []).filter((fs) => {
+    if (fs.day !== day) return false
+    const periods = [fs.period, ...(fs.periods || [])]
+    return periods.includes(period) && teacherSupervisesFixedSlot(fs, teacherId)
+  })
+  if (supervised.length > 0) {
+    return { kind: 'fixed', fixedName: supervised[0].name || 'กิจกรรมล็อก' }
   }
 
   // Include slots where the teacher is the main teacher OR the co-teacher
@@ -206,12 +213,35 @@ function resolveTeacherCell({ day, period, teacherId, teacherClassIds, slotMap, 
     if (lb && lb.co_teacher_id === teacherId) return true
     return s.co_teacher_id === teacherId
   })
-  const entries = slots.map((s) => ({
-    subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
-    className: classMap.get(s.class_id)?.name || s.class_id,
-    classId: s.class_id,
-    subjectId: s.subject_id,
-  }))
+  const entries = slots.map((s) => {
+    const lb = lessonBlockMap.get(s.lesson_block_id)
+    const coTeacherId = (lb && lb.co_teacher_id) || s.co_teacher_id || null
+    return {
+      subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
+      className: classMap.get(s.class_id)?.name || s.class_id,
+      classId: s.class_id,
+      subjectId: s.subject_id,
+      mainTeacherName: teacherMap.get(s.teacher_id)?.name || s.teacher_id,
+      coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+    }
+  })
+  // User placements (วางด้วยมือ/ปักหมุด) not covered by solver slots — the
+  // co-teacher AND main teacher must both see these in their timetable.
+  for (const up of (userPlacementMap?.values() || [])) {
+    const lb = up.lessonBlock
+    if (!lb || up.day !== day || up.period !== period) continue
+    if (lb.teacher_id !== teacherId && lb.co_teacher_id !== teacherId) continue
+    if (slots.some((s) => s.lesson_block_id === lb.id)) continue
+    const coTeacherId = lb.co_teacher_id || null
+    entries.push({
+      subjectName: subjectMap.get(lb.subject_id)?.name || lb.subject_id,
+      className: classMap.get(lb.class_id)?.name || lb.class_id,
+      classId: lb.class_id,
+      subjectId: lb.subject_id,
+      mainTeacherName: teacherMap.get(lb.teacher_id)?.name || lb.teacher_id,
+      coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+    })
+  }
   // Substitute duties (สอนแทน) for this teacher
   for (const sub of substituteMap.values()) {
     if (sub.day !== day || sub.period !== period) continue
@@ -265,12 +295,15 @@ export function buildClassGridHTML(cls, ctx) {
           if (cell.kind === 'lesson') {
             const pinIcon = cell.isPreAssigned ? '📌 ' : ''
             const subName = cell.originalName ? ` (แทน ${cell.originalName})` : ''
+            const teacherDisplay = cell.isSubstitute
+              ? `${cell.teacherName || ''}${subName}`
+              : `${cell.teacherName || ''}${cell.coTeacherName ? ` + ${cell.coTeacherName}` : ''}`
             const subBadge = cell.isSubstitute
               ? `<span style="display:inline-block;font-size:9px;font-weight:700;color:#9a3412;background:#ffedd5;border:1px solid #fdba74;border-radius:4px;padding:0 3px;margin-top:2px;">🔁 สอนแทน</span>`
               : ''
             return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;align-items:center;text-align:center;">
               <div class="vcell-title" style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${pinIcon}${cell.subjectName || ''}</div>
-              <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${cell.teacherName || ''}${subName}</div>
+              <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${teacherDisplay}</div>
               ${subBadge}
             </div>`
           }
@@ -294,27 +327,6 @@ export function buildTeacherGridHTML(teacher, ctx) {
   const periodColsTemplate = buildPeriodColsTemplate(ctx.periodList, ctx.breakSet)
   const gridCtx = { ...ctx, periodColsTemplate }
 
-  // Classes this teacher teaches (main OR co-teacher) — for class-aware fixed slots
-  const teacherClassIds = new Set()
-  for (const s of ctx.allSlots) {
-    if (s.teacher_id === teacher.id) {
-      teacherClassIds.add(s.class_id)
-      continue
-    }
-    const lb = ctx.lessonBlockMap.get(s.lesson_block_id)
-    if (lb && lb.co_teacher_id === teacher.id) {
-      teacherClassIds.add(s.class_id)
-    } else if (s.co_teacher_id === teacher.id) {
-      teacherClassIds.add(s.class_id)
-    }
-  }
-  for (const [lbId, placements] of Object.entries(ctx.userPlacements)) {
-    const lb = ctx.lessonBlockMap.get(lbId)
-    if (lb && (lb.teacher_id === teacher.id || lb.co_teacher_id === teacher.id)) {
-      teacherClassIds.add(lb.class_id)
-    }
-  }
-
   const rows = ctx.dayList
     .map((d) => {
       const cells = ctx.periodList
@@ -322,10 +334,11 @@ export function buildTeacherGridHTML(teacher, ctx) {
           const lunchBreak = buildLunchBreakCellHTML(p, ctx)
           if (lunchBreak) return lunchBreak
           const cell = resolveTeacherCell({
-            day: d, period: p, teacherId: teacher.id, teacherClassIds,
-            slotMap: ctx.slotMap, fixedMap: ctx.fixedMap, getFixedSlotsFor: ctx.getFixedSlotsFor,
-            subjectMap: ctx.subjectMap, classMap: ctx.classMap,
+            day: d, period: p, teacherId: teacher.id,
+            slotMap: ctx.slotMap, fixedSlots: ctx.fixedSlots,
+            subjectMap: ctx.subjectMap, classMap: ctx.classMap, teacherMap: ctx.teacherMap,
             lessonBlockMap: ctx.lessonBlockMap, substituteMap: ctx.substituteMap,
+            userPlacementMap: ctx.userPlacementMap,
           })
           if (cell.kind === 'fixed') {
             return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
@@ -335,9 +348,13 @@ export function buildTeacherGridHTML(teacher, ctx) {
               const subTag = s.isSubstitute
                 ? `<div style="font-size:9px;font-weight:700;color:#9a3412;background:#ffedd5;border-radius:3px;display:inline-block;padding:0 3px;margin-top:1px;">🔁 สอนแทน</div>`
                 : ''
+              const teacherLine = s.coTeacherName
+                ? `<div class="vcell-sub" style="font-weight:500;color:#6b7280;font-size:9px;margin-top:0.5px;">${s.mainTeacherName} + ${s.coTeacherName}</div>`
+                : ''
               return `<div style="text-align:center;padding:1px 0;">
                 <div class="vcell-title" style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${s.className}</div>
                 <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${s.subjectName}</div>
+                ${teacherLine}
                 ${subTag}
               </div>`
             }).join('')

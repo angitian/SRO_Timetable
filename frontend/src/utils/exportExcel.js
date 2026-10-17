@@ -15,6 +15,8 @@
  *   exportToExcel(data)           → Promise<void>  (legacy, classes only)
  */
 
+import { teacherSupervisesFixedSlot } from './teacherLoad.js'
+
 const DAY_LABELS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 
 // ── Style constants ───────────────────────────────────────────────────────
@@ -102,37 +104,29 @@ function buildClassCellMap(cls, ctx) {
  * Build a lookup map for a single teacher: "day-period" → [{ subjectName, className }]
  */
 function buildTeacherCellMap(teacher, ctx) {
-  const { slotMap, fixedMap, getFixedSlotsFor, substituteMap, subjectMap, classMap, userPlacements, lessonBlockMap } = ctx
+  const { slotMap, substituteMap, subjectMap, classMap, teacherMap, userPlacements, lessonBlockMap } = ctx
   const map = new Map()
 
-  // Classes this teacher teaches (main OR co-teacher) — for class-aware fixed slots
-  const teacherClassIds = new Set()
-  for (const [key, slots] of slotMap.entries()) {
-    for (const s of slots) {
-      if (s.teacher_id === teacher.id) teacherClassIds.add(s.class_id)
-      const lb = lessonBlockMap.get(s.lesson_block_id)
-      if (lb && lb.co_teacher_id === teacher.id) teacherClassIds.add(s.class_id)
-    }
-  }
-  for (const [lbId] of Object.entries(userPlacements || {})) {
-    const lb = lessonBlockMap.get(lbId)
-    if (lb && (lb.teacher_id === teacher.id || lb.co_teacher_id === teacher.id)) {
-      teacherClassIds.add(lb.class_id)
-    }
-  }
-
-  // Solver slots for this teacher (includes co-taught)
+  // Solver slots for this teacher (includes co-taught, resolved from the
+  // lesson block or the slot's own co_teacher_id from newer backends)
   for (const [key, slots] of slotMap.entries()) {
     const teacherSlots = slots.filter((s) => {
       if (s.teacher_id === teacher.id) return true
       const lb = lessonBlockMap.get(s.lesson_block_id)
-      return !!(lb && lb.co_teacher_id === teacher.id)
+      if (lb && lb.co_teacher_id === teacher.id) return true
+      return s.co_teacher_id === teacher.id
     })
     if (teacherSlots.length === 0) continue
-    map.set(key, teacherSlots.map((s) => ({
-      subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
-      className: classMap.get(s.class_id)?.name || s.class_id,
-    })))
+    map.set(key, teacherSlots.map((s) => {
+      const lb = lessonBlockMap.get(s.lesson_block_id)
+      const coTeacherId = (lb && lb.co_teacher_id) || s.co_teacher_id || null
+      return {
+        subjectName: subjectMap.get(s.subject_id)?.name || s.subject_id,
+        className: classMap.get(s.class_id)?.name || s.class_id,
+        mainTeacherName: teacherMap.get(s.teacher_id)?.name || s.teacher_id,
+        coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+      }
+    }))
   }
 
   // User placements for this teacher (only fill empty cells)
@@ -142,9 +136,12 @@ function buildTeacherCellMap(teacher, ctx) {
     for (const p of placements) {
       const key = `${p.day}-${p.period}`
       if (!map.has(key)) {
+        const coTeacherId = lb.co_teacher_id || null
         map.set(key, [{
           subjectName: subjectMap.get(lb.subject_id)?.name || lb.subject_id,
           className: classMap.get(lb.class_id)?.name || lb.class_id,
+          mainTeacherName: teacherMap.get(lb.teacher_id)?.name || lb.teacher_id,
+          coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
         }])
       }
     }
@@ -163,17 +160,11 @@ function buildTeacherCellMap(teacher, ctx) {
     map.set(key, entries)
   }
 
-  // Fixed slots (override) — class-aware for this teacher's classes
-  const days = ctx.dayList || []
-  const periods = ctx.periodList || []
-  for (const d of days) {
-    for (const p of periods) {
-      const allClassFixed = getFixedSlotsFor(d, p, null)[0]
-      const classFixed = [...teacherClassIds].map((cid) => getFixedSlotsFor(d, p, cid)[0]).find(Boolean)
-      const fixed = allClassFixed || classFixed
-      if (fixed) {
-        map.set(`${d}-${p}`, { isFixed: true, fixedName: fixed.name || 'กิจกรรมล็อก' })
-      }
+  // Fixed slots (override) — only กิจกรรมที่ครูคนนี้เป็นผู้ดูแล (fs.class_teachers)
+  for (const fs of (ctx.fixedSlots || [])) {
+    if (!teacherSupervisesFixedSlot(fs, teacher.id)) continue
+    for (const p of [fs.period, ...(fs.periods || [])]) {
+      map.set(`${fs.day}-${p}`, { isFixed: true, fixedName: fs.name || 'กิจกรรมล็อก' })
     }
   }
 
@@ -205,8 +196,8 @@ function formatTeacherCell(entry, isLunch) {
   if (isLunch) return 'พักเที่ยง'
   if (!entry) return ''
   if (entry.isFixed) return `🔒 ${entry.fixedName}`
-  // entry is an array of { subjectName, className }
-  return entry.map((s) => `${s.subjectName}\n${s.className}${s.isSubstitute ? '\n🔁 สอนแทน' : ''}`).join('\n\n')
+  // entry is an array of { subjectName, className, mainTeacherName?, coTeacherName? }
+  return entry.map((s) => `${s.subjectName}\n${s.className}${s.coTeacherName ? `\n👥 ${s.mainTeacherName} + ${s.coTeacherName}` : ''}${s.isSubstitute ? '\n🔁 สอนแทน' : ''}`).join('\n\n')
 }
 
 /**
@@ -502,6 +493,7 @@ function buildExportContext(data) {
     teachers: teachers || [],
     specialRooms: specialRooms || [],
     userPlacements: userPlacements || {},
+    fixedSlots: fixedSlots || [],
     subjectMap, teacherMap, classMap, lessonBlockMap,
     lunchSet, breakSet, fixedMap, slotMap, getFixedSlotsFor, substituteMap, getSubstituteFor,
     dayList, periodList,
