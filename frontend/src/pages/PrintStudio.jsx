@@ -1288,25 +1288,21 @@ export default function PrintStudio() {
     setExporting(true)
     setExportProgress('กำลังสร้างไฟล์ Excel...')
     try {
-      // Map exportScope to Excel's { classes, teachers, facilities } format
+      // Map exportScope to Excel's scope format. The combined matrix sheets
+      // (ตารางรวม) follow the tab: ครู tab → combined teachers sheet, ห้องเรียน
+      // tab → combined classes sheet, ทั้งหมด → both.
       let excelScope
       if (exportScope === 'all') {
-        excelScope = { classes: true, teachers: true, facilities: true }
-      } else if (exportScope === 'tab') {
-        excelScope = previewTab === 'class'
-          ? { classes: true, teachers: false, facilities: false }
-          : previewTab === 'teacher'
-            ? { classes: false, teachers: true, facilities: false }
-            : { classes: false, teachers: false, facilities: true }
+        excelScope = { classes: true, teachers: true, facilities: true, combinedTeachers: true, combinedClasses: true }
       } else {
-        // 'current' — export only the current tab's sheet
+        // 'tab' and 'current' — export the active tab's sheets
         excelScope = previewTab === 'class'
-          ? { classes: true, teachers: false, facilities: false }
+          ? { classes: true, teachers: false, facilities: false, combinedClasses: true }
           : previewTab === 'teacher'
-            ? { classes: false, teachers: true, facilities: false }
+            ? { classes: false, teachers: true, facilities: false, combinedTeachers: true }
             : { classes: false, teachers: false, facilities: true }
       }
-      await exportMultiExcel(excelScope, exportData)
+      await exportMultiExcel(excelScope, exportData, settings)
       showToast('ok', 'ส่งออก Excel สำเร็จ')
     } catch (e) {
       showToast('err', 'ส่งออก Excel ไม่สำเร็จ: ' + e.message)

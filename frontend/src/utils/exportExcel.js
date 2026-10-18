@@ -7,15 +7,18 @@
  * Output workbook structure:
  *   - Sheet 1: "ตารางห้องเรียนทั้งหมด" — every class grid stacked vertically
  *   - Sheet 2: "ตารางครูทุกคน"        — every teacher grid stacked vertically
+ *   - Sheet 3: "ตารางห้องพิเศษ"       — every special room grid (optional)
+ *   - Sheet 4: "ตารางรวมครูทุกคน"      — combined teacher matrix (3 rows/teacher)
+ *   - Sheet 5: "ตารางรวมห้องเรียนทั้งหมด" — combined class matrix (3 rows/class)
  *
- * Only sheets matching the selected scope checkboxes are included.
+ * Only sheets matching the selected scope flags are included.
  *
  * Public API:
  *   exportMultiExcel(scope, data) → Promise<void>  (downloads .xlsx)
  *   exportToExcel(data)           → Promise<void>  (legacy, classes only)
  */
 
-import { teacherSupervisesFixedSlot } from './teacherLoad.js'
+import { teacherSupervisesFixedSlot, normalizeClassTeachers } from './teacherLoad.js'
 
 const DAY_LABELS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 
@@ -23,6 +26,7 @@ const DAY_LABELS = ['จันทร์', 'อังคาร', 'พุธ', '�
 const COLOR_NAVY = 'FF1E3A8A'      // Section header fill
 const COLOR_SLATE = 'FFE2E8F0'     // Column header fill
 const COLOR_LUNCH = 'FFF1F5F9'     // Lunch cell fill
+const COLOR_BAND = 'FFF0F7FF'      // Combined sheet: alternating block band fill
 const COLOR_WHITE = 'FFFFFFFF'
 const COLOR_GRAY_TEXT = 'FF6B7280'
 const COLOR_DARK_TEXT = 'FF1F2937'
@@ -92,7 +96,9 @@ function buildClassCellMap(cls, ctx) {
     for (const p of periods) {
       const fixed = getFixedSlotsFor(d, p, cls.id)[0]
       if (fixed) {
-        map.set(`${d}-${p}`, { isFixed: true, fixedName: fixed.name || 'กิจกรรมล็อก' })
+        const supervisors = normalizeClassTeachers(fixed.class_teachers)[cls.id] || []
+        const teacherNames = supervisors.map((tid) => teacherMap.get(tid)?.name || tid).join(', ')
+        map.set(`${d}-${p}`, { isFixed: true, fixedName: fixed.name || 'กิจกรรมล็อก', teacherNames })
       }
     }
   }
@@ -156,6 +162,7 @@ function buildTeacherCellMap(teacher, ctx) {
       subjectName: subjectMap.get(sub.subject_id)?.name || sub.subject_id,
       className: classMap.get(sub.class_id)?.name || sub.class_id,
       isSubstitute: true,
+      originalName: teacherMap.get(sub.original_teacher_id)?.name || sub.original_teacher_id || '',
     })
     map.set(key, entries)
   }
@@ -163,8 +170,14 @@ function buildTeacherCellMap(teacher, ctx) {
   // Fixed slots (override) — only กิจกรรมที่ครูคนนี้เป็นผู้ดูแล (fs.class_teachers)
   for (const fs of (ctx.fixedSlots || [])) {
     if (!teacherSupervisesFixedSlot(fs, teacher.id)) continue
+    const ct = normalizeClassTeachers(fs.class_teachers)
+    const supervisedIds = Object.entries(ct)
+      .filter(([, tids]) => tids.includes(teacher.id))
+      .map(([cid]) => cid)
+    const targetIds = supervisedIds.length > 0 ? supervisedIds : (fs.class_ids || [])
+    const classNames = targetIds.map((cid) => classMap.get(cid)?.name || cid).join(', ')
     for (const p of [fs.period, ...(fs.periods || [])]) {
-      map.set(`${fs.day}-${p}`, { isFixed: true, fixedName: fs.name || 'กิจกรรมล็อก' })
+      map.set(`${fs.day}-${p}`, { isFixed: true, fixedName: fs.name || 'กิจกรรมล็อก', classNames })
     }
   }
 
@@ -497,17 +510,198 @@ function buildExportContext(data) {
     subjectMap, teacherMap, classMap, lessonBlockMap,
     lunchSet, breakSet, fixedMap, slotMap, getFixedSlotsFor, substituteMap, getSubstituteFor,
     dayList, periodList,
+    periodTimeMap: data.periodTimeMap || {},
+  }
+}
+
+/**
+ * Build a "ตารางรวม" combined matrix sheet — one 3-row block per teacher/class
+ * across columns = day × period (mirrors the ตารางรวม.xlsx reference format).
+ *
+ *   Row 1:   merged title (school name + year + semester)
+ *   Rows 2-4: ที่ | ชื่อ | day headers merged per period group + period numbers + times
+ *   Blocks:  3 rows per item — [วิชา / ห้องเรียน(ครู) or ครูผู้สอน(ห้อง) / ครูร่วม]
+ *
+ * @param {'teacher'|'class'} kind
+ */
+function buildCombinedSheet(wb, ctx, settings, kind) {
+  const isTeacher = kind === 'teacher'
+  const sheetName = isTeacher ? 'ตารางรวมครูทุกคน' : 'ตารางรวมห้องเรียนทั้งหมด'
+  const sheet = wb.addWorksheet(sheetName, { views: [{ showGridLines: false }] })
+  const { dayList, periodList, lunchSet, breakSet, periodTimeMap } = ctx
+  const items = isTeacher ? ctx.teachers : ctx.classes
+  const periodsPerDay = periodList.length
+  const lastCol = 2 + dayList.length * periodsPerDay
+
+  const center = { horizontal: 'center', vertical: 'middle', wrapText: true }
+  const headerFont = { name: 'TH Sarabun PSK', size: 16, bold: true }
+  const smallFont = { name: 'TH Sarabun PSK', size: 10, bold: true }
+
+  // ── Column widths ──
+  sheet.getColumn(1).width = 5
+  sheet.getColumn(2).width = 18
+  for (let c = 3; c <= lastCol; c++) {
+    const p = periodList[(c - 3) % periodsPerDay]
+    sheet.getColumn(c).width = breakSet.has(p) ? 4 : 13
+  }
+
+  // ── Row 1: Title (merged across all columns) ──
+  const semesterLabel = settings?.semester === '1' ? 'ภาคเรียนที่ 1'
+    : settings?.semester === '2' ? 'ภาคเรียนที่ 2'
+    : settings?.semester === 'summer' ? 'ภาคเรียนฤดูร้อน'
+    : ''
+  const yearStr = settings?.academicYear ? `ปีการศึกษา ${settings.academicYear}` : ''
+  const titleParts = settings?.schoolName
+    ? [`ตารางสอน${settings.schoolName}`, yearStr, semesterLabel]
+    : [sheetName, yearStr, semesterLabel]
+  const title = titleParts.filter(Boolean).join(' ')
+  const titleRow = sheet.getRow(1)
+  titleRow.getCell(1).value = title
+  sheet.mergeCells(1, 1, 1, lastCol)
+  const titleCell = titleRow.getCell(1)
+  titleCell.font = { name: 'TH Sarabun PSK', size: 17, bold: true }
+  titleCell.alignment = { horizontal: 'center', vertical: 'middle' }
+  titleRow.height = 24
+
+  // ── Rows 2-4: Header (ที่ | ชื่อ | day groups) ──
+  const r2 = sheet.getRow(2)
+  const r3 = sheet.getRow(3)
+  const r4 = sheet.getRow(4)
+  r2.getCell(1).value = 'ที่'
+  sheet.mergeCells(2, 1, 4, 1)
+  r2.getCell(2).value = 'ชื่อ'
+  sheet.mergeCells(2, 2, 3, 2)
+  r4.getCell(2).value = 'เวลา'
+
+  for (let di = 0; di < dayList.length; di++) {
+    const d = dayList[di]
+    const startCol = 3 + di * periodsPerDay
+    const endCol = startCol + periodsPerDay - 1
+    r2.getCell(startCol).value = DAY_LABELS[d - 1] || `วัน${d}`
+    if (endCol > startCol) sheet.mergeCells(2, startCol, 2, endCol)
+    for (let pi = 0; pi < periodsPerDay; pi++) {
+      const p = periodList[pi]
+      const col = startCol + pi
+      if (lunchSet.has(p) || breakSet.has(p)) {
+        sheet.mergeCells(3, col, 4, col) // lunch/break header: empty merged cell
+      } else {
+        r3.getCell(col).value = p
+        r4.getCell(col).value = periodTimeMap[p] || ''
+      }
+    }
+  }
+
+  // Header styling — apply to every covered cell so merged ranges get borders
+  const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_SLATE } }
+  for (let col = 1; col <= lastCol; col++) {
+    for (const row of [r2, r3, r4]) {
+      const cell = row.getCell(col)
+      cell.border = THIN_BORDER
+      cell.alignment = center
+      cell.fill = headerFill
+    }
+    r2.getCell(col).font = headerFont
+    r3.getCell(col).font = smallFont
+    r4.getCell(col).font = { name: 'Sarabun', size: 10 }
+  }
+  r4.getCell(2).font = { name: 'Sarabun', size: 10, bold: true }
+  r2.height = 21
+  r3.height = 16
+  r4.height = 21
+
+  // ── Data blocks: 3 rows per teacher/class ──
+  const noFont = { name: 'TH Sarabun PSK', size: 16 }
+  const nameFont = { name: 'Sarabun', size: 11 }
+  const subjFont = { name: 'Sarabun', size: 9 }
+  const midFont = { name: 'Sarabun', size: 10 }
+
+  let rowIdx = 5
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    const cellMap = isTeacher ? buildTeacherCellMap(item, ctx) : buildClassCellMap(item, ctx)
+    const subjRow = sheet.getRow(rowIdx)
+    const midRow = sheet.getRow(rowIdx + 1)
+    const partnerRow = sheet.getRow(rowIdx + 2)
+
+    // Zebra by block: alternate blocks get a light blue band across all 3 rows
+    // so it's easy to see which rows belong to the same teacher/class.
+    const band = i % 2 === 1
+      ? { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_BAND } }
+      : null
+    subjRow.getCell(1).value = i + 1
+    subjRow.getCell(2).value = item.name
+    for (const [row, font] of [[subjRow, subjFont], [midRow, midFont], [partnerRow, midFont]]) {
+      for (let col = 1; col <= lastCol; col++) {
+        const cell = row.getCell(col)
+        cell.font = col === 1 ? noFont : col === 2 ? nameFont : font
+        cell.alignment = center
+        cell.border = THIN_BORDER
+        if (band) cell.fill = band
+      }
+    }
+    // Name column left-aligned for readability
+    subjRow.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' }
+
+    for (let di = 0; di < dayList.length; di++) {
+      const d = dayList[di]
+      const startCol = 3 + di * periodsPerDay
+      for (let pi = 0; pi < periodsPerDay; pi++) {
+        const p = periodList[pi]
+        const col = startCol + pi
+        if (lunchSet.has(p) || breakSet.has(p)) continue
+        const entry = cellMap.get(`${d}-${p}`)
+        if (!entry) continue
+        const sCell = subjRow.getCell(col)
+        const mCell = midRow.getCell(col)
+        const pCell = partnerRow.getCell(col)
+        if (entry.isFixed) {
+          sCell.value = entry.fixedName
+          mCell.value = isTeacher ? (entry.classNames || '') : (entry.teacherNames || '')
+          continue
+        }
+        if (isTeacher) {
+          const arr = Array.isArray(entry) ? entry : [entry]
+          sCell.value = arr.map((e) => e.subjectName).join('\n')
+          mCell.value = arr.map((e) => e.className).join('\n')
+          pCell.value = arr.map((e) => {
+            if (e.isSubstitute) return e.originalName ? `แทน ${e.originalName}` : 'สอนแทน'
+            const partner = e.mainTeacherName === item.name ? e.coTeacherName : e.mainTeacherName
+            return partner && partner !== item.name ? partner : ''
+          }).join('\n')
+        } else {
+          sCell.value = entry.subjectName
+          mCell.value = entry.teacherName || ''
+          pCell.value = entry.isSubstitute
+            ? (entry.originalName ? `แทน ${entry.originalName}` : '')
+            : (entry.coTeacherName || '')
+        }
+      }
+    }
+    rowIdx += 3
+  }
+
+  // ── Page setup: A4 landscape, fit to width ──
+  sheet.pageSetup.paperSize = 9
+  sheet.pageSetup.orientation = 'landscape'
+  sheet.pageSetup.fitToPage = true
+  sheet.pageSetup.fitToWidth = 1
+  sheet.pageSetup.fitToHeight = 0
+  sheet.pageMargins = {
+    left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2,
   }
 }
 
 /**
  * Export timetable to a styled .xlsx workbook with 2 master sheets.
  *
- * @param {{ classes: boolean, teachers: boolean }} scope
+ * @param {{ classes: boolean, teachers: boolean, facilities?: boolean,
+ *           combinedTeachers?: boolean, combinedClasses?: boolean }} scope
  * @param {Object} data — export data payload
+ * @param {Object} [settings] — print settings (schoolName/semester/academicYear)
+ *                              for the combined-sheet title
  * @returns {Promise<void>}
  */
-export async function exportMultiExcel(scope, data) {
+export async function exportMultiExcel(scope, data, settings = {}) {
   // Dynamic import to keep exceljs out of the initial bundle
   const ExcelJS = await import('exceljs')
   const Workbook = ExcelJS.default?.Workbook || ExcelJS.Workbook
@@ -527,6 +721,14 @@ export async function exportMultiExcel(scope, data) {
 
   if (scope.facilities && ctx.specialRooms.length > 0) {
     buildFacilitiesSheet(wb, ctx)
+  }
+
+  if (scope.combinedTeachers && ctx.teachers.length > 0) {
+    buildCombinedSheet(wb, ctx, settings, 'teacher')
+  }
+
+  if (scope.combinedClasses && ctx.classes.length > 0) {
+    buildCombinedSheet(wb, ctx, settings, 'class')
   }
 
   // Generate filename
