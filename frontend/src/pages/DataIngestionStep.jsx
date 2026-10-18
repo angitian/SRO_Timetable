@@ -6,6 +6,7 @@ import {
 import { useApp } from '../context/AppContext.jsx'
 import useToast from '../hooks/useToast.js'
 import { ROOM_TYPES, getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
+import { gradeLevelToLabel } from '../utils/gradeLabels.js'
 import SpecialRoomsManager from '../components/rooms/SpecialRoomsManager.jsx'
 import LabPeriodSplitter from '../components/rooms/LabPeriodSplitter.jsx'
 import { BASE_URL } from '../api/config.js'
@@ -36,10 +37,8 @@ const GRADE_RANGE_PRESETS = [
   { label: 'ม.4-6', grades: [10, 11, 12] },
 ]
 
-function gradeLevelToLabel(v) {
-  const g = GRADE_LEVELS.find((g) => g.value === v)
-  return g ? g.label : String(v)
-}
+// gradeLevelToLabel imported from ../utils/gradeLabels.js — same labels as
+// GRADE_LEVELS above, plus fallback for values outside the dropdown list.
 
 export default function DataIngestionStep() {
   const { fixtureData, updateFixtureData, setStep, selectFixture } = useApp()

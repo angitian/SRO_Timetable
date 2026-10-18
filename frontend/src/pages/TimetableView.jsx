@@ -19,6 +19,10 @@ import {
   computeNeededPerTeacher,
   computeFixedSupervision,
 } from '../utils/teacherLoad.js'
+import { gradeLevelToLabel } from '../utils/gradeLabels.js'
+
+const RULE_DAY_LABELS = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.', 'อา.']
+
 export default function TimetableView() {
   const {
     result,
@@ -235,7 +239,19 @@ export default function TimetableView() {
     for (const r of (sc.subject_time_rules || [])) {
       if (r.mode === 'hard') {
         const subj = subjects.find((s) => s.id === r.subject_id)
-        hardRules.push(`วิชา ${subj?.name || r.subject_id} เน้น${r.preference === 'morning' ? 'เช้า' : 'บ่าย'} (Hard)`)
+        const scope = r.grade_levels?.length ? ` (${r.grade_levels.map(gradeLevelToLabel).join(',')})` : ''
+        const parts = []
+        if (r.preference === 'morning' || r.preference === 'afternoon') {
+          parts.push(`เน้น${r.preference === 'morning' ? 'เช้า' : 'บ่าย'}`)
+        }
+        if (r.forbidden_days?.length) {
+          parts.push(`ห้ามวางวัน ${r.forbidden_days.map((d) => RULE_DAY_LABELS[d] || d).join(',')}`)
+        } else if (r.allowed_days?.length) {
+          parts.push(`วางได้เฉพาะวัน ${r.allowed_days.map((d) => RULE_DAY_LABELS[d] || d).join(',')}`)
+        }
+        if (parts.length) {
+          hardRules.push(`วิชา ${subj?.name || r.subject_id}${scope} ${parts.join(' · ')} (Hard)`)
+        }
       }
     }
 

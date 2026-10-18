@@ -57,7 +57,8 @@ class TimetableSolver:
 
     Phase 1: H1-H6, Pre-assignment, Teaching Load bounds, penalty-weighted objective.
     Phase 2: H7 (teacher unavailable), H8 (double-period continuity), H11 (PE thermal),
-             S3 (max consecutive teaching — soft), T4/T5 (admin teacher free slots).
+             S3 (max consecutive teaching — soft), T4/T5 (admin teacher free slots),
+             subject day rules (วางได้เฉพาะวัน / ห้ามวาง per subject).
     """
 
     def __init__(self, request: TimetableRequest):
@@ -293,6 +294,20 @@ class TimetableSolver:
         if self._is_pe_hot(lb_idx, d, p):
             return False
         return True
+
+    def _rule_applies_to_lb(
+        self, subject_id: str, grade_levels: list[int], lb: Any
+    ) -> bool:
+        """Whether a subject-time/day rule targets this lesson block.
+
+        Matches the subject and (when grade_levels is non-empty) the grade
+        level of the lesson block's class."""
+        if lb.subject_id != subject_id:
+            return False
+        if not grade_levels:
+            return True
+        cls = self.class_by_id.get(lb.class_id)
+        return bool(cls) and cls.grade_level in grade_levels
 
     # ── Variable creation ─────────────────────────────────────────────────
 
@@ -1076,25 +1091,26 @@ class TimetableSolver:
         """
         PENALTY = 8
         rules = getattr(self.req.schedule_config, "subject_time_rules", None) or []
+        # effective entries: (subject_id, preference, mode, grade_levels)
         if rules:
-            effective: list[tuple[str, str, str]] = []
+            effective: list[tuple[str, str, str, list[int]]] = []
             for r in rules:
-                if r.mode in ("soft", "hard"):
-                    effective.append((r.subject_id, r.preference, r.mode))
+                if r.mode in ("soft", "hard") and r.preference in ("morning", "afternoon"):
+                    effective.append((r.subject_id, r.preference, r.mode, r.grade_levels or []))
         else:
-            # Legacy: derive from subject.time_preference (soft)
+            # Legacy: derive from subject.time_preference (soft, all grades)
             effective = []
             for subj in self.req.subjects:
                 pref = getattr(subj, "time_preference", "any")
                 if pref in ("morning", "afternoon"):
-                    effective.append((subj.id, pref, "soft"))
+                    effective.append((subj.id, pref, "soft", []))
         if not effective:
             return
 
-        for (subj_id, pref, mode) in effective:
+        for (subj_id, pref, mode, grade_levels) in effective:
             is_hard = mode == "hard"
             for i, lb in enumerate(self.lb_list):
-                if lb.subject_id != subj_id:
+                if not self._rule_applies_to_lb(subj_id, grade_levels, lb):
                     continue
                 for d in self.days:
                     day_periods = sorted(self._get_valid_periods_for_day(d))
@@ -1127,6 +1143,58 @@ class TimetableSolver:
                             else:
                                 self._penalty_terms.append((v, PENALTY))
 
+    def _add_subject_day_rules(self) -> None:
+        """Soft/hard: per-subject day restrictions (วางได้เฉพาะวัน / ห้ามวาง).
+
+        Source: schedule_config.subject_time_rules fields allowed_days /
+        forbidden_days. A slot on day d is restricted iff:
+          d in forbidden_days  OR  (allowed_days non-empty AND d not in allowed_days)
+        — forbidden_days wins when both are set.
+
+        hard → all vars (single + double-period pair) on restricted days are
+        forced to 0; soft → each restricted var adds a penalty.
+        """
+        PENALTY = 8
+        rules = getattr(self.req.schedule_config, "subject_time_rules", None) or []
+        if not rules:
+            return
+
+        # Index vars once by (lesson_block_idx, day) to avoid O(rules × lbs ×
+        # days × vars) rescans like the time-preference loop above.
+        single_by_day: dict[tuple[int, int], list[cp_model.BoolVar]] = {}
+        for (i, d, _p), v in self.x.items():
+            single_by_day.setdefault((i, d), []).append(v)
+        pair_by_day: dict[tuple[int, int], list[cp_model.BoolVar]] = {}
+        for (i, d, _p), v in self.pair.items():
+            pair_by_day.setdefault((i, d), []).append(v)
+
+        for r in rules:
+            if r.mode not in ("soft", "hard"):
+                continue
+            allowed = set(r.allowed_days or [])
+            forbidden = set(r.forbidden_days or [])
+            if not allowed and not forbidden:
+                continue
+            is_hard = r.mode == "hard"
+            grade_levels = r.grade_levels or []
+            for i, lb in enumerate(self.lb_list):
+                if not self._rule_applies_to_lb(r.subject_id, grade_levels, lb):
+                    continue
+                for d in self.days:
+                    if d in forbidden or (allowed and d not in allowed):
+                        for v in single_by_day.get((i, d), []):
+                            if is_hard:
+                                self.model.Add(v == 0)
+                                self._num_constraints += 1
+                            else:
+                                self._penalty_terms.append((v, PENALTY))
+                        for v in pair_by_day.get((i, d), []):
+                            if is_hard:
+                                self.model.Add(v == 0)
+                                self._num_constraints += 1
+                            else:
+                                self._penalty_terms.append((v, PENALTY))
+
     # ── Objective ──────────────────────────────────────────────────────────
 
     def _add_objective(self) -> None:
@@ -1139,6 +1207,7 @@ class TimetableSolver:
         self._add_teacher_gap_penalty()
         self._add_am_pm_free()
         self._add_subject_time_preference()
+        self._add_subject_day_rules()
 
         if self._penalty_terms:
             obj = sum(expr * weight for expr, weight in self._penalty_terms)

@@ -208,13 +208,26 @@ class FixedSlot(BaseModel):
 
 
 class SubjectTimeRule(BaseModel):
-    """A user-defined rule pinning a specific subject to a half of the day.
+    """A user-defined rule pinning a specific subject to a half of the day
+    and/or restricting which days of the week it may be scheduled on.
 
-    Used by the 'วิชาเฉพาะช่วงเวลา' section of the Global Conditions UI.
+    Used by the 'วิชาเฉพาะช่วงเวลา/วัน' section of the Global Conditions UI.
     """
     subject_id: str
-    preference: str = Field(default="morning", description="'morning' | 'afternoon' — the half this subject should be scheduled in")
+    preference: str = Field(default="morning", description="'any' | 'morning' | 'afternoon' — 'any' = no half-of-day restriction (use with day rules)")
     mode: str = Field(default="soft", description="'soft' (penalty) | 'hard' (constraint) | 'off' (disabled)")
+    allowed_days: list[int] = Field(
+        default_factory=list,
+        description="Days (1-7) this subject may be scheduled on; empty = unrestricted",
+    )
+    forbidden_days: list[int] = Field(
+        default_factory=list,
+        description="Days (1-7) this subject may NOT be scheduled on; empty = unrestricted (forbidden wins over allowed)",
+    )
+    grade_levels: list[int] = Field(
+        default_factory=list,
+        description="Grade levels this rule applies to; empty = all grades (matched on the lesson-block class's grade_level)",
+    )
 
 
 class ScheduleConfig(BaseModel):

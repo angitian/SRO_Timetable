@@ -11,6 +11,7 @@ allow.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from models import (
@@ -52,6 +53,16 @@ def _days_per_week(request: TimetableRequest) -> int:
     if request.schedule_blocks:
         return request.schedule_blocks[0].days_per_week
     return request.schedule_config.days_per_week
+
+
+def _grade_label(g: int) -> str:
+    """Grade level → Thai label: 1-6 → ป.N, 7-12 → ม.N-6,
+    <=0 → อ.N+3 (อ.1=-2, อ.2=-1, อ.3=0; matches excel_parser._extract_grade_level)."""
+    if g <= 0:
+        return f"อ.{g + 3}"
+    if g <= 6:
+        return f"ป.{g}"
+    return f"ม.{g - 6}"
 
 
 def _study_periods_per_day(request: TimetableRequest) -> int:
@@ -125,6 +136,7 @@ def _check_hard_rule_feasibility(request: TimetableRequest, report: DiagnosticsR
     """
     days = _days_per_week(request)
     morning_size, afternoon_size = _half_period_counts(request)
+    study_per_day = _study_periods_per_day(request)
 
     if _rule_mode_preflight(request, "heavy_morning_mode", "enable_heavy_morning") == "hard":
         heavy_ids = {s.id for s in request.subjects if s.is_heavy}
@@ -138,18 +150,94 @@ def _check_hard_rule_feasibility(request: TimetableRequest, report: DiagnosticsR
                 f"เกินช่องเช้า {capacity} คาบ — ลดวิชาหนัก หรือเปลี่ยนเป็น Soft"
             )
 
+    class_by_id = {c.id: c for c in request.classes}
     for r in getattr(request.schedule_config, "subject_time_rules", None) or []:
         if r.mode != "hard":
             continue
-        subj_total = sum(
-            lb.periods_per_week for lb in request.lesson_blocks if lb.subject_id == r.subject_id
-        )
-        capacity = days * (morning_size if r.preference == "morning" else afternoon_size)
         subj_name = next((s.name for s in request.subjects if s.id == r.subject_id), r.subject_id)
-        if subj_total > capacity:
+        grade_levels = set(getattr(r, "grade_levels", None) or [])
+        scope_desc = (
+            f" ({','.join(_grade_label(g) for g in sorted(grade_levels))})"
+            if grade_levels else ""
+        )
+
+        # Day restriction (วางได้เฉพาะวัน / ห้ามวาง): effective placeable days
+        allowed = set(getattr(r, "allowed_days", None) or [])
+        forbidden = set(getattr(r, "forbidden_days", None) or [])
+        eff_days = list(range(1, days + 1))
+        if allowed or forbidden:
+            eff_days = [
+                d for d in eff_days
+                if d not in forbidden and (not allowed or d in allowed)
+            ]
+        if not eff_days:
             report.hard_rule_issues.append(
-                f"โหมด Hard วิชา '{subj_name}' เน้น{r.preference}: รวม {subj_total} คาบ/สัปดาห์ "
-                f"เกินช่อง{r.preference} {capacity} คาบ — ลดคาบวิชานี้ หรือเปลี่ยนเป็น Soft"
+                f"โหมด Hard วิชา '{subj_name}'{scope_desc}: ไม่มีวันที่วางได้ "
+                f"(วางได้เฉพาะ {sorted(allowed) or 'ทุกวัน'}, ห้ามวาง {sorted(forbidden)}) "
+                "— แก้การตั้งค่าวัน หรือเปลี่ยนเป็น Soft"
+            )
+            continue
+
+        if r.preference == "morning":
+            half_size, half_desc = morning_size, "เช้า"
+        elif r.preference == "afternoon":
+            half_size, half_desc = afternoon_size, "บ่าย"
+        else:
+            half_size, half_desc = study_per_day, "ทั้งวัน"
+        day_part = f"วางได้เฉพาะวัน {eff_days} " if (allowed or forbidden) else ""
+
+        # Lesson blocks this rule applies to (subject + grade scope)
+        lbs = [
+            lb for lb in request.lesson_blocks
+            if lb.subject_id == r.subject_id
+            and (
+                not grade_levels
+                or getattr(class_by_id.get(lb.class_id), "grade_level", -1)
+                in grade_levels
+            )
+        ]
+
+        # Per-block check: a single block's weekly periods must fit the
+        # per-day cap that solver H5 enforces (max 1 pair+1 single/day for
+        # double-period, min(2, ceil(ppw/days)) for singles).
+        for lb in lbs:
+            if lb.is_double_period:
+                block_max_per_day = 3 if lb.periods_per_week % 2 else 2
+            else:
+                block_max_per_day = min(
+                    2, max(1, math.ceil(lb.periods_per_week / days))
+                )
+            block_cap = len(eff_days) * min(block_max_per_day, half_size)
+            if lb.periods_per_week > block_cap:
+                report.hard_rule_issues.append(
+                    f"โหมด Hard วิชา '{subj_name}'{scope_desc} {day_part}เน้น{half_desc}: "
+                    f"วิชานี้ {lb.periods_per_week} คาบ/สัปดาห์ต่อชั้น "
+                    f"เกินช่องที่วางได้ {block_cap} คาบ "
+                    "(จำกัดคาบ/วันตามเงื่อนไขกระจายวิชา) "
+                    "— เพิ่มวันที่วางได้ หรือเปลี่ยนเป็น Soft"
+                )
+                break  # one blocking message per rule is enough
+
+        # Per-class check: every class's total periods of this subject must
+        # fit the effective days' half-of-day capacity.
+        by_class: dict[str, int] = {}
+        for lb in lbs:
+            by_class[lb.class_id] = by_class.get(lb.class_id, 0) + lb.periods_per_week
+        bad = {
+            cid: n for cid, n in by_class.items()
+            if n > len(eff_days) * half_size
+        }
+        if bad:
+            cap = len(eff_days) * half_size
+            worst = max(bad.values())
+            names = [getattr(class_by_id.get(cid), "name", cid) for cid in bad]
+            shown = ", ".join(names[:6])
+            if len(names) > 6:
+                shown += f" +{len(names) - 6} ห้อง"
+            report.hard_rule_issues.append(
+                f"โหมด Hard วิชา '{subj_name}'{scope_desc} {day_part}เน้น{half_desc}: "
+                f"ชั้น {shown} รวมสูงสุด {worst} คาบ/สัปดาห์ เกินช่องที่วางได้ {cap} คาบ "
+                "— เพิ่มวันที่วางได้ หรือเปลี่ยนเป็น Soft"
             )
 
 

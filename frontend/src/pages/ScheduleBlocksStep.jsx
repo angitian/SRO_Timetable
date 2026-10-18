@@ -9,6 +9,7 @@ import { generatePeriods, createDefaultBlock, buildClassBlockMap, insertBreakPer
 import { getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
 import { normalizeClassTeachers } from '../utils/teacherLoad.js'
 import { parseSpecialActivitiesExcel, resolveToFixedSlots } from '../utils/specialActivitiesImport.js'
+import { gradeLevelToLabel } from '../utils/gradeLabels.js'
 
 const PERIOD_TYPE_CONFIG = {
   STUDY: { label: 'คาบเรียน', icon: BookOpen, color: 'bg-blue-100 text-blue-700 border-blue-300' },
@@ -844,7 +845,7 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
           <div className="space-y-1.5">
             {classesByGrade.map(([gradeKey, gradeClasses]) => {
               const gradeNum = parseInt(gradeKey)
-              const gradeLabel = gradeNum <= 0 ? `อ.${Math.abs(gradeNum - 1)}` : gradeNum <= 6 ? `ป.${gradeNum}` : `ม.${gradeNum - 6}`
+              const gradeLabel = gradeLevelToLabel(gradeNum)
               const allSelected = gradeClasses.every((c) => block.target_classes.includes(c.id))
               return (
                 <div key={gradeKey} className="flex items-center gap-2 flex-wrap">

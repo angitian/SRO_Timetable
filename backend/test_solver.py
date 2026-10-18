@@ -293,6 +293,24 @@ def main():
     success = test_subject_time_rules_soft()
     all_pass = all_pass and success
 
+    success = test_subject_day_rules_hard_allowed()
+    all_pass = all_pass and success
+
+    success = test_subject_day_rules_hard_forbidden()
+    all_pass = all_pass and success
+
+    success = test_subject_day_rules_soft()
+    all_pass = all_pass and success
+
+    success = test_subject_day_rules_hard_infeasible_preflight()
+    all_pass = all_pass and success
+
+    success = test_subject_day_rules_grade_scoped()
+    all_pass = all_pass and success
+
+    success = test_subject_day_rules_grade_scoped_preflight()
+    all_pass = all_pass and success
+
     success = test_teacher_over_max_places_all()
     all_pass = all_pass and success
 
@@ -1495,6 +1513,209 @@ def test_subject_time_rules_soft() -> bool:
         return False
 
     print(f"  ✅ PASS: S1 เน้นเช้าแบบ soft (เช้า {morning} > บ่าย {afternoon})")
+    return True
+
+
+def test_subject_day_rules_hard_allowed() -> bool:
+    """subject_time_rules allowed_days=[1,3] hard → subject only on Mon/Wed."""
+    print(f"\n{'='*60}")
+    print("  TEST: subject day rules HARD allowed_days (S1 วางได้เฉพาะ จ./พ.)")
+    print(f"{'='*60}")
+
+    request = _synthetic_request()
+    # S1 is 2 ppw per class; H5 caps a block at 1 period/day for 2-ppw
+    # subjects, so 1 allowed day can't fit — use 2 days (Mon+Wed).
+    request.schedule_config = request.schedule_config.model_copy(update={
+        "subject_time_rules": [
+            SubjectTimeRule(subject_id="S1", preference="any", mode="hard",
+                            allowed_days=[1, 3]),
+        ],
+        "subject_day_spacing_mode": "off",
+        "heavy_morning_mode": "off",
+        "workload_balance_mode": "off",
+        "gap_clustering_mode": "off",
+    })
+    solver = TimetableSolver(request)
+    result = solver.solve()
+
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE")
+        return False
+
+    violations = [s.day for s in result.slots if s.subject_id == "S1" and s.day not in (1, 3)]
+    if violations:
+        print(f"  ❌ FAIL: S1 ถูกจัดวันอื่น {len(violations)} คาบ: {sorted(set(violations))}")
+        return False
+
+    placed = sum(1 for s in result.slots if s.subject_id == "S1")
+    print(f"  ✅ PASS: S1 ทั้ง {placed} คาบอยู่วันจันทร์/พุธเท่านั้น (hard)")
+    return True
+
+
+def test_subject_day_rules_hard_forbidden() -> bool:
+    """subject_time_rules forbidden_days=[2] hard → subject never on day 2."""
+    print(f"\n{'='*60}")
+    print("  TEST: subject day rules HARD forbidden_days (S1 ห้ามวาง อ.)")
+    print(f"{'='*60}")
+
+    request = _synthetic_request()
+    request.schedule_config = request.schedule_config.model_copy(update={
+        "subject_time_rules": [
+            SubjectTimeRule(subject_id="S1", preference="any", mode="hard",
+                            forbidden_days=[2]),
+        ],
+        "subject_day_spacing_mode": "off",
+        "heavy_morning_mode": "off",
+        "workload_balance_mode": "off",
+        "gap_clustering_mode": "off",
+    })
+    solver = TimetableSolver(request)
+    result = solver.solve()
+
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE")
+        return False
+
+    violations = [s.period for s in result.slots if s.subject_id == "S1" and s.day == 2]
+    if violations:
+        print(f"  ❌ FAIL: S1 ถูกจัดวันอังคาร {len(violations)} คาบ: {sorted(violations)}")
+        return False
+
+    placed = sum(1 for s in result.slots if s.subject_id == "S1")
+    print(f"  ✅ PASS: S1 ทั้ง {placed} คาบไม่อยู่วันอังคาร (hard)")
+    return True
+
+
+def test_subject_day_rules_soft() -> bool:
+    """subject_time_rules forbidden_days soft → bias away from the day."""
+    print(f"\n{'='*60}")
+    print("  TEST: subject day rules SOFT forbidden_days (S1 โน้มไม่วาง อ.)")
+    print(f"{'='*60}")
+
+    request = _synthetic_request()
+    request.schedule_config = request.schedule_config.model_copy(update={
+        "subject_time_rules": [
+            SubjectTimeRule(subject_id="S1", preference="any", mode="soft",
+                            forbidden_days=[2]),
+        ],
+        "subject_day_spacing_mode": "off",
+        "heavy_morning_mode": "off",
+        "workload_balance_mode": "off",
+        "gap_clustering_mode": "off",
+    })
+    solver = TimetableSolver(request)
+    result = solver.solve()
+
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE")
+        return False
+
+    d2 = sum(1 for s in result.slots if s.subject_id == "S1" and s.day == 2)
+    total = sum(1 for s in result.slots if s.subject_id == "S1")
+    print(f"  S1 slots: วันอังคาร {d2}/{total}")
+    # With ample slack on other days the optimizer should avoid day 2 entirely
+    if d2 > 1:
+        print(f"  ❌ FAIL: soft bias too weak — day 2 has {d2}/{total} S1 periods")
+        return False
+
+    print(f"  ✅ PASS: S1 โน้มออกจากวันอังคารแบบ soft (วัน อ. = {d2})")
+    return True
+
+
+def test_subject_day_rules_hard_infeasible_preflight() -> bool:
+    """Hard day rule with insufficient day capacity → preflight blocks."""
+    print(f"\n{'='*60}")
+    print("  TEST: subject day rules HARD infeasible → preflight hard_rule_issues")
+    print(f"{'='*60}")
+
+    request = _synthetic_request()
+    # S1 total = 12 periods (6 classes x 2); allowed_days=[1] → capacity 7 < 12
+    request.schedule_config = request.schedule_config.model_copy(update={
+        "subject_time_rules": [
+            SubjectTimeRule(subject_id="S1", preference="any", mode="hard",
+                            allowed_days=[1]),
+        ],
+    })
+
+    report = run_preflight(request)
+    if not report.hard_rule_issues:
+        print(f"  ❌ FAIL: expected hard_rule_issues for impossible day rule")
+        return False
+    if not report.has_blocking_issues():
+        print(f"  ❌ FAIL: day-rule issue should be blocking")
+        return False
+
+    print(f"  ✅ PASS: preflight blocks — {report.hard_rule_issues[0]}")
+    return True
+
+
+def test_subject_day_rules_grade_scoped() -> bool:
+    """grade_levels=[1,2,3] → forbidden day applies only to those grades."""
+    print(f"\n{'='*60}")
+    print("  TEST: subject day rules HARD scoped ป.1-3 (S1 ห้ามวาง อ.)")
+    print(f"{'='*60}")
+
+    request = _synthetic_request()
+    # C1..C3 are grades 1-3 (forbidden day 2); C4..C6 unrestricted
+    request.schedule_config = request.schedule_config.model_copy(update={
+        "subject_time_rules": [
+            SubjectTimeRule(subject_id="S1", preference="any", mode="hard",
+                            forbidden_days=[2], grade_levels=[1, 2, 3]),
+        ],
+        "subject_day_spacing_mode": "off",
+        "heavy_morning_mode": "off",
+        "workload_balance_mode": "off",
+        "gap_clustering_mode": "off",
+    })
+    solver = TimetableSolver(request)
+    result = solver.solve()
+
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE")
+        return False
+
+    violations = [
+        (s.class_id, s.day) for s in result.slots
+        if s.subject_id == "S1" and s.class_id in ("C1", "C2", "C3") and s.day == 2
+    ]
+    if violations:
+        print(f"  ❌ FAIL: S1 ของ ป.1-3 ถูกจัดวันอังคาร: {violations}")
+        return False
+
+    placed = sum(1 for s in result.slots if s.subject_id == "S1")
+    if placed != 12:
+        print(f"  ❌ FAIL: S1 วางไม่ครบ {placed}/12")
+        return False
+
+    d2_others = sum(1 for s in result.slots if s.subject_id == "S1" and s.class_id in ("C4", "C5", "C6") and s.day == 2)
+    print(f"  ✅ PASS: S1 ป.1-3 ไม่อยู่วันอังคาร (ป.4-6 อิสระ {d2_others} คาบวันนั้น)")
+    return True
+
+
+def test_subject_day_rules_grade_scoped_preflight() -> bool:
+    """Hard day rule scoped to a grade → preflight still flags infeasible."""
+    print(f"\n{'='*60}")
+    print("  TEST: subject day rules HARD scoped infeasible → preflight")
+    print(f"{'='*60}")
+
+    request = _synthetic_request()
+    # Only ป.1 (C1): allowed_days=[1] → per-block cap 1 < 2 ppw needed
+    request.schedule_config = request.schedule_config.model_copy(update={
+        "subject_time_rules": [
+            SubjectTimeRule(subject_id="S1", preference="any", mode="hard",
+                            allowed_days=[1], grade_levels=[1]),
+        ],
+    })
+
+    report = run_preflight(request)
+    if not report.hard_rule_issues:
+        print(f"  ❌ FAIL: expected hard_rule_issues for scoped impossible day rule")
+        return False
+    if not report.has_blocking_issues():
+        print(f"  ❌ FAIL: scoped day-rule issue should be blocking")
+        return False
+
+    print(f"  ✅ PASS: preflight blocks — {report.hard_rule_issues[0]}")
     return True
 
 

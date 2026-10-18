@@ -8,6 +8,7 @@ import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
 import { getSmartDefaultInfo, getSafetyWarning } from '../utils/smartDefaults.js'
 import { computeTeacherAvailableSlots, computeFixedSupervision } from '../utils/teacherLoad.js'
+import { gradeLevelToLabel } from '../utils/gradeLabels.js'
 
 const QUICK_TOGGLES = [
   { key: 'scout', label: 'ลูกเสือ-เนตรนารี', icon: Flag, subject_id: 'ACT_SCOUT', subject_name: 'ลูกเสือ-เนตรนารี' },
@@ -409,7 +410,10 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
   const maxConsec = sc.max_consecutive_teaching || 4
   const defaultMax = sc.default_max_periods_per_week || 30
   const [expanded, setExpanded] = useState(true)
-  const [newRule, setNewRule] = useState({ subject_id: '', preference: 'morning', mode: 'soft' })
+  const [newRule, setNewRule] = useState({ subject_id: '', preference: 'any', mode: 'soft', allowed_days: [], forbidden_days: [], grade_levels: [] })
+  const daysPerWeek = fixtureData?.schedule_blocks?.[0]?.days_per_week || sc.days_per_week || 5
+  const dayNums = Array.from({ length: daysPerWeek }, (_, i) => i + 1)
+  const gradeLevels = [...new Set((fixtureData?.classes || []).map((c) => c.grade_level))].sort((a, b) => a - b)
 
   function update(updates) {
     updateFixtureData({
@@ -422,11 +426,51 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
     if (!newRule.subject_id) return
     if (rules.some((r) => r.subject_id === newRule.subject_id)) return
     update({ subject_time_rules: [...rules, { ...newRule }] })
-    setNewRule({ subject_id: '', preference: 'morning', mode: 'soft' })
+    setNewRule({ subject_id: '', preference: 'any', mode: 'soft', allowed_days: [], forbidden_days: [], grade_levels: [] })
   }
 
   function updateRule(idx, patch) {
     update({ subject_time_rules: rules.map((r, i) => (i === idx ? { ...r, ...patch } : r)) })
+  }
+
+  // Single day mode per rule: 'forbidden' (ห้ามวาง) | 'allowed' (วางได้เฉพาะ).
+  // Derived from which list is non-empty; for rules with no days selected yet,
+  // a transient per-subject override keeps the chosen mode visible.
+  const [dayModes, setDayModes] = useState({}) // { subject_id: 'forbidden'|'allowed' }
+
+  function ruleDayMode(r) {
+    if ((r.forbidden_days || []).length > 0) return 'forbidden'
+    if ((r.allowed_days || []).length > 0) return 'allowed'
+    return dayModes[r.subject_id] || 'forbidden'
+  }
+
+  function setDayMode(idx, mode) {
+    const r = rules[idx]
+    setDayModes((prev) => ({ ...prev, [r.subject_id]: mode }))
+    const cur = mode === 'forbidden' ? (r.forbidden_days || []) : (r.allowed_days || [])
+    const moved = mode === 'forbidden' ? (r.allowed_days || []) : (r.forbidden_days || [])
+    updateRule(idx, {
+      [mode === 'forbidden' ? 'forbidden_days' : 'allowed_days']: cur.length ? cur : moved,
+      [mode === 'forbidden' ? 'allowed_days' : 'forbidden_days']: [],
+    })
+  }
+
+  function toggleDay(idx, day) {
+    const r = rules[idx]
+    const field = ruleDayMode(r) === 'forbidden' ? 'forbidden_days' : 'allowed_days'
+    const cur = r[field] || []
+    const next = cur.includes(day)
+      ? cur.filter((d) => d !== day)
+      : [...cur, day].sort((a, b) => a - b)
+    updateRule(idx, { [field]: next })
+  }
+
+  function toggleGradeInRule(idx, g) {
+    const cur = rules[idx].grade_levels || []
+    const next = cur.includes(g)
+      ? cur.filter((x) => x !== g)
+      : [...cur, g].sort((a, b) => a - b)
+    updateRule(idx, { grade_levels: next })
   }
 
   function removeRule(idx) {
@@ -542,12 +586,12 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
             </div>
           </div>
 
-          {/* Subject time rules */}
+          {/* Subject time & day rules */}
           <div className="bg-purple-50/40 border border-purple-200 rounded-lg p-3 space-y-2">
             <div className="flex items-center gap-1.5 text-sm font-bold text-purple-800">
               <BookOpen className="w-4 h-4" />
-              วิชาเฉพาะช่วงเวลา
-              <span className="text-xs font-normal text-purple-400">— เลือกวิชาใดก็ได้ กำหนดเช้า/บ่าย</span>
+              วิชาเฉพาะช่วงเวลา/วัน
+              <span className="text-xs font-normal text-purple-400">— เลือกวิชาใดก็ได้ กำหนดเช้า/บ่าย + โหมดวัน + ใช้กับชั้น</span>
             </div>
 
             {/* Add row */}
@@ -567,6 +611,7 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
                 onChange={(e) => setNewRule({ ...newRule, preference: e.target.value })}
                 className="text-sm border border-gray-300 rounded-lg px-2 py-1.5"
               >
+                <option value="any">ทั้งวัน</option>
                 <option value="morning">เช้า</option>
                 <option value="afternoon">บ่าย</option>
               </select>
@@ -582,43 +627,117 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
             {/* Rule list */}
             {rules.length === 0 ? (
               <p className="text-xs text-gray-400 italic">
-                ยังไม่มีวิชาเฉพาะช่วงเวลา — เพิ่มเพื่อบังคับ/โน้มน้าววิชาใด ๆ ไปเช้าหรือบ่าย
+                ยังไม่มีวิชาเฉพาะช่วงเวลา/วัน — เพิ่มเพื่อบังคับ/โน้มน้าววิชาใด ๆ ไปเช้าหรือบ่าย หรือกำหนดวันที่วางได้/ห้ามวาง
               </p>
             ) : (
               <div className="space-y-1.5">
                 {rules.map((r, idx) => {
                   const subj = subjects.find((s) => s.id === r.subject_id)
                   const enabled = r.mode !== 'off'
+                  const dayMode = ruleDayMode(r)
+                  const selectedDays = dayMode === 'forbidden' ? (r.forbidden_days || []) : (r.allowed_days || [])
+                  const ruleGrades = r.grade_levels || []
                   return (
-                    <div key={r.subject_id} className="flex items-center gap-2 bg-white rounded-lg px-3 py-1.5 border border-purple-200">
-                      <ToggleSwitch
-                        checked={enabled}
-                        onChange={(v) => updateRule(idx, { mode: v ? 'soft' : 'off' })}
-                      />
-                      <span className="text-sm font-medium text-gray-800 flex-1 truncate">
-                        {subj?.name || r.subject_id}
-                      </span>
-                      <select
-                        value={r.preference}
-                        onChange={(e) => updateRule(idx, { preference: e.target.value })}
-                        className="text-xs border border-gray-300 rounded px-1.5 py-1"
-                      >
-                        <option value="morning">เช้า</option>
-                        <option value="afternoon">บ่าย</option>
-                      </select>
+                    <div key={r.subject_id} className="bg-white rounded-lg px-3 py-1.5 border border-purple-200 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <ToggleSwitch
+                          checked={enabled}
+                          onChange={(v) => updateRule(idx, { mode: v ? 'soft' : 'off' })}
+                        />
+                        <span className="text-sm font-medium text-gray-800 flex-1 truncate">
+                          {subj?.name || r.subject_id}
+                        </span>
+                        <select
+                          value={r.preference}
+                          onChange={(e) => updateRule(idx, { preference: e.target.value })}
+                          className="text-xs border border-gray-300 rounded px-1.5 py-1"
+                        >
+                          <option value="any">ทั้งวัน</option>
+                          <option value="morning">เช้า</option>
+                          <option value="afternoon">บ่าย</option>
+                        </select>
+                        {enabled && (
+                          <div className="flex gap-1">
+                            <ModeChip label="Soft" active={r.mode === 'soft'} onClick={() => updateRule(idx, { mode: 'soft' })} />
+                            <ModeChip label="Hard" active={r.mode === 'hard'} onClick={() => updateRule(idx, { mode: 'hard' })} />
+                          </div>
+                        )}
+                        <button
+                          onClick={() => removeRule(idx)}
+                          className="text-red-400 hover:text-red-600 shrink-0"
+                          title="ลบ"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                       {enabled && (
-                        <div className="flex gap-1">
-                          <ModeChip label="Soft" active={r.mode === 'soft'} onClick={() => updateRule(idx, { mode: 'soft' })} />
-                          <ModeChip label="Hard" active={r.mode === 'hard'} onClick={() => updateRule(idx, { mode: 'hard' })} />
+                        <div className="space-y-1.5 pl-9">
+                          {/* Grade scope */}
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className="text-[11px] text-gray-500 w-9 shrink-0">ใช้กับ:</span>
+                            <button
+                              type="button"
+                              onClick={() => updateRule(idx, { grade_levels: [] })}
+                              title="ใช้กับทุกชั้น"
+                              className={`px-2 h-6 rounded text-[11px] font-bold border transition-all
+                                ${ruleGrades.length === 0
+                                  ? 'bg-blue-100 border-blue-400 text-blue-700'
+                                  : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'
+                                }`}
+                            >
+                              ทุกห้อง
+                            </button>
+                            {gradeLevels.map((g) => (
+                              <button
+                                key={g}
+                                type="button"
+                                onClick={() => toggleGradeInRule(idx, g)}
+                                title="ใช้กับเฉพาะชั้นนี้"
+                                className={`w-9 h-6 rounded text-[11px] font-bold border transition-all
+                                  ${ruleGrades.includes(g)
+                                    ? 'bg-blue-100 border-blue-400 text-blue-700'
+                                    : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'
+                                  }`}
+                              >
+                                {gradeLevelToLabel(g)}
+                              </button>
+                            ))}
+                          </div>
+                          {/* Day mode + day chips */}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <ModeChip
+                              label="ห้ามวาง"
+                              active={dayMode === 'forbidden'}
+                              onClick={() => setDayMode(idx, 'forbidden')}
+                            />
+                            <ModeChip
+                              label="วางได้เฉพาะ"
+                              active={dayMode === 'allowed'}
+                              onClick={() => setDayMode(idx, 'allowed')}
+                            />
+                            {dayNums.map((d) => (
+                              <button
+                                key={d}
+                                type="button"
+                                onClick={() => toggleDay(idx, d)}
+                                title={dayMode === 'forbidden' ? 'ห้ามวางวันนี้' : 'วางได้เฉพาะวันนี้ (เว้นว่าง = วางได้ทุกวัน)'}
+                                className={`w-7 h-6 rounded text-[11px] font-bold border transition-all
+                                  ${selectedDays.includes(d)
+                                    ? dayMode === 'forbidden'
+                                      ? 'bg-red-100 border-red-400 text-red-700'
+                                      : 'bg-green-100 border-green-400 text-green-700'
+                                    : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'
+                                  }`}
+                              >
+                                {PREF_DAY_LABELS[d] || d}
+                              </button>
+                            ))}
+                            {dayMode === 'allowed' && selectedDays.length === 0 && (
+                              <span className="text-[10px] text-gray-300">ทุกวัน</span>
+                            )}
+                          </div>
                         </div>
                       )}
-                      <button
-                        onClick={() => removeRule(idx)}
-                        className="text-red-400 hover:text-red-600 shrink-0"
-                        title="ลบ"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
                     </div>
                   )
                 })}
@@ -954,8 +1073,8 @@ function TeacherCard({
 
 // ── Teacher Preferences Section ─────────────────────────────────────────────
 
-const PREF_DAY_LABELS = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.']
-const PREF_DAY_FULL = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์']
+const PREF_DAY_LABELS = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.', 'อา.']
+const PREF_DAY_FULL = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 const PREF_ADMIN_ROLES = [
   { value: 'none', label: '—' },
   { value: 'finance', label: 'การเงิน' },
@@ -1508,7 +1627,7 @@ function SubjectMasterModal({ subjects, lessonBlocks, onClose, onUpdate }) {
                       </div>
                       <p className="text-[11px] text-gray-400 mt-1">
                         ใช้เป็นค่าเริ่มต้น (Soft) — ถ้าต้องการบังคับ (Hard) หรือเลือกวิชาเฉพาะหลายรายการ
-                        ไปที่ "เงื่อนไขระดับระบบ → วิชาเฉพาะช่วงเวลา" ด้านบน
+                        ไปที่ "เงื่อนไขระดับระบบ → วิชาเฉพาะช่วงเวลา/วัน" ด้านบน
                       </p>
                     </div>
 
