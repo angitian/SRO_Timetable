@@ -149,59 +149,6 @@ export function teacherSupervisesFixedSlot(fs, teacherId) {
 }
 
 /**
- * จัดประเภทของ fixed slot ที่มีผลต่อครูคนนี้ ณ (วัน, คาบ) เดียวกันกับ
- * semantics ของ solver/preflight:
- *   'supervise' — ครูเป็นผู้ดูแลกิจกรรม (fs.class_teachers มีครูคนนี้) → ครูติดคาบเสมอ
- *   'assembly'  — คาบล็อกทั้งโรงเรียน (fs.class_ids ว่าง) → ครูทุกคนติดคาบ
- *   'class'     — คาบล็อกเฉพาะห้องที่มีห้องที่ครูสอนอยู่ → แสดงแบบให้ข้อมูล
- *   null        — ไม่เกี่ยวข้องกับครูคนนี้ (ไม่มีห้องที่สอนติด)
- *
- * @param {object} fs — fixed slot
- * @param {string} teacherId
- * @param {Set<string>} taughtClassIds — ห้องที่ครูคนนี้สอน (main + co)
- * @returns {'supervise'|'assembly'|'class'|null}
- */
-export function classifyTeacherFixedSlot(fs, teacherId, taughtClassIds) {
-  if (teacherSupervisesFixedSlot(fs, teacherId)) return 'supervise'
-  const isGlobal = !fs.class_ids || fs.class_ids.length === 0
-  if (isGlobal) return 'assembly'
-  const affected = (fs.class_ids || []).filter((cid) => taughtClassIds.has(cid))
-  if (affected.length > 0) return 'class'
-  return null
-}
-
-/**
- * หา fixed slot ที่มีผลต่อครูคนนี้ ณ (day, period) — เรียง priority:
- * supervise > assembly > class (ถ้ามีคาบสอนให้ caller ตัดสินใจเองว่า class lock
- * จะถูกคาบสอนชนะหรือไม่)
- *
- * @param {Array<object>} fixedSlots
- * @param {number} day
- * @param {number} period
- * @param {string} teacherId
- * @param {Set<string>} taughtClassIds
- * @returns {{ fs: object, kind: 'supervise'|'assembly'|'class', affectedClassIds: string[] }|null}
- */
-export function teacherBusyByFixedSlot(fixedSlots, day, period, teacherId, taughtClassIds) {
-  const periodsAt = (fs) => [fs.period, ...(fs.periods || [])]
-  let best = null // { rank, fs, kind, affectedClassIds }
-  const rankOf = { supervise: 3, assembly: 2, class: 1 }
-  for (const fs of fixedSlots || []) {
-    if (fs.day !== day) continue
-    if (!periodsAt(fs).includes(period)) continue
-    const kind = classifyTeacherFixedSlot(fs, teacherId, taughtClassIds)
-    if (!kind) continue
-    if (best && rankOf[kind] <= rankOf[best.kind]) continue
-    const affectedClassIds = kind === 'class'
-      ? (fs.class_ids || []).filter((cid) => taughtClassIds.has(cid))
-      : []
-    best = { rank: rankOf[kind], fs, kind, affectedClassIds }
-  }
-  if (!best) return null
-  return { fs: best.fs, kind: best.kind, affectedClassIds: best.affectedClassIds }
-}
-
-/**
  * คาบดูแลกิจกรรม (fixed slots) ต่อครู — จาก fs.class_teachers { class_id: [teacher_id, ...] }
  * คืน { [teacher_id]: count } — นับคาบที่ไม่ซ้ำกันของแต่ละกิจกรรม (effective periods)
  * ครูที่เข้าร่วมกิจกรรมนี้ 1 ครั้ง = 1 คาบ/สัปดาห์ (ไม่คูณจำนวนห้องที่ดูแล)

@@ -21,30 +21,17 @@ const CLASS_COLOR_SWATCHES = [
   'bg-pink-200', 'bg-indigo-200', 'bg-lime-200', 'bg-violet-200',
 ]
 
-const LOCK_LEGEND = [
-  { color: 'bg-gray-300',    label: '🔒 ทั้งโรงเรียน' },
-  { color: 'bg-emerald-200', label: '🔒 ดูแลกิจกรรม' },
-  { color: 'bg-amber-200',   label: '🔒 คาบล็อกเฉพาะห้อง' },
-]
-
-export default function GridLegend({ mode = 'subject', teacherClasses = [], classColorMap = {}, showLockLegend = false }) {
+export default function GridLegend({ mode = 'subject', teacherClasses = [], classColorMap = {} }) {
   const items = mode === 'class'
     ? teacherClasses.map((c) => {
         const idx = classColorMap[c.id] ?? 0
         return { color: CLASS_COLOR_SWATCHES[idx % CLASS_COLOR_SWATCHES.length], label: c.name }
       })
     : SUBJECT_LEGEND
-  const lockItems = showLockLegend ? LOCK_LEGEND : []
 
   return (
     <div className="flex flex-wrap items-center gap-3 text-xs text-gray-600">
       {items.map((item) => (
-        <div key={item.label} className="flex items-center gap-1">
-          <span className={`w-3 h-3 rounded ${item.color}`} />
-          {item.label}
-        </div>
-      ))}
-      {lockItems.map((item) => (
         <div key={item.label} className="flex items-center gap-1">
           <span className={`w-3 h-3 rounded ${item.color}`} />
           {item.label}

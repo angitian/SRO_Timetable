@@ -5,7 +5,7 @@ import GridLegend from './GridLegend.jsx'
 import { DAY_LABELS } from './GridLegend.jsx'
 import CellContextMenu from './CellContextMenu.jsx'
 import CellRoomEditModal from './CellRoomEditModal.jsx'
-import { teacherBusyByFixedSlot } from '../../utils/teacherLoad.js'
+import { teacherSupervisesFixedSlot } from '../../utils/teacherLoad.js'
 
 export default function TimetableGrid({
   slots = [],
@@ -147,16 +147,19 @@ export default function TimetableGrid({
     return getFixedSlotsFor(d, p, classId)[0] || null
   }
 
-  // Fixed slots affecting this teacher at (day, period) — display policy mirrors
-  // solver/preflight (teacherBusyByFixedSlot):
-  //   supervise → ครูผู้ดูแลกิจกรรม → busy (แสดงเสมอ)
-  //   assembly  → ล็อกทั้งโรงเรียน (class_ids ว่าง) → busy (แสดงทุกคน)
-  //   class     → ล็อกเฉพาะห้องที่ครูสอน → ให้ข้อมูล (คาบสอนชนะ, ตัดสินใจที่ render)
-  // Returns { fs, kind, affectedClassIds } | null (priority supervise > assembly > class).
+  // Fixed slots this teacher SUPERVISES at (day, period) — only กิจกรรมที่ครู
+  // คนนี้อยู่ใน fs.class_teachers เท่านั้นที่โผล่ในตารางครู ไม่ใช่ทุกอันที่
+  // ตรงกับห้องที่ครูสอน (เดิมแสดงคาบพิเศษให้ครูที่ไม่ได้ดูแลด้วย)
+  // Iterate fixedSlots directly so supervisors who teach none of the slot's
+  // classes (e.g. ครูประจำชั้นที่ไม่สอนห้องนั้น) are still covered.
   function getFixedSlotsForTeacher(d, p) {
     if (!activeTeacherId || !fixedSlots) return null
-    const taughtClassIds = new Set(teacherClasses.map((c) => c.id))
-    return teacherBusyByFixedSlot(fixedSlots, d, p, activeTeacherId, taughtClassIds)
+    const fs = fixedSlots.find((f) => {
+      if (f.day !== d) return false
+      const periods = [f.period, ...(f.periods || [])]
+      return periods.includes(p) && teacherSupervisesFixedSlot(f, activeTeacherId)
+    })
+    return fs ? { fs, kind: 'supervise', affectedClassIds: [] } : null
   }
 
   // Substitute lookup: "day-period-classId" → substitute entry (สอนแทน)
@@ -775,17 +778,14 @@ export default function TimetableGrid({
                   const isBreak = breakSet.has(p)
                   const teacherSlots = isLunch || isBreak ? [] : getTeacherSlots(d, p)
                   const fixedInfo = isLunch || isBreak ? null : getFixedSlotsForTeacher(d, p)
-                  // supervise/assembly = busy → แสดงล็อกเสมอ; class = ให้ข้อมูล → แสดงเมื่อครูไม่มีคาบสอน
-                  const isFixed = !!fixedInfo && (fixedInfo.kind !== 'class' || teacherSlots.length === 0)
+                  // แสดงล็อกเฉพาะคาบที่ครูเป็นผู้ดูแล (supervise) — คาบสอนยังแสดงตามปกติ
+                  const isFixed = !!fixedInfo
                   const fixedSlot = isFixed ? fixedInfo.fs : null
                   const fixedSlotKind = isFixed ? fixedInfo.kind : null
-                  // supervise → badge "ดูแลกิจกรรม"; class → ป้ายชื่อห้องที่ติด
+                  // ครูคนนี้เป็นผู้ดูแลกิจกรรมนี้หรือไม่ → แสดง badge "ดูแลกิจกรรม"
                   const fixedSlotTeacherName = isFixed && fixedInfo.kind === 'supervise'
                     ? (teacherMap.get(activeTeacherId)?.name || activeTeacherId)
                     : null
-                  const fixedClassNames = fixedInfo?.kind === 'class'
-                    ? fixedInfo.affectedClassIds.map((cid) => classMap.get(cid)?.name || cid)
-                    : []
                   const isTarget = dragTarget?.day === d && dragTarget?.period === p
                   const targetInfo = isTarget ? dragTarget : null
                   return (
@@ -799,7 +799,6 @@ export default function TimetableGrid({
                       fixedSlotName={fixedSlot?.name}
                       fixedSlotTeacherName={fixedSlotTeacherName}
                       fixedSlotKind={fixedSlotKind}
-                      fixedClassNames={fixedClassNames}
                       isDragTarget={isTarget}
                       dragTargetInfo={targetInfo}
                       isDraggable={teacherSlots.length > 0 && !isFixed}
@@ -924,7 +923,6 @@ export default function TimetableGrid({
         mode={isTeacherMode ? 'class' : 'subject'}
         teacherClasses={teacherClasses}
         classColorMap={classColorMap}
-        showLockLegend={isTeacherMode && !!(fixedSlots && fixedSlots.length > 0)}
       />
       {dragSource && (
         <div className="text-sm text-blue-600 bg-blue-50 rounded-lg px-3 py-1.5">

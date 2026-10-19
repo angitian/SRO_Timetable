@@ -17,14 +17,18 @@
 import { exportMultiPagePDF } from './exportPdf.js'
 import { exportMultiPNG } from './exportImage.js'
 import { exportMultiExcel } from './exportExcel.js'
-import { teacherBusyByFixedSlot } from './teacherLoad.js'
+import { teacherSupervisesFixedSlot } from './teacherLoad.js'
 
 const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 export { DAY_LABELS }
 
 // ── Shared grid building helpers (DRY: used by class/teacher/facility grids) ──
 
-const GRID_CELL_STYLE = `border:1px solid #d1d5db;border-radius:4px;padding:3px 5px;min-height:42px;font-size:11px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;`
+// No overflow:hidden — teacher cells can hold multiple lessons (2+ entries in
+// one period) and must grow to fit their content on every screen/print size.
+// A fixed min-height + hidden overflow clipped multi-entry cells on small
+// screens, which made some users see incomplete tables from the same link.
+const GRID_CELL_STYLE = `border:1px solid #d1d5db;border-radius:4px;padding:3px 5px;min-height:42px;font-size:11px;display:flex;flex-direction:column;justify-content:center;`
 
 /**
  * Build the periodColsTemplate string from periodList + breakSet.
@@ -252,23 +256,26 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, getFixedSlo
  * Returns { kind, slots: [{ subjectName, className, classId }] } or
  * { kind: 'fixed', fixedName, fixedKind, supervisedBy, affectedClassNames }.
  *
- * Display policy for locked slots (mirrors solver/preflight busy model):
- *   supervise → ครูเป็นผู้ดูแลกิจกรรม → แสดงทันที (ครูติดคาบจริง)
- *   assembly  → คาบล็อกทั้งโรงเรียน (class_ids ว่าง) → ครูทุกคนติด → แสดงทันที
- *   class     → ล็อกเฉพาะห้องที่ครูสอน → แสดงแบบให้ข้อมูล เฉพาะเมื่อครูไม่มี
- *               คาบสอนที่เซลล์นี้ (คาบสอนชนะ — ครูอาจยังสอนห้องอื่นได้)
+ * Display policy: the teacher's own lessons (main/co/substitute) always show.
+ * A locked activity (fixed slot) appears ONLY when the teacher supervises it
+ * (fs.class_teachers) — not for whole-school or class-specific locks.
  */
-function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subjectMap, classMap, teacherMap, lessonBlockMap, substituteMap, userPlacementMap, teacherTaughtClassIds }) {
-  const taughtClassIds = teacherTaughtClassIds?.get(teacherId) || new Set()
-  const lock = teacherBusyByFixedSlot(fixedSlots, day, period, teacherId, taughtClassIds)
-
-  // Busy locks (supervise/assembly) show regardless of any lesson at this cell
-  if (lock && lock.kind !== 'class') {
+function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subjectMap, classMap, teacherMap, lessonBlockMap, substituteMap, userPlacementMap }) {
+  // Fixed slot shows in a teacher's timetable ONLY when they supervise it
+  // (fs.class_teachers) — not merely because it applies to a class they teach.
+  // Iterate the raw list so supervisors who teach none of the slot's classes
+  // (e.g. ครูประจำชั้นที่ไม่สอนห้องนั้น) are still covered.
+  const supervised = (fixedSlots || []).filter((fs) => {
+    if (fs.day !== day) return false
+    const periods = [fs.period, ...(fs.periods || [])]
+    return periods.includes(period) && teacherSupervisesFixedSlot(fs, teacherId)
+  })
+  if (supervised.length > 0) {
     return {
       kind: 'fixed',
-      fixedName: lock.fs.name || 'กิจกรรมล็อก',
-      fixedKind: lock.kind,
-      supervisedBy: lock.kind === 'supervise' ? (teacherMap.get(teacherId)?.name || teacherId) : null,
+      fixedName: supervised[0].name || 'กิจกรรมล็อก',
+      fixedKind: 'supervise',
+      supervisedBy: teacherMap.get(teacherId)?.name || teacherId,
       affectedClassNames: [],
     }
   }
@@ -326,27 +333,12 @@ function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subje
       }
     }
   }
-  // Lessons (including substitutes) win over informational class-specific locks
-  if (entries.length > 0) {
-    return {
-      kind: 'lessons',
-      slots: entries,
-    }
-  }
+  if (entries.length === 0) return { kind: 'empty' }
 
-  // No lesson here → informational lock for class-specific activity the
-  // teacher's classes are involved in (teacher may still be free elsewhere)
-  if (lock && lock.kind === 'class') {
-    return {
-      kind: 'fixed',
-      fixedName: lock.fs.name || 'กิจกรรมล็อก',
-      fixedKind: 'class',
-      supervisedBy: null,
-      affectedClassNames: lock.affectedClassIds.map((cid) => classMap.get(cid)?.name || cid),
-    }
+  return {
+    kind: 'lessons',
+    slots: entries,
   }
-
-  return { kind: 'empty' }
 }
 
 /**
@@ -421,7 +413,6 @@ export function buildTeacherGridHTML(teacher, ctx) {
             subjectMap: ctx.subjectMap, classMap: ctx.classMap, teacherMap: ctx.teacherMap,
             lessonBlockMap: ctx.lessonBlockMap, substituteMap: ctx.substituteMap,
             userPlacementMap: ctx.userPlacementMap,
-            teacherTaughtClassIds: ctx.teacherTaughtClassIds,
           })
           if (cell.kind === 'fixed') {
             return buildFixedCellHTML(cell)
@@ -565,25 +556,6 @@ export function buildExportContext(data) {
     }
   }
 
-  // Taught classes per teacher (main + co) — used to decide whether a
-  // class-specific fixed slot affects a teacher (mirrors solver taught_class_ids)
-  const teacherTaughtClassIds = new Map()
-  const addTaughtClass = (tid, cid) => {
-    if (!tid || !cid) return
-    if (!teacherTaughtClassIds.has(tid)) teacherTaughtClassIds.set(tid, new Set())
-    teacherTaughtClassIds.get(tid).add(cid)
-  }
-  for (const s of (slots || [])) {
-    addTaughtClass(s.teacher_id, s.class_id)
-    if (s.co_teacher_id) addTaughtClass(s.co_teacher_id, s.class_id)
-  }
-  for (const [lbId, placements] of Object.entries(userPlacements || {})) {
-    const lb = lessonBlockMap.get(lbId)
-    if (!lb) continue
-    addTaughtClass(lb.teacher_id, lb.class_id)
-    if (lb.co_teacher_id) addTaughtClass(lb.co_teacher_id, lb.class_id)
-  }
-
   const dayList = Array.from({ length: daysPerWeek }, (_, i) => i + 1)
   // Use explicit periodList from gridConfig (supports decimals for inserted
   // short breaks); fall back to integer range 1..periodsPerDay.
@@ -603,7 +575,6 @@ export function buildExportContext(data) {
     subjectMap, teacherMap, classMap, lessonBlockMap,
     lunchSet, breakSet, fixedMap, slotMap, userPlacementMap, getFixedSlotsFor,
     substituteMap, getSubstituteFor,
-    teacherTaughtClassIds,
     dayList, periodList,
     periodTimeMap: periodTimeMap || {},
     showPeriodTimes: showPeriodTimes !== false,
