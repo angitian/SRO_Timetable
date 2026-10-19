@@ -17,7 +17,7 @@
 import { exportMultiPagePDF } from './exportPdf.js'
 import { exportMultiPNG } from './exportImage.js'
 import { exportMultiExcel } from './exportExcel.js'
-import { teacherSupervisesFixedSlot } from './teacherLoad.js'
+import { teacherBusyByFixedSlot } from './teacherLoad.js'
 
 const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 export { DAY_LABELS }
@@ -89,6 +89,55 @@ function buildEmptyCellHTML() {
   return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;"></div>`
 }
 
+/**
+ * Build a locked-activity (fixed slot) cell HTML.
+ * Color-codes the lock type in teacher grids (tone 'default'):
+ *   supervise → เขียว (ดูแลกิจกรรม) | assembly → เทา (ทั้งโรงเรียน) | class → เหลือง (เฉพาะห้อง)
+ * In class grids (tone 'class') the cell stays neutral white, mirroring the
+ * on-screen class view, with an optional "ดูแล: ..." badge.
+ */
+function buildFixedCellHTML({ fixedName, fixedKind = null, supervisedBy = null, affectedClassNames = [], tone = 'default' }) {
+  const badge = (text, color, bg) =>
+    `<div style="display:inline-block;font-size:9px;font-weight:700;color:${color};background:${bg};border-radius:999px;padding:0 6px;margin-top:2px;">${text}</div>`
+
+  if (tone === 'class') {
+    const careBadge = supervisedBy
+      ? badge(`ดูแล: ${supervisedBy}`, '#065f46', '#a7f3d0')
+      : ''
+    return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">
+      <div class="vcell-title" style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${fixedName}</div>
+      ${careBadge}
+    </div>`
+  }
+
+  if (fixedKind === 'supervise') {
+    const careBadge = supervisedBy ? badge(`ดูแล: ${supervisedBy}`, '#065f46', '#a7f3d0') : ''
+    return `<div class="vcell" style="${GRID_CELL_STYLE}background:#ecfdf5;border:1px solid #34d399;text-align:center;justify-content:center;font-weight:600;color:#065f46;">
+      <div class="vcell-title" style="font-weight:700;color:#065f46;font-size:12px;line-height:1.15;">🔒 ${fixedName}</div>
+      ${careBadge}
+    </div>`
+  }
+  if (fixedKind === 'assembly') {
+    return `<div class="vcell" style="${GRID_CELL_STYLE}background:#f1f5f9;border:1px dashed #94a3b8;text-align:center;justify-content:center;font-weight:600;color:#475569;">
+      <div class="vcell-title" style="font-weight:700;color:#334155;font-size:12px;line-height:1.15;">🔒 ${fixedName}</div>
+      ${badge('ทั้งโรงเรียน', '#475569', '#e2e8f0')}
+    </div>`
+  }
+  if (fixedKind === 'class') {
+    const infoBadge = supervisedBy
+      ? badge(`ดูแล: ${supervisedBy}`, '#065f46', '#a7f3d0')
+      : affectedClassNames.length > 0
+        ? badge(`ห้อง: ${affectedClassNames.join(', ')}`, '#92400e', '#fde68a')
+        : ''
+    return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fffbeb;border:1px dashed #fbbf24;text-align:center;justify-content:center;font-weight:600;color:#92400e;">
+      <div class="vcell-title" style="font-weight:700;color:#92400e;font-size:12px;line-height:1.15;">🔒 ${fixedName}</div>
+      ${infoBadge}
+    </div>`
+  }
+  // No kind info — legacy neutral cell
+  return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${fixedName}</div>`
+}
+
 // ── Export branding config ───────────────────────────────────────────────
 // Footer text shown at the bottom of every PDF/PNG page.
 // Edit this string to customize the branding shown on exported timetables.
@@ -136,7 +185,17 @@ const SUBJECT_COLOR_FALLBACK = { bg: '#e0f2fe', border: '#7dd3fc', text: '#07598
  */
 function resolveClassCell({ day, period, classId, slotMap, fixedMap, getFixedSlotsFor, substituteMap, getSubstituteFor, userPlacementMap, subjectMap, teacherMap, lessonBlockMap, userPlacements }) {
   const fixed = getFixedSlotsFor(day, period, classId)[0]
-  if (fixed) return { kind: 'fixed', fixedName: fixed.name || 'กิจกรรมล็อก' }
+  if (fixed) {
+    // ครูผู้ดูแลกิจกรรมของห้องนี้ (class_teachers[classId] — อาจมีหลายคน)
+    const raw = fixed.class_teachers?.[classId]
+    const ids = Array.isArray(raw) ? raw : raw ? [raw] : []
+    const names = ids.map((tid) => teacherMap.get(tid)?.name || tid).filter(Boolean)
+    return {
+      kind: 'fixed',
+      fixedName: fixed.name || 'กิจกรรมล็อก',
+      supervisedBy: names.length > 0 ? names.join(', ') : null,
+    }
+  }
 
   const slots = (slotMap.get(`${day}-${period}`) || []).filter((s) => s.class_id === classId)
   const slot = slots[0] || null
@@ -190,20 +249,28 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, getFixedSlo
 
 /**
  * Resolve display data for a single cell in a teacher grid.
- * Returns { kind, slots: [{ subjectName, className, classId }] }
+ * Returns { kind, slots: [{ subjectName, className, classId }] } or
+ * { kind: 'fixed', fixedName, fixedKind, supervisedBy, affectedClassNames }.
+ *
+ * Display policy for locked slots (mirrors solver/preflight busy model):
+ *   supervise → ครูเป็นผู้ดูแลกิจกรรม → แสดงทันที (ครูติดคาบจริง)
+ *   assembly  → คาบล็อกทั้งโรงเรียน (class_ids ว่าง) → ครูทุกคนติด → แสดงทันที
+ *   class     → ล็อกเฉพาะห้องที่ครูสอน → แสดงแบบให้ข้อมูล เฉพาะเมื่อครูไม่มี
+ *               คาบสอนที่เซลล์นี้ (คาบสอนชนะ — ครูอาจยังสอนห้องอื่นได้)
  */
-function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subjectMap, classMap, teacherMap, lessonBlockMap, substituteMap, userPlacementMap }) {
-  // Fixed slot shows in a teacher's timetable ONLY when they supervise it
-  // (fs.class_teachers) — not merely because it applies to a class they teach.
-  // Iterate the raw list so supervisors who teach none of the slot's classes
-  // are covered too.
-  const supervised = (fixedSlots || []).filter((fs) => {
-    if (fs.day !== day) return false
-    const periods = [fs.period, ...(fs.periods || [])]
-    return periods.includes(period) && teacherSupervisesFixedSlot(fs, teacherId)
-  })
-  if (supervised.length > 0) {
-    return { kind: 'fixed', fixedName: supervised[0].name || 'กิจกรรมล็อก' }
+function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subjectMap, classMap, teacherMap, lessonBlockMap, substituteMap, userPlacementMap, teacherTaughtClassIds }) {
+  const taughtClassIds = teacherTaughtClassIds?.get(teacherId) || new Set()
+  const lock = teacherBusyByFixedSlot(fixedSlots, day, period, teacherId, taughtClassIds)
+
+  // Busy locks (supervise/assembly) show regardless of any lesson at this cell
+  if (lock && lock.kind !== 'class') {
+    return {
+      kind: 'fixed',
+      fixedName: lock.fs.name || 'กิจกรรมล็อก',
+      fixedKind: lock.kind,
+      supervisedBy: lock.kind === 'supervise' ? (teacherMap.get(teacherId)?.name || teacherId) : null,
+      affectedClassNames: [],
+    }
   }
 
   // Include slots where the teacher is the main teacher OR the co-teacher
@@ -259,12 +326,27 @@ function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subje
       }
     }
   }
-  if (entries.length === 0) return { kind: 'empty' }
-
-  return {
-    kind: 'lessons',
-    slots: entries,
+  // Lessons (including substitutes) win over informational class-specific locks
+  if (entries.length > 0) {
+    return {
+      kind: 'lessons',
+      slots: entries,
+    }
   }
+
+  // No lesson here → informational lock for class-specific activity the
+  // teacher's classes are involved in (teacher may still be free elsewhere)
+  if (lock && lock.kind === 'class') {
+    return {
+      kind: 'fixed',
+      fixedName: lock.fs.name || 'กิจกรรมล็อก',
+      fixedKind: 'class',
+      supervisedBy: null,
+      affectedClassNames: lock.affectedClassIds.map((cid) => classMap.get(cid)?.name || cid),
+    }
+  }
+
+  return { kind: 'empty' }
 }
 
 /**
@@ -290,7 +372,7 @@ export function buildClassGridHTML(cls, ctx) {
             lessonBlockMap: ctx.lessonBlockMap, userPlacements: ctx.userPlacements,
           })
           if (cell.kind === 'fixed') {
-            return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
+            return buildFixedCellHTML({ fixedName: cell.fixedName, supervisedBy: cell.supervisedBy, tone: 'class' })
           }
           if (cell.kind === 'lesson') {
             const pinIcon = cell.isPreAssigned ? '📌 ' : ''
@@ -339,9 +421,10 @@ export function buildTeacherGridHTML(teacher, ctx) {
             subjectMap: ctx.subjectMap, classMap: ctx.classMap, teacherMap: ctx.teacherMap,
             lessonBlockMap: ctx.lessonBlockMap, substituteMap: ctx.substituteMap,
             userPlacementMap: ctx.userPlacementMap,
+            teacherTaughtClassIds: ctx.teacherTaughtClassIds,
           })
           if (cell.kind === 'fixed') {
-            return `<div class="vcell" style="${GRID_CELL_STYLE}background:#fff;text-align:center;justify-content:center;font-weight:600;color:#374151;">${cell.fixedName}</div>`
+            return buildFixedCellHTML(cell)
           }
           if (cell.kind === 'lessons') {
             const items = cell.slots.map((s) => {
@@ -482,6 +565,25 @@ export function buildExportContext(data) {
     }
   }
 
+  // Taught classes per teacher (main + co) — used to decide whether a
+  // class-specific fixed slot affects a teacher (mirrors solver taught_class_ids)
+  const teacherTaughtClassIds = new Map()
+  const addTaughtClass = (tid, cid) => {
+    if (!tid || !cid) return
+    if (!teacherTaughtClassIds.has(tid)) teacherTaughtClassIds.set(tid, new Set())
+    teacherTaughtClassIds.get(tid).add(cid)
+  }
+  for (const s of (slots || [])) {
+    addTaughtClass(s.teacher_id, s.class_id)
+    if (s.co_teacher_id) addTaughtClass(s.co_teacher_id, s.class_id)
+  }
+  for (const [lbId, placements] of Object.entries(userPlacements || {})) {
+    const lb = lessonBlockMap.get(lbId)
+    if (!lb) continue
+    addTaughtClass(lb.teacher_id, lb.class_id)
+    if (lb.co_teacher_id) addTaughtClass(lb.co_teacher_id, lb.class_id)
+  }
+
   const dayList = Array.from({ length: daysPerWeek }, (_, i) => i + 1)
   // Use explicit periodList from gridConfig (supports decimals for inserted
   // short breaks); fall back to integer range 1..periodsPerDay.
@@ -501,6 +603,7 @@ export function buildExportContext(data) {
     subjectMap, teacherMap, classMap, lessonBlockMap,
     lunchSet, breakSet, fixedMap, slotMap, userPlacementMap, getFixedSlotsFor,
     substituteMap, getSubstituteFor,
+    teacherTaughtClassIds,
     dayList, periodList,
     periodTimeMap: periodTimeMap || {},
     showPeriodTimes: showPeriodTimes !== false,

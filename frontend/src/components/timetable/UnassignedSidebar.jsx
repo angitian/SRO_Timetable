@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Layers, Users, Search, SearchX, Package, X, ChevronLeft, CheckCircle2 } from 'lucide-react'
 import { getSubjectColor } from '../../utils/subjectColors.js'
+import { computePlacedCounts } from '../../utils/placementCounts.js'
 
 /**
  * Collapsible right drawer listing unplaced lesson blocks, grouped by class or teacher.
@@ -41,17 +42,12 @@ export default function UnassignedSidebar({
   const classMap = useMemo(() => new Map(classes.map((c) => [c.id, c])), [classes])
 
   // Count how many periods of each lesson block are already placed
-  // (either by solver or by user pre-assignment)
-  const placedCounts = useMemo(() => {
-    const counts = {}
-    for (const s of resultSlots) {
-      counts[s.lesson_block_id] = (counts[s.lesson_block_id] || 0) + 1
-    }
-    for (const [lbId, placements] of Object.entries(userPlacements)) {
-      counts[lbId] = (counts[lbId] || 0) + placements.length
-    }
-    return counts
-  }, [resultSlots, userPlacements])
+  // (either by solver or by user pre-assignment) — shared dedup helper so
+  // the drawer always agrees with the banners/footer on the timetable page.
+  const { byBlock: placedCounts } = useMemo(
+    () => computePlacedCounts(lessonBlocks, resultSlots, userPlacements),
+    [lessonBlocks, resultSlots, userPlacements],
+  )
 
   // Unassigned = blocks where placed < periods_per_week
   // Two-stage filter so we can distinguish "everything placed" from

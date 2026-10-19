@@ -228,7 +228,10 @@ function reducer(state, action) {
     case 'RESTORE_DAILY_SCHEDULES':
       return { ...state, dailySchedules: (action.payload && typeof action.payload === 'object') ? action.payload : {} }
     case 'CLEAR_RESULT':
-      return { ...state, result: null, error: null, errorResponse: null, cacheKey: null, lastSync: null }
+      // Keep cacheKey so the result-cache effect (below) can delete the stale
+      // IndexedDB entry — otherwise "ทำงานต่อ" would resurrect the old result.
+      // cacheHint is cleared so the resume card disappears in this session too.
+      return { ...state, result: null, error: null, errorResponse: null, lastSync: null, cacheHint: null }
     case 'RESTORE_PLACEMENTS': {
       // Filter out placements whose lesson_block_id no longer exists in the
       // current fixtureData. This prevents stale placements from a previous
@@ -244,14 +247,15 @@ function reducer(state, action) {
       return { ...state, userPlacements: filteredPlacements }
     }
     case 'CLEAR_ALL_SLOTS':
+      // Keep cacheKey so the result-cache effect can delete the stale entry.
       return {
         ...state,
         userPlacements: {},
         result: null,
         error: null,
         errorResponse: null,
-        cacheKey: null,
         lastSync: null,
+        cacheHint: null,
       }
     case 'CLEAR_BY_TEACHER': {
       const { teacherId, lessonBlocks } = action.payload
@@ -358,11 +362,26 @@ function reducer(state, action) {
         result: state.result ? { ...state.result, slots: newSlots } : null,
       }
     }
-    case 'RESTORE_FROM_CACHE':
+    case 'RESTORE_FROM_CACHE': {
+      // Restore the full workspace atomically (result + manual placements +
+      // substitutes + daily schedules) in ONE dispatch — like LOAD_SNAPSHOT.
+      // Restoring placements via the localStorage effect instead would race:
+      // the persist effect runs first, sees empty userPlacements and wipes
+      // the saved key before the restore effect reads it.
+      const validLbIds = new Set(
+        (action.payload.fixtureData?.lesson_blocks || []).map((lb) => lb.id),
+      )
+      const filteredPlacements = {}
+      for (const [lbId, placements] of Object.entries(action.payload.userPlacements || {})) {
+        if (validLbIds.has(lbId)) filteredPlacements[lbId] = placements
+      }
       return {
         ...state,
         result: action.payload.result,
         fixtureData: action.payload.fixtureData,
+        userPlacements: filteredPlacements,
+        substitutes: Array.isArray(action.payload.substitutes) ? action.payload.substitutes : [],
+        dailySchedules: (action.payload.dailySchedules && typeof action.payload.dailySchedules === 'object') ? action.payload.dailySchedules : {},
         selectedFixture: action.payload.selectedFixture,
         cacheKey: action.payload.cacheKey,
         lastSync: action.payload.lastSync,
@@ -370,6 +389,7 @@ function reducer(state, action) {
         isDirty: false,
         activeStep: 5,
       }
+    }
     case 'SET_CACHE_HINT':
       return { ...state, cacheHint: action.payload }
     // ── Snapshot versioning ──────────────────────────────────────────
@@ -396,6 +416,7 @@ function reducer(state, action) {
         error: null,
         errorResponse: null,
         cacheHint: null,
+        cacheKey: `timetable_${action.payload.fixtureName || 'custom'}`,
         activeStep: 5,
       }
     case 'SET_ACTIVE_SNAPSHOT':
@@ -456,6 +477,11 @@ function reducer(state, action) {
         error: null,
         errorResponse: null,
         cacheHint: null,
+        // Cloud workspaces don't carry a fixture name — track under the
+        // current fixture's cache key only when there IS a result, so the
+        // result-cache effect keeps "ทำงานต่อ" in sync without clobbering a
+        // solved local cache when loading a data-only workspace.
+        ...(ws.result ? { cacheKey: `timetable_${state.selectedFixture || 'custom'}` } : {}),
         // Jump to step 5 if we have a result, else step 1
         activeStep: ws.result ? 5 : 1,
       }
@@ -464,14 +490,41 @@ function reducer(state, action) {
       return { ...state, activeCloudWorkspaceId: null }
     // ── Slot-level editing ───────────────────────────────────────────
     case 'MOVE_SLOT': {
-      // payload: { lessonBlockId, newDay, newPeriod }
-      const { lessonBlockId, newDay, newPeriod } = action.payload
+      // payload: { lessonBlockId, day, period, newDay, newPeriod } — moves
+      // ONLY the slot at the source (day, period). Double-period blocks emit
+      // one slot per period (p, p+1), so moving one period must not drag the
+      // block's other slots along (the old code mapped every slot of the
+      // lesson_block_id to the new position, stacking duplicates in one cell
+      // and leaving the source cell empty).
+      const { lessonBlockId, day, period, newDay, newPeriod } = action.payload
       if (!state.result?.slots) return state
-      const newSlots = state.result.slots.map((s) =>
-        s.lesson_block_id === lessonBlockId
-          ? { ...s, day: newDay, period: newPeriod }
-          : s,
-      )
+      let moved = false
+      const newSlots = state.result.slots.map((s) => {
+        if (moved) return s
+        if (s.lesson_block_id !== lessonBlockId) return s
+        // Exact source match (day/period both provided)
+        if (day != null && period != null && !(s.day === day && s.period === period)) return s
+        moved = true
+        return { ...s, day: newDay, period: newPeriod }
+      })
+      if (!moved && state.result.slots.some((s) => s.lesson_block_id === lessonBlockId)) {
+        // Backward-compat fallback: caller didn't specify the source position —
+        // move the first slot of the block.
+        let done = false
+        return {
+          ...state,
+          result: {
+            ...state.result,
+            slots: state.result.slots.map((s) => {
+              if (done || s.lesson_block_id !== lessonBlockId) return s
+              done = true
+              return { ...s, day: newDay, period: newPeriod }
+            }),
+          },
+          isDirty: true,
+          isSnapshotDirty: true,
+        }
+      }
       return {
         ...state,
         result: { ...state.result, slots: newSlots },
@@ -822,7 +875,18 @@ export function AppProvider({ children }) {
       dispatch({ type: 'SET_RESULT', payload: result })
       const cacheKey = `timetable_${state.selectedFixture}`
       try {
-        await cacheTimetable(cacheKey, { result, fixtureData: currentFixtureData, version: 1 })
+        // Cache the full workspace (result + manual placements + substitutes +
+        // daily schedules) so resumeFromCache can restore everything atomically
+        // — the same way LOAD_SNAPSHOT does — instead of relying on the
+        // localStorage restore effect (which races with the persist effect).
+        await cacheTimetable(cacheKey, {
+          result,
+          fixtureData: currentFixtureData,
+          userPlacements: preAssignments || state.userPlacements,
+          substitutes: state.substitutes,
+          dailySchedules: state.dailySchedules,
+          version: 1,
+        })
         dispatch({ type: 'SET_CACHE_INFO', payload: { cacheKey, lastSync: Date.now() } })
         // Keep the landing page "ทำงานต่อ" card fresh without needing a refresh
         dispatch({ type: 'SET_CACHE_HINT', payload: { cacheKey, lastCachedAt: Date.now() } })
@@ -877,6 +941,9 @@ export function AppProvider({ children }) {
         payload: {
           result: cached.result,
           fixtureData: cached.fixtureData,
+          userPlacements: cached.userPlacements || {},
+          substitutes: cached.substitutes || [],
+          dailySchedules: cached.dailySchedules || {},
           selectedFixture: fixtureName,
           cacheKey,
           lastSync: cached._cachedAt,
@@ -888,6 +955,21 @@ export function AppProvider({ children }) {
       return { ok: false, error: 'อ่านข้อมูลจากเครื่องไม่สำเร็จ' }
     }
   }, [])
+
+  // ── Auto-resume last workspace on load ───────────────────────────────
+  // After a refresh/reopen, if a recent cached workspace exists, jump
+  // straight into the timetable step (step 5) instead of parking on the
+  // landing page. Runs ONCE per session (autoResumedRef); skipCacheRestoreRef
+  // guards the "user started a new session (upload/import)" path.
+  const autoResumedRef = useRef(false)
+  useEffect(() => {
+    if (!state.cacheHint || autoResumedRef.current) return
+    if (state.activeStep !== 0 || state.fixtureData) return
+    autoResumedRef.current = true
+    resumeFromCache(state.cacheHint.cacheKey).then((r) => {
+      if (!r.ok) autoResumedRef.current = false
+    })
+  }, [state.cacheHint, state.activeStep, state.fixtureData, resumeFromCache])
 
   const setStep = useCallback((step) => {
     dispatch({ type: 'SET_STEP', payload: step })
@@ -1013,8 +1095,11 @@ export function AppProvider({ children }) {
   }, [])
 
   // ── Slot-level editing actions ──────────────────────────────────────
-  const moveSlot = useCallback((lessonBlockId, newDay, newPeriod) => {
-    dispatch({ type: 'MOVE_SLOT', payload: { lessonBlockId, newDay, newPeriod } })
+  const moveSlot = useCallback((lessonBlockId, day, period, newDay, newPeriod) => {
+    dispatch({
+      type: 'MOVE_SLOT',
+      payload: { lessonBlockId, day, period, newDay, newPeriod },
+    })
   }, [])
 
   const deleteSlot = useCallback((lessonBlockId, day, period) => {
@@ -1258,6 +1343,46 @@ export function AppProvider({ children }) {
       }
     }
   }, [state.fixtureData?.schedule_blocks, state.selectedFixture])
+
+  // ── Persist result edits (manual moves/deletes) to the offline cache ──
+  // The IndexedDB cache is what auto-resume / "ทำงานต่อ" restores after a
+  // reload. It used to be written ONLY inside runSolver, so manual slot edits
+  // (MOVE_SLOT / DELETE_SLOT / clear actions / room changes) were lost on the
+  // next session — the cache still held the original solver output. This
+  // debounced effect writes the CURRENT workspace (result + manual placements
+  // + substitutes + daily schedules) back to the cache whenever any of them
+  // changes, and removes the cache entry when the result is cleared so the
+  // resume path never resurrects a deleted timetable.
+  const resultCacheTimerRef = useRef(null)
+  useEffect(() => {
+    if (!state.cacheKey) return
+    if (resultCacheTimerRef.current) clearTimeout(resultCacheTimerRef.current)
+    if (!state.result) {
+      clearCache(state.cacheKey).catch((e) => {
+        console.warn('[AppContext] result cache clear failed:', e.message)
+      })
+      return
+    }
+    resultCacheTimerRef.current = setTimeout(() => {
+      cacheTimetable(state.cacheKey, {
+        result: state.result,
+        fixtureData: state.fixtureData,
+        userPlacements: state.userPlacements,
+        substitutes: state.substitutes,
+        dailySchedules: state.dailySchedules,
+        version: 1,
+      })
+        .then(() => {
+          dispatch({ type: 'SET_CACHE_HINT', payload: { cacheKey: state.cacheKey, lastCachedAt: Date.now() } })
+        })
+        .catch((e) => {
+          console.warn('[AppContext] result cache write failed:', e.message)
+        })
+    }, 400)
+    return () => {
+      if (resultCacheTimerRef.current) clearTimeout(resultCacheTimerRef.current)
+    }
+  }, [state.result, state.cacheKey, state.fixtureData, state.userPlacements, state.substitutes, state.dailySchedules])
 
   // ── Daily schedules (สอนแทนรายวัน) persistence — localStorage ───────
   const dailyStorageKey = state.selectedFixture ? `daily_schedules_${state.selectedFixture}` : null

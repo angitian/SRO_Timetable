@@ -42,6 +42,8 @@ export default function GridCell({
   isPreAssigned,    // 📌 user manually placed — not draggable by solver
   fixedSlotName,    // name to display for fixed slots (e.g. "โฮมรูม")
   fixedSlotTeacherName, // supervising teacher name for this class's fixed slot (ถ้ามี)
+  fixedSlotKind,    // teacher-view lock type: 'supervise' | 'assembly' | 'class' (สีแยกประเภท)
+  fixedClassNames,  // affected class names for 'class'-kind locks (teacher view)
   isDragTarget,
   dragTargetInfo,   // { valid, reason } from TimetableGrid validation
   isDraggable,
@@ -88,18 +90,38 @@ export default function GridCell({
 
   // ── Fixed slot (🔒 locked activity) ───────────────────────────────
   if (isFixed) {
+    const kind = fixedSlotKind
+    const isAssembly = kind === 'assembly'
+    const isSupervise = kind === 'supervise'
+    const isClassLock = kind === 'class'
+    const containerCls = isSupervise
+      ? 'bg-emerald-50 border-2 border-emerald-400 border-dashed'
+      : isClassLock
+        ? 'bg-amber-50 border-2 border-amber-400 border-dashed'
+        : 'bg-gray-200 border-2 border-gray-400 border-dashed'
+    const nameCls = isSupervise ? 'text-emerald-800' : isClassLock ? 'text-amber-800' : 'text-gray-600'
     return (
       <div
-        className="bg-gray-200 border-2 border-gray-400 border-dashed rounded-lg p-2 min-h-[80px] flex flex-col items-center justify-center cursor-not-allowed"
+        className={`${containerCls} rounded-lg p-2 min-h-[80px] flex flex-col items-center justify-center cursor-not-allowed`}
         onDragOver={(e) => e.preventDefault()} // block drops on fixed slots
         onContextMenu={onContextMenu}
       >
-        <div className="text-xs sm:text-sm font-bold text-gray-600 truncate w-full text-center">
+        <div className={`text-xs sm:text-sm font-bold truncate w-full text-center ${nameCls}`}>
           {fixedSlotName || 'บล็อกกิจกรรม'}
         </div>
-        {fixedSlotTeacherName && (
+        {isAssembly && (
+          <div className="text-[10px] font-semibold text-gray-600 bg-gray-300 rounded-full px-1.5 py-0.5 truncate w-full text-center">
+            ทั้งโรงเรียน
+          </div>
+        )}
+        {(isSupervise || !kind) && fixedSlotTeacherName && (
           <div className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5 truncate w-full text-center">
             ดูแล: {fixedSlotTeacherName}
+          </div>
+        )}
+        {isClassLock && fixedClassNames?.length > 0 && (
+          <div className="text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-0.5 truncate w-full text-center">
+            ห้อง: {fixedClassNames.join(', ')}
           </div>
         )}
         <span className="mt-1 inline-flex items-center gap-0.5 text-[10px] font-semibold text-gray-500 bg-gray-300 rounded-full px-2 py-0.5">

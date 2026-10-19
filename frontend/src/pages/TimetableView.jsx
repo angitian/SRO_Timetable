@@ -19,6 +19,7 @@ import {
   computeNeededPerTeacher,
   computeFixedSupervision,
 } from '../utils/teacherLoad.js'
+import { computePlacedCounts } from '../utils/placementCounts.js'
 import { gradeLevelToLabel } from '../utils/gradeLabels.js'
 
 const RULE_DAY_LABELS = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.', 'อา.']
@@ -190,15 +191,20 @@ export default function TimetableView() {
   const { teachers, classes, subjects, fixed_slots, schedule_config, lesson_blocks, schedule_blocks = [], special_rooms = [] } = fixtureData
   const resultSlots = result?.slots || []
 
+  // ── Live placement counts (solver slots + manual placements, deduped
+  // per position) — single source of truth for every "placed/remaining"
+  // number on this page so banners, pills and footer never disagree.
+  const placedCounts = useMemo(
+    () => computePlacedCounts(lesson_blocks, resultSlots, userPlacements),
+    [lesson_blocks, resultSlots, userPlacements],
+  )
+
   // ── Unplaced-lessons report: explains WHY some lessons couldn't be placed ──
   // Answers "จัดไม่ครบ — ติดเงื่อนไขไหน" (class capacity / teacher availability /
   // hard rules). Null when everything was placed.
   const unplacedReport = useMemo(() => {
     if (!result || !fixtureData) return null
-    const placed = {}
-    for (const s of resultSlots) {
-      placed[s.lesson_block_id] = (placed[s.lesson_block_id] || 0) + 1
-    }
+    const placed = placedCounts.byBlock
     const missingByClass = {}
     const missingByTeacher = {}
     let totalMissing = 0
@@ -272,7 +278,7 @@ export default function TimetableView() {
       noOverflow,
       tightClassNames: tightClasses.map((r) => r.name),
     }
-  }, [result, resultSlots, fixtureData, lesson_blocks, classes, teachers, subjects, fixed_slots, schedule_blocks, schedule_config])
+  }, [result, placedCounts, fixtureData, lesson_blocks, classes, teachers, subjects, fixed_slots, schedule_blocks, schedule_config])
 
   // ── Derive grid structure from actual schedule_blocks data ────────
   // Uses schedule_blocks[].periods (from Step 2) when available,
@@ -324,19 +330,8 @@ export default function TimetableView() {
   }, [schedule_blocks, schedule_config])
 
   // ── Compute placement counts for status footer ────────────────────
-  const totalCount = useMemo(
-    () => lesson_blocks.reduce((sum, lb) => sum + lb.periods_per_week, 0),
-    [lesson_blocks],
-  )
-  const placedCount = useMemo(() => {
-    const solverPlaced = resultSlots.length
-    const solverBlockIds = new Set(resultSlots.map((s) => s.lesson_block_id))
-    const userOnlyPlaced = Object.entries(userPlacements).reduce(
-      (sum, [lbId, placements]) => solverBlockIds.has(lbId) ? sum : sum + placements.length,
-      0,
-    )
-    return solverPlaced + userOnlyPlaced
-  }, [resultSlots, userPlacements])
+  const totalCount = placedCounts.totalNeeded
+  const placedCount = placedCounts.totalPlaced
 
   // ── Class statuses for nav panel ──────────────────────────────────
   const classStatuses = useMemo(() => {
@@ -344,41 +339,40 @@ export default function TimetableView() {
     for (const cls of classes) {
       const classLbs = lesson_blocks.filter((lb) => lb.class_id === cls.id)
       const total = classLbs.reduce((sum, lb) => sum + lb.periods_per_week, 0)
-      const placed = resultSlots.filter((s) => s.class_id === cls.id).length
-        + Object.entries(userPlacements)
-          .filter(([lbId]) => {
-            const lb = lesson_blocks.find((l) => l.id === lbId)
-            return lb && lb.class_id === cls.id
-          })
-          .reduce((sum, [, placements]) => sum + placements.length, 0)
+      const placed = placedCounts.byClass[cls.id] || 0
       const remaining = Math.max(0, total - placed)
       statuses[cls.id] = { total, placed, remaining, isComplete: total > 0 && placed >= total }
     }
     return statuses
-  }, [classes, lesson_blocks, resultSlots, userPlacements])
+  }, [classes, lesson_blocks, placedCounts])
 
   // ── Teacher statuses for nav panel ────────────────────────────────
+  // LIVE placement-based (same semantics as class pills): a teacher is
+  // complete only when every period they need to teach is actually placed
+  // (solver slots + manual placements, deduped). Previously this read the
+  // stale result.teacher_loads from the last solver run, so manual edits
+  // were never reflected — the pill stayed green even after removing
+  // periods from the grid.
   const teacherStatuses = useMemo(() => {
     const statuses = {}
-    const loadAfter = result?.teacher_loads || []
-    const loadMap = new Map(loadAfter.map((l) => [l.teacher_id, l]))
+    const neededByTeacher = computeNeededPerTeacher(lesson_blocks)
     const supervision = computeFixedSupervision(fixed_slots)
     for (const t of teachers) {
-      const load = loadMap.get(t.id)
-      if (load) {
-        statuses[t.id] = { assigned: load.assigned_periods, max: load.max_periods, status: load.load_status }
-      } else {
-        // No result yet — compute from lesson blocks (main + co) + กิจกรรมที่ดูแล
-        const assigned = lesson_blocks
-          .filter((lb) => lb.teacher_id === t.id || lb.co_teacher_id === t.id)
-          .reduce((sum, lb) => sum + lb.periods_per_week, 0)
-          + (supervision[t.id] || 0)
-        const status = assigned > t.max_periods_per_week ? 'over' : assigned < t.min_periods_per_week ? 'under' : 'ok'
-        statuses[t.id] = { assigned, max: t.max_periods_per_week, status }
+      // คาบดูแลกิจกรรมเป็นภาระคงที่ — นับทั้งใน placed และ needed (หักล้างกัน)
+      // เพื่อให้ remaining สะท้อนเฉพาะคาบสอนที่ยังวางไม่ครบ
+      const sup = supervision[t.id] || 0
+      const needed = (neededByTeacher[t.id] || 0) + sup
+      const placed = (placedCounts.byTeacher[t.id] || 0) + sup
+      const remaining = Math.max(0, needed - placed)
+      statuses[t.id] = {
+        assigned: placed,
+        max: t.max_periods_per_week,
+        remaining,
+        isComplete: needed > 0 && placed >= needed,
       }
     }
     return statuses
-  }, [teachers, result, lesson_blocks, fixed_slots])
+  }, [teachers, lesson_blocks, placedCounts, fixed_slots])
 
   // ── Teacher load data (before/after) for workload tab ─────────────
   const loadBefore = useMemo(() => {
@@ -457,18 +451,12 @@ export default function TimetableView() {
 
   // ── Unassigned count for drawer auto-close ────────────────────────
   const unassignedCount = useMemo(() => {
-    const placedCounts = {}
-    for (const s of resultSlots) {
-      placedCounts[s.lesson_block_id] = (placedCounts[s.lesson_block_id] || 0) + 1
-    }
-    for (const [lbId, placements] of Object.entries(userPlacements)) {
-      placedCounts[lbId] = (placedCounts[lbId] || 0) + placements.length
-    }
+    const byBlock = placedCounts.byBlock
     return lesson_blocks.reduce((sum, lb) => {
-      const remaining = lb.periods_per_week - (placedCounts[lb.id] || 0)
+      const remaining = lb.periods_per_week - (byBlock[lb.id] || 0)
       return sum + Math.max(0, remaining)
     }, 0)
-  }, [lesson_blocks, resultSlots, userPlacements])
+  }, [lesson_blocks, placedCounts])
 
   // ── Constraint counts for toolbar context ──────────────────────────
   const fixedCount = useMemo(
@@ -1077,9 +1065,7 @@ export default function TimetableView() {
                   const status = viewMode === 'class'
                     ? classStatuses[item.id]
                     : teacherStatuses[item.id]
-                  const isComplete = viewMode === 'class'
-                    ? status?.isComplete
-                    : status?.status === 'ok'
+                  const isComplete = status?.isComplete
 
                   const pillClass = isComplete
                     ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
@@ -1097,11 +1083,9 @@ export default function TimetableView() {
                         ${isActive ? 'ring-2 ring-blue-500 font-bold shadow-sm' : ''}`}
                     >
                       {item.name}
-                      {viewMode === 'class' && (
-                        isComplete
-                          ? <span className="ml-1 text-[10px]">✓</span>
-                          : <span className="ml-1 text-[10px] opacity-70">({status?.remaining || 0})</span>
-                      )}
+                      {isComplete
+                        ? <span className="ml-1 text-[10px]">✓</span>
+                        : <span className="ml-1 text-[10px] opacity-70">({status?.remaining || 0})</span>}
                     </button>
                   )
                 })}

@@ -32,7 +32,8 @@ import {
 } from '../utils/exportEngine.js'
 import { exportMultiExcel } from '../utils/exportExcel.js'
 import { exportMultiPNG } from '../utils/exportImage.js'
-import { normalizeClassTeachers, flattenClassTeachers } from '../utils/teacherLoad.js'
+import { normalizeClassTeachers, flattenClassTeachers, computeNeededPerTeacher, computeFixedSupervision } from '../utils/teacherLoad.js'
+import { computePlacedCounts } from '../utils/placementCounts.js'
 import { saveTimetableResult } from '../api/client.js'
 import PrintSettingsPanel from '../components/print/PrintSettingsPanel.jsx'
 
@@ -245,18 +246,20 @@ function buildQRPayload(kind, item, ctx, gridConfig, fixedSlots, settings) {
     const coId = (lb && lb.co_teacher_id) || s.co_teacher_id
     if (coId) teacherIds.add(coId)
   }
-  // For a teacher page, only embed fixed slots that affect their classes;
-  // for a class page, only slots that affect that class.
+  // For a teacher page, embed fixed slots that affect their classes OR that
+  // they supervise (ครูประจำชั้นที่ดูแลห้องที่ไม่ได้สอนก็ต้องเห็น); for a class
+  // page, only slots that affect that class.
   const relevantFixedSlots = (fixedSlots || []).filter((fs) => {
     if (!fs.class_ids || fs.class_ids.length === 0) return true
     if (kind === 'class') return fs.class_ids.includes(item.id)
+    if (flattenClassTeachers(fs.class_teachers).has(item.id)) return true
     const teacherClassIds = new Set()
     for (const s of filteredSlots) teacherClassIds.add(s.class_id)
     return fs.class_ids.some((cid) => teacherClassIds.has(cid))
   })
 
   const payload = {
-    v: 4, // payload format version — see PublicViewerPage.decodePayload
+    v: 5, // payload format version — see PublicViewerPage.decodePayload
     kind,
     i: [item.id, item.name],
     // v4 slot format: [day, period, subject_id, teacher_id, class_id, co_teacher_id]
@@ -274,8 +277,14 @@ function buildQRPayload(kind, item, ctx, gridConfig, fixedSlots, settings) {
       breakPeriods: gridConfig.breakPeriods || [],
       daysPerWeek: gridConfig.daysPerWeek,
     },
-    // v4 fixed slot format: [day, period, name, classIds ([] = all), periods]
-    f: relevantFixedSlots.map((fs) => [fs.day, fs.period, fs.name, fs.class_ids || [], fs.periods || []]),
+    // v5 fixed slot format: [day, period, name, classIds ([] = all), periods, classTeachers]
+    // classTeachers = [[classId, [teacherId, ...]], ...] | null (compact)
+    f: relevantFixedSlots.map((fs) => [
+      fs.day, fs.period, fs.name, fs.class_ids || [], fs.periods || [],
+      Object.keys(fs.class_teachers || {}).length > 0
+        ? Object.entries(fs.class_teachers).map(([cid, tids]) => [cid, Array.isArray(tids) ? tids : [tids]])
+        : null,
+    ]),
     set: {
       schoolName: settings.schoolName,
       semester: settings.semester,
@@ -941,41 +950,42 @@ export default function PrintStudio() {
   }, [specialRooms, ctx])
 
   // ── Compute pill status data (mirrors TimetableView classStatuses/teacherStatuses) ──
+  const placedCounts = useMemo(
+    () => computePlacedCounts(lesson_blocks, resultSlots, userPlacements),
+    [lesson_blocks, resultSlots, userPlacements],
+  )
+
   const classStatuses = useMemo(() => {
     const statuses = {}
     for (const cls of classes) {
       const classLbs = lesson_blocks.filter((lb) => lb.class_id === cls.id)
       const total = classLbs.reduce((sum, lb) => sum + lb.periods_per_week, 0)
-      const placed = resultSlots.filter((s) => s.class_id === cls.id).length
-        + Object.entries(userPlacements)
-          .filter(([lbId]) => {
-            const lb = lesson_blocks.find((l) => l.id === lbId)
-            return lb && lb.class_id === cls.id
-          })
-          .reduce((sum, [, placements]) => sum + placements.length, 0)
+      const placed = placedCounts.byClass[cls.id] || 0
       const remaining = Math.max(0, total - placed)
       statuses[cls.id] = { total, placed, remaining, isComplete: total > 0 && placed >= total }
     }
     return statuses
-  }, [classes, lesson_blocks, resultSlots, userPlacements])
+  }, [classes, lesson_blocks, placedCounts])
 
   const teacherStatuses = useMemo(() => {
     const statuses = {}
-    const loadAfter = result?.teacher_loads || []
-    const loadMap = new Map(loadAfter.map((l) => [l.teacher_id, l]))
+    const neededByTeacher = computeNeededPerTeacher(lesson_blocks)
+    const supervision = computeFixedSupervision(fixed_slots)
     for (const t of teachers) {
-      const load = loadMap.get(t.id)
-      if (load) {
-        statuses[t.id] = { assigned: load.assigned_periods, max: load.max_periods }
-      } else {
-        const assigned = lesson_blocks
-          .filter((lb) => lb.teacher_id === t.id)
-          .reduce((sum, lb) => sum + lb.periods_per_week, 0)
-        statuses[t.id] = { assigned, max: t.max_periods_per_week }
+      // กิจกรรมที่ดูแลเป็นภาระคงที่ — นับทั้งใน placed และ needed (หักล้างกัน)
+      const sup = supervision[t.id] || 0
+      const needed = (neededByTeacher[t.id] || 0) + sup
+      const placed = (placedCounts.byTeacher[t.id] || 0) + sup
+      const remaining = Math.max(0, needed - placed)
+      statuses[t.id] = {
+        assigned: placed,
+        max: t.max_periods_per_week,
+        remaining,
+        isComplete: needed > 0 && placed >= needed,
       }
     }
     return statuses
-  }, [teachers, result, lesson_blocks])
+  }, [teachers, lesson_blocks, placedCounts, fixed_slots])
 
   // ── Build link index for "รายการลิงก์" export scope ──────────────────
   const linkIndex = useMemo(() => {
@@ -1889,9 +1899,7 @@ export default function PrintStudio() {
                       ? classStatuses[page.id]
                       : teacherStatuses[page.id]
                   const isComplete = isFacility ? false
-                    : previewTab === 'class'
-                      ? status?.isComplete
-                      : false
+                    : status?.isComplete
 
                   const pillClass = isActive
                     ? (isFacility
@@ -1905,9 +1913,9 @@ export default function PrintStudio() {
 
                   const badge = isFacility
                     ? ''
-                    : previewTab === 'class'
-                      ? (isComplete ? '✓' : `(${status?.remaining || 0})`)
-                      : `(${status?.assigned || 0})`
+                    : isComplete
+                      ? '✓'
+                      : `(${status?.remaining || 0})`
 
                   return (
                     <button

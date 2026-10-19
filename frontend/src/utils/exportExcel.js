@@ -18,7 +18,7 @@
  *   exportToExcel(data)           → Promise<void>  (legacy, classes only)
  */
 
-import { teacherSupervisesFixedSlot, normalizeClassTeachers } from './teacherLoad.js'
+import { classifyTeacherFixedSlot, normalizeClassTeachers } from './teacherLoad.js'
 
 const DAY_LABELS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 
@@ -167,17 +167,25 @@ function buildTeacherCellMap(teacher, ctx) {
     map.set(key, entries)
   }
 
-  // Fixed slots (override) — only กิจกรรมที่ครูคนนี้เป็นผู้ดูแล (fs.class_teachers)
+  // Fixed slots (display policy mirrors solver/preflight + teacher grid):
+  //   supervise → busy (override lessons, แสดงเสมอ)
+  //   assembly  → คาบล็อกทั้งโรงเรียน (class_ids ว่าง) → busy (ครูทุกคนติด)
+  //   class     → ให้ข้อมูล เฉพาะเมื่อครูไม่มีคาบสอนที่เซลล์นั้น (คาบสอนชนะ)
+  const taughtClassIds = ctx.teacherTaughtClassIds?.get(teacher.id) || new Set()
   for (const fs of (ctx.fixedSlots || [])) {
-    if (!teacherSupervisesFixedSlot(fs, teacher.id)) continue
-    const ct = normalizeClassTeachers(fs.class_teachers)
-    const supervisedIds = Object.entries(ct)
-      .filter(([, tids]) => tids.includes(teacher.id))
-      .map(([cid]) => cid)
-    const targetIds = supervisedIds.length > 0 ? supervisedIds : (fs.class_ids || [])
-    const classNames = targetIds.map((cid) => classMap.get(cid)?.name || cid).join(', ')
+    const kind = classifyTeacherFixedSlot(fs, teacher.id, taughtClassIds)
+    if (!kind) continue
+    const isBusy = kind !== 'class'
     for (const p of [fs.period, ...(fs.periods || [])]) {
-      map.set(`${fs.day}-${p}`, { isFixed: true, fixedName: fs.name || 'กิจกรรมล็อก', classNames })
+      const key = `${fs.day}-${p}`
+      const existing = map.get(key)
+      if (isBusy) {
+        map.set(key, { isFixed: true, fixedName: fs.name || 'กิจกรรมล็อก', fixedKind: kind })
+      } else if (!existing || (Array.isArray(existing) && existing.length === 0)) {
+        const classNames = (fs.class_ids || []).filter((cid) => taughtClassIds.has(cid))
+          .map((cid) => classMap.get(cid)?.name || cid).join(', ')
+        map.set(key, { isFixed: true, fixedName: fs.name || 'กิจกรรมล็อก', fixedKind: kind, classNames })
+      }
     }
   }
 
@@ -208,7 +216,13 @@ function formatClassCell(entry, isLunch) {
 function formatTeacherCell(entry, isLunch) {
   if (isLunch) return 'พักเที่ยง'
   if (!entry) return ''
-  if (entry.isFixed) return `🔒 ${entry.fixedName}`
+  if (entry.isFixed) {
+    const kindTag = entry.fixedKind === 'assembly' ? 'ทั้งโรงเรียน'
+      : entry.fixedKind === 'class' ? (entry.classNames ? `ห้อง: ${entry.classNames}` : 'เฉพาะห้อง')
+      : entry.fixedKind === 'supervise' ? 'ดูแล'
+      : ''
+    return `🔒 ${entry.fixedName}${kindTag ? ` (${kindTag})` : ''}`
+  }
   // entry is an array of { subjectName, className, mainTeacherName?, coTeacherName? }
   return entry.map((s) => `${s.subjectName}\n${s.className}${s.coTeacherName ? `\n👥 ${s.mainTeacherName} + ${s.coTeacherName}` : ''}${s.isSubstitute ? '\n🔁 สอนแทน' : ''}`).join('\n\n')
 }

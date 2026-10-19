@@ -5,7 +5,7 @@ import GridLegend from './GridLegend.jsx'
 import { DAY_LABELS } from './GridLegend.jsx'
 import CellContextMenu from './CellContextMenu.jsx'
 import CellRoomEditModal from './CellRoomEditModal.jsx'
-import { teacherSupervisesFixedSlot } from '../../utils/teacherLoad.js'
+import { teacherBusyByFixedSlot } from '../../utils/teacherLoad.js'
 
 export default function TimetableGrid({
   slots = [],
@@ -44,7 +44,7 @@ export default function TimetableGrid({
   // Callback when user switches view mode via header toggle
   onViewModeChange,
   // ── Slot-level editing (persisted to AppContext) ──
-  onSlotMove,         // (lessonBlockId, newDay, newPeriod) => void
+  onSlotMove,         // (lessonBlockId, day, period, newDay, newPeriod) => void — moves only the slot at the source position
   onSlotDelete,       // (lessonBlockId, day, period) => void
   onRemovePlacement,  // (lessonBlockId, day, period) => void
   onLockSlot,         // (day, period) => void
@@ -147,18 +147,16 @@ export default function TimetableGrid({
     return getFixedSlotsFor(d, p, classId)[0] || null
   }
 
-  // Fixed slots this teacher SUPERVISES at (day, period) — only กิจกรรมที่ครู
-  // คนนี้อยู่ใน fs.class_teachers เท่านั้นที่โผล่ในตารางครู ไม่ใช่ทุกอันที่
-  // ตรงกับห้องที่ครูสอน (เดิมแสดงคาบพิเศษให้ครูที่ไม่ได้ดูแลด้วย)
-  // Iterate fixedSlots directly so supervisors who teach none of the slot's
-  // classes (e.g. ครูประจำชั้นที่ไม่สอนห้องนั้น) are still covered.
+  // Fixed slots affecting this teacher at (day, period) — display policy mirrors
+  // solver/preflight (teacherBusyByFixedSlot):
+  //   supervise → ครูผู้ดูแลกิจกรรม → busy (แสดงเสมอ)
+  //   assembly  → ล็อกทั้งโรงเรียน (class_ids ว่าง) → busy (แสดงทุกคน)
+  //   class     → ล็อกเฉพาะห้องที่ครูสอน → ให้ข้อมูล (คาบสอนชนะ, ตัดสินใจที่ render)
+  // Returns { fs, kind, affectedClassIds } | null (priority supervise > assembly > class).
   function getFixedSlotsForTeacher(d, p) {
-    if (!activeTeacherId || !fixedSlots) return []
-    return fixedSlots.filter((fs) => {
-      if (fs.day !== d) return false
-      const periods = [fs.period, ...(fs.periods || [])]
-      return periods.includes(p) && teacherSupervisesFixedSlot(fs, activeTeacherId)
-    })
+    if (!activeTeacherId || !fixedSlots) return null
+    const taughtClassIds = new Set(teacherClasses.map((c) => c.id))
+    return teacherBusyByFixedSlot(fixedSlots, d, p, activeTeacherId, taughtClassIds)
   }
 
   // Substitute lookup: "day-period-classId" → substitute entry (สอนแทน)
@@ -499,10 +497,22 @@ export default function TimetableGrid({
     const effClassId = classId || dragSource?.classId || null
     if (lunchSet.has(p) || breakSet.has(p) || getFixedSlotsFor(d, p, effClassId).length > 0) return
 
-    // Find the slot being dragged
+    // Find the slot being dragged (match the exact source position so a
+    // double-period block's other period is not picked up)
     const sourceSlots = slotMap.get(`${dragSource.day}-${dragSource.period}`) || []
-    const draggedSlot = sourceSlots.find((s) => s.lesson_block_id === dragSource.lessonBlockId)
+    const draggedSlot = sourceSlots.find(
+      (s) => s.lesson_block_id === dragSource.lessonBlockId
+        && s.day === dragSource.day
+        && s.period === dragSource.period,
+    ) || sourceSlots.find((s) => s.lesson_block_id === dragSource.lessonBlockId)
     if (!draggedSlot) return
+
+    // No-op: dropped back on its own position
+    if (d === dragSource.day && p === dragSource.period) {
+      setDragSource(null)
+      setDragTarget(null)
+      return
+    }
 
     // Check conflicts at target
     const conflicts = checkConflicts(draggedSlot, d, p, classId)
@@ -512,9 +522,25 @@ export default function TimetableGrid({
       return
     }
 
-    // Perform swap: update slot's day & period
+    // Guard: the target must not already contain another period of the SAME
+    // lesson block (e.g. the sibling of a double-period pair) — otherwise
+    // both slots would stack in one cell and the source cell goes empty.
+    const targetSlots = slotMap.get(`${d}-${p}`) || []
+    const siblingAtTarget = targetSlots.some(
+      (s) => s.lesson_block_id === draggedSlot.lesson_block_id,
+    )
+    if (siblingAtTarget) {
+      setDragSource(null)
+      setDragTarget(null)
+      return
+    }
+
+    // Perform swap: move ONLY the dragged slot's day & period. Double-period
+    // blocks emit one slot per period (p, p+1); the sibling stays in place.
     const newSlots = localSlots.map((s) => {
-      if (s.lesson_block_id === draggedSlot.lesson_block_id) {
+      if (s.lesson_block_id === draggedSlot.lesson_block_id
+        && s.day === dragSource.day
+        && s.period === dragSource.period) {
         return { ...s, day: d, period: p }
       }
       return s
@@ -522,7 +548,7 @@ export default function TimetableGrid({
     setLocalSlots(newSlots)
     if (onSlotSwap) onSlotSwap(newSlots)
     // Persist move to AppContext so it survives refresh
-    if (onSlotMove) onSlotMove(draggedSlot.lesson_block_id, d, p)
+    if (onSlotMove) onSlotMove(draggedSlot.lesson_block_id, dragSource.day, dragSource.period, d, p)
 
     setDragSource(null)
     setDragTarget(null)
@@ -747,15 +773,19 @@ export default function TimetableGrid({
                 {periodList.map((p) => {
                   const isLunch = lunchSet.has(p)
                   const isBreak = breakSet.has(p)
-                  const fixedSlot = getFixedSlotsForTeacher(d, p)[0] || null
-                  const isFixed = !!fixedSlot
-                  // ครูคนนี้เป็นผู้ดูแลกิจกรรมนี้หรือไม่ → แสดง badge "ดูแลกิจกรรม"
-                  const fixedSlotTeacherName = isFixed && activeTeacherId && fixedSlot?.class_teachers
-                    ? (Object.values(fixedSlot.class_teachers).flat().includes(activeTeacherId)
-                        ? (teacherMap.get(activeTeacherId)?.name || activeTeacherId)
-                        : null)
+                  const teacherSlots = isLunch || isBreak ? [] : getTeacherSlots(d, p)
+                  const fixedInfo = isLunch || isBreak ? null : getFixedSlotsForTeacher(d, p)
+                  // supervise/assembly = busy → แสดงล็อกเสมอ; class = ให้ข้อมูล → แสดงเมื่อครูไม่มีคาบสอน
+                  const isFixed = !!fixedInfo && (fixedInfo.kind !== 'class' || teacherSlots.length === 0)
+                  const fixedSlot = isFixed ? fixedInfo.fs : null
+                  const fixedSlotKind = isFixed ? fixedInfo.kind : null
+                  // supervise → badge "ดูแลกิจกรรม"; class → ป้ายชื่อห้องที่ติด
+                  const fixedSlotTeacherName = isFixed && fixedInfo.kind === 'supervise'
+                    ? (teacherMap.get(activeTeacherId)?.name || activeTeacherId)
                     : null
-                  const teacherSlots = isFixed || isLunch || isBreak ? [] : getTeacherSlots(d, p)
+                  const fixedClassNames = fixedInfo?.kind === 'class'
+                    ? fixedInfo.affectedClassIds.map((cid) => classMap.get(cid)?.name || cid)
+                    : []
                   const isTarget = dragTarget?.day === d && dragTarget?.period === p
                   const targetInfo = isTarget ? dragTarget : null
                   return (
@@ -768,6 +798,8 @@ export default function TimetableGrid({
                       isFixed={isFixed}
                       fixedSlotName={fixedSlot?.name}
                       fixedSlotTeacherName={fixedSlotTeacherName}
+                      fixedSlotKind={fixedSlotKind}
+                      fixedClassNames={fixedClassNames}
                       isDragTarget={isTarget}
                       dragTargetInfo={targetInfo}
                       isDraggable={teacherSlots.length > 0 && !isFixed}
@@ -892,6 +924,7 @@ export default function TimetableGrid({
         mode={isTeacherMode ? 'class' : 'subject'}
         teacherClasses={teacherClasses}
         classColorMap={classColorMap}
+        showLockLegend={isTeacherMode && !!(fixedSlots && fixedSlots.length > 0)}
       />
       {dragSource && (
         <div className="text-sm text-blue-600 bg-blue-50 rounded-lg px-3 py-1.5">

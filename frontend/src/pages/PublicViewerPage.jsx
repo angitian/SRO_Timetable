@@ -53,10 +53,13 @@ function decodePayload(encoded) {
  * Expand a compact payload back into the shape expected by buildExportContext.
  * Supports v2/v3 (slot: [day, period, subject, teacher, class]; fixed: [day, period, name])
  * and v4 (slot: [..., co_teacher_id]; fixed: [day, period, name, classIds, periods]).
+ * v5 adds class_teachers to the fixed tuple: [day, period, name, classIds, periods, classTeachers]
+ * where classTeachers = [[classId, [teacherId, ...]], ...] (or null/undefined).
  */
 function expandCompactPayload(p) {
-  if (!p || (p.v !== 2 && p.v !== 3 && p.v !== 4)) throw new Error('payload format ไม่รองรับ')
+  if (!p || (p.v !== 2 && p.v !== 3 && p.v !== 4 && p.v !== 5)) throw new Error('payload format ไม่รองรับ')
   const isV4 = p.v === 4
+  const isV5 = p.v === 5
   return {
     kind: p.kind,
     item: { id: p.i[0], name: p.i[1] },
@@ -68,11 +71,21 @@ function expandCompactPayload(p) {
     teachers: (p.t || []).map(([id, name]) => ({ id, name })),
     classes: (p.c || []).map(([id, name]) => ({ id, name })),
     gridConfig: p.g,
-    fixedSlots: (p.f || []).map(([day, period, name, classIds, periods]) => ({
-      day, period, name,
-      ...(isV4 && classIds ? { class_ids: classIds } : {}),
-      ...(isV4 && periods ? { periods } : {}),
-    })),
+    fixedSlots: (p.f || []).map(([day, period, name, classIds, periods, classTeachers]) => {
+      const fs = {
+        day, period, name,
+        ...((isV4 || isV5) && classIds ? { class_ids: classIds } : {}),
+        ...((isV4 || isV5) && periods ? { periods } : {}),
+      }
+      if (isV5 && Array.isArray(classTeachers) && classTeachers.length > 0) {
+        const ct = {}
+        for (const [cid, tids] of classTeachers) {
+          if (cid && Array.isArray(tids) && tids.length > 0) ct[cid] = tids
+        }
+        if (Object.keys(ct).length > 0) fs.class_teachers = ct
+      }
+      return fs
+    }),
     settings: p.set || {},
   }
 }
@@ -146,6 +159,7 @@ function recordToPayload(record, viewMode, selectedClassId, selectedTeacherId) {
       day: fs.day, period: fs.period, name: fs.name,
       ...(fs.class_ids ? { class_ids: fs.class_ids } : {}),
       ...(fs.periods ? { periods: fs.periods } : {}),
+      ...(fs.class_teachers ? { class_teachers: fs.class_teachers } : {}),
     })),
     settings: {
       schoolName: record.title || '',
