@@ -7,7 +7,8 @@ import {
 import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
 import { getSubjectColor } from '../utils/subjectColors.js'
-import { normalizeClassTeachers } from '../utils/teacherLoad.js'
+import { normalizeClassTeachers, checkTeacherLockIssues } from '../utils/teacherLoad.js'
+import DiagnosticsPanel from '../components/common/DiagnosticsPanel.jsx'
 import TeacherSummaryTable from '../components/verification/TeacherSummaryTable.jsx'
 import TeacherWorkloadTable from '../components/verification/TeacherWorkloadTable.jsx'
 import ClassroomDensityTable from '../components/verification/ClassroomDensityTable.jsx'
@@ -20,7 +21,7 @@ import { buildGroupedWorkload } from '../utils/workloadGrouping'
 import { exportWorkloadExcel } from '../utils/workloadExcelExport'
 
 export default function VerificationStep() {
-  const { fixtureData, error, errorResponse, setStep } = useApp()
+  const { fixtureData, error, errorResponse, setStep, userPlacements, removePlacement } = useApp()
 
   const teachers = fixtureData?.teachers || []
   const subjects = fixtureData?.subjects || []
@@ -147,8 +148,11 @@ export default function VerificationStep() {
       daysByClass[c.id] = blk?.days_per_week || 5
     }
     const map = {}
+    const ALL_CLASSES_SENTINELS = new Set(['ทุกห้อง', 'ทุกห้องเรียน', 'ทุกชั้น', 'all', 'every'])
     for (const fs of fixedSlots) {
-      const targets = fs.class_ids?.length ? fs.class_ids : classes.map((c) => c.id)
+      // Normalize legacy 'ทุกห้อง' sentinel → all classes (matches backend)
+      const rawIds = (fs.class_ids || []).filter((cid) => !ALL_CLASSES_SENTINELS.has(String(cid).trim()))
+      const targets = rawIds.length ? rawIds : classes.map((c) => c.id)
       const fsPeriods = [fs.period, ...(fs.periods || [])]
       for (const cid of targets) {
         const studySet = studySetByClass[cid]
@@ -208,6 +212,14 @@ export default function VerificationStep() {
   }, [classroomDensity, classBlockMap, blockMaxPeriods, lockedPeriodsByClass])
 
   const hasBlockingIssue = overCapacityClasses.length > 0 || overCount > 0
+
+  // Teacher-lock preflight issues (mirrors backend): too-few slots after
+  // locks, lock vs supervision duty, lock vs pinned placement. These produce
+  // 422 errors or make locks look ignored — surface them before generate.
+  const lockIssues = useMemo(
+    () => checkTeacherLockIssues(fixtureData, userPlacements),
+    [fixtureData, userPlacements],
+  )
 
   // Filtered lists based on search query
   const filteredTeachers = useMemo(() => {
@@ -492,6 +504,28 @@ export default function VerificationStep() {
           {overCapacityClasses.length > 0 && (
             <span className="text-red-600">• ห้องเกิน capacity: {overCapacityClasses.length} ห้อง</span>
           )}
+          {lockIssues.length > 0 && (
+            <span className="text-red-600">• ปัญหาการล็อกคาบครู: {lockIssues.length} รายการ</span>
+          )}
+        </div>
+      )}
+
+      {/* Teacher lock issues — conditions that make the solver fail (422) */}
+      {lockIssues.length > 0 && (
+        <div className="card bg-red-50 border-red-200">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <div className="font-bold text-red-900 mb-1">
+                ปัญหาจากการล็อกคาบครู ({lockIssues.length} รายการ) — จะทำให้จัดตารางไม่สำเร็จ
+              </div>
+              <div className="text-red-800 space-y-0.5">
+                {lockIssues.map((issue, i) => (
+                  <div key={i}>• {issue.message}</div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -699,77 +733,13 @@ export default function VerificationStep() {
           </div>
           <div>{error}</div>
           {diagnostics && (
-            <div className="space-y-2 mt-2 text-xs">
-              {diagnostics.class_capacity_issues?.length > 0 && (
-                <div>
-                  <div className="font-semibold underline">ห้องที่คาบเรียนเกินช่องว่าง:</div>
-                  <ul className="list-disc pl-5 mt-1">
-                    {diagnostics.class_capacity_issues.map((c) => (
-                      <li key={c.class_id}>
-                        {c.class_name}: {c.needed_periods}/{c.available_slots} คาบ
-                        (เกิน {c.overflow} คาบ)
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {diagnostics.teacher_overloads?.length > 0 && (
-                <div>
-                  <div className="font-semibold underline">ครูที่ภาระงานเกินขีดจำกัด:</div>
-                  <ul className="list-disc pl-5 mt-1">
-                    {diagnostics.teacher_overloads.map((t) => (
-                      <li key={t.teacher_id}>
-                        {t.teacher_name}: ต้องสอน {t.needed_periods} คาบ
-                        {t.reason === 'over_max' && ` (เกิน max ${t.max_periods_per_week})`}
-                        {t.reason === 'over_available' && ` (ช่องว่างมีแค่ ${t.available_slots})`}
-                        {t.reason === 'under_min' && ` (ต่ำกว่า min ${t.min_periods_per_week})`}
-                        {t.reason === 'am_pm_hard' && ` (โหมด Hard "ว่างเช้า+บ่าย": ต้องสำรองว่าง 2 คาบ/วัน — ลดภาระครู หรือเปลี่ยนเป็น Soft)`}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {diagnostics.room_overloads?.length > 0 && (
-                <div>
-                  <div className="font-semibold underline">ห้องเฉพาะที่ไม่พอ:</div>
-                  <ul className="list-disc pl-5 mt-1">
-                    {diagnostics.room_overloads.map((r) => (
-                      <li key={r.room_id}>
-                        {r.room_name}: ต้องใช้ {r.needed_periods} คาบ
-                        (ช่องว่าง {r.available_slots})
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {diagnostics.fixed_slot_conflicts?.length > 0 && (
-                <div>
-                  <div className="font-semibold underline">คาบที่ล็อกไว้ขัดกับข้อจำกัด:</div>
-                  <ul className="list-disc pl-5 mt-1">
-                    {diagnostics.fixed_slot_conflicts.map((f, i) => (
-                      <li key={i}>
-                        {f.lesson_block_id} ที่ วัน{f.day}-คาบ{f.period}: {f.reason}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {diagnostics.hard_rule_issues?.length > 0 && (
-                <div>
-                  <div className="font-semibold underline">เงื่อนไข Hard ที่จัดไม่ได้:</div>
-                  <ul className="list-disc pl-5 mt-1">
-                    {diagnostics.hard_rule_issues.map((h, i) => (
-                      <li key={i}>{h}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {diagnostics.notes?.length > 0 && (
-                <div className="italic text-gray-600">
-                  {diagnostics.notes.map((n, i) => <div key={i}>{n}</div>)}
-                </div>
-              )}
-            </div>
+            <DiagnosticsPanel
+              diagnostics={diagnostics}
+              fixtureData={fixtureData}
+              onUnpinConflicts={(conflicts) => {
+                conflicts.forEach((c) => removePlacement(c.lesson_block_id, c.day, c.period))
+              }}
+            />
           )}
           <button
             onClick={handleCopyDiagnostics}

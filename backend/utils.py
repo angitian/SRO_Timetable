@@ -69,6 +69,21 @@ def is_in_lunch_window(start_min: int, end_min: int) -> bool:
 
 # ── Slot string helpers ─────────────────────────────────────────────────────
 
+def slot_key(day: int, period) -> str:
+    """Canonical 'day-period' key matching the frontend's `${day}-${period}`.
+
+    period_no may be a float (multi-block SchedulePeriod.period_no, e.g. 3.5
+    for inserted short breaks). Whole floats are rendered without '.0' so a
+    lock sent as '3-5' matches solver-generated keys — without this, every
+    teacher unavailable/admin-free lock was silently ignored in multi-block
+    mode because '3-5.0' != '3-5'.
+    """
+    p = period
+    if isinstance(p, float) and p.is_integer():
+        p = int(p)
+    return f"{day}-{p}"
+
+
 def parse_day_period(slot_str: str) -> tuple[int, int] | None:
     """Parse 'day-period' string (e.g. '1-7') into (day, period) tuple.
 

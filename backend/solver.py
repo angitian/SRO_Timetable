@@ -21,6 +21,7 @@ from utils import (
     get_periods_for_block_on_day,
     filter_study_periods,
     filter_lunch_periods,
+    slot_key,
 )
 
 
@@ -235,10 +236,11 @@ class TimetableSolver:
         teacher = self.teacher_by_id.get(teacher_id)
         if not teacher:
             return False
-        if f"{d}-{p}" in teacher.unavailable_slots:
+        key = slot_key(d, p)
+        if key in teacher.unavailable_slots:
             return True
         # T4: admin free slots are also unavailable for teaching
-        if f"{d}-{p}" in teacher.admin_free_slots:
+        if key in teacher.admin_free_slots:
             return True
         return False
 
@@ -1237,6 +1239,11 @@ class TimetableSolver:
 
         self.solver.parameters.max_time_in_seconds = time_limit
         self.solver.parameters.num_search_workers = 8
+        # Fixed seed: stabilizes CP-SAT's random restarts/strategy selection so
+        # the same input reliably produces a comparable result across runs.
+        # (Full replay-determinism would also need num_search_workers=1, which
+        # is much slower; the seed alone removes most run-to-run variance.)
+        self.solver.parameters.random_seed = 0
 
         # FAST mode: stop at first feasible solution
         # BALANCED/DEEP: let solver run full time limit for optimization
@@ -1258,6 +1265,81 @@ class TimetableSolver:
             max(0, lb.periods_per_week - placed.get(lb.id, 0))
             for lb in self.lb_list
         )
+
+    def _unplaced_block_reports(self, slots: list[ScheduledSlot]) -> list[Any]:
+        """Explain why each partially-placed block could not be placed.
+
+        For every missing block, walk every valid (day, period) of the
+        block's class schedule and tag it with the hard rules that reject it:
+        class occupied by another lesson, class blocked by an activity,
+        teacher busy elsewhere, teacher supervising an activity, teacher
+        unavailable/admin-free, or room busy. Slots with no reason are legal
+        candidates the solver did not use (time limit / pairing effects) and
+        are returned as `open_slots` suggestions.
+        """
+        from models import UnplacedBlockReport, UnplacedSlotInfo
+
+        placed_per_lb: dict[str, int] = {}
+        for s in slots:
+            placed_per_lb[s.lesson_block_id] = placed_per_lb.get(s.lesson_block_id, 0) + 1
+
+        # Occupancy of the returned (partial) solution
+        busy_class: dict[tuple[int, int], set[str]] = {}
+        busy_teacher: dict[tuple[int, int], set[str]] = {}
+        busy_room: dict[tuple[int, int], set[str]] = {}
+        for s in slots:
+            key = (s.day, s.period)
+            busy_class.setdefault(key, set()).add(s.class_id)
+            busy_teacher.setdefault(key, set()).add(s.teacher_id)
+            if s.co_teacher_id:
+                busy_teacher[key].add(s.co_teacher_id)
+            if s.room_id:
+                busy_room.setdefault(key, set()).add(s.room_id)
+
+        reports: list[Any] = []
+        for lb in self.lb_list:
+            missing = lb.periods_per_week - placed_per_lb.get(lb.id, 0)
+            if missing <= 0:
+                continue
+            open_slots: list[UnplacedSlotInfo] = []
+            blocked: list[UnplacedSlotInfo] = []
+            for d in self.days:
+                for p in self._get_valid_periods_for_day(d):
+                    key = (d, p)
+                    reasons: list[str] = []
+                    if lb.class_id in busy_class.get(key, set()):
+                        reasons.append("class_occupied")
+                    if self._is_blocked_for_class(lb.class_id, d, p):
+                        reasons.append("class_activity")
+                    teacher_ids = [lb.teacher_id] + ([lb.co_teacher_id] if lb.co_teacher_id else [])
+                    if any(t in busy_teacher.get(key, set()) for t in teacher_ids):
+                        reasons.append("teacher_busy")
+                    if any(
+                        key in self.fixed_slots_per_teacher.get(t, set())
+                        for t in teacher_ids
+                    ):
+                        reasons.append("teacher_supervising")
+                    if any(
+                        self._is_teacher_unavailable(t, d, p)
+                        or self._is_first_period_blocked(t, p)
+                        or self._is_last_period_blocked(t, d, p)
+                        for t in teacher_ids
+                    ):
+                        reasons.append("teacher_unavailable")
+                    if lb.room_id and lb.room_id in busy_room.get(key, set()):
+                        reasons.append("room_busy")
+                    info = UnplacedSlotInfo(day=d, period=p, reasons=reasons)
+                    if reasons:
+                        blocked.append(info)
+                    else:
+                        open_slots.append(info)
+            reports.append(UnplacedBlockReport(
+                lesson_block_id=lb.id,
+                missing_periods=missing,
+                open_slots=open_slots[:10],
+                blocked_slots=blocked[:20],
+            ))
+        return reports
 
     def solve(self) -> TimetableResponse:
         # Pre-flight validation: catch data-level conflicts (e.g. class over
@@ -1341,11 +1423,31 @@ class TimetableSolver:
         post_diagnostics: DiagnosticsReport | None = None
         if hard_phase_failed and status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             missing = self._missing_period_count(slots)
-            post_diagnostics = DiagnosticsReport(notes=preflight_notes + [
-                f"ยังไม่พบตารางที่วางครบทุกคาบภายในเวลาที่กำหนด — นี่คือตารางที่วางได้มากที่สุด "
-                f"(ขาด {missing} คาบ) แนะนำเพิ่มเวลาคำนวณ (preset ประณีต) "
-                f"หรือลดคาบล็อกกิจกรรม/วิชาในห้องที่เต็ม"
-            ])
+            unplaced = self._unplaced_block_reports(slots)
+            if status == cp_model.OPTIMAL:
+                # OPTIMAL in the completion-maximizing phase proves that no
+                # complete assignment exists under the current hard rules —
+                # every remaining lesson period has no legal slot.
+                note = (
+                    f"พิสูจน์แล้วว่าวางครบไม่ได้ภายใต้เงื่อนไขปัจจุบัน — คาบที่เหลือ "
+                    f"{missing} คาบไม่มีช่องที่ไม่ขัดกฎ (เช่น ครูต้องดูแลกิจกรรม/ติดสอนคลาสอื่น "
+                    f"หรือห้องถูกกิจกรรมบล็อก) ดูรายละเอียดคาบที่เหลือด้านล่าง"
+                )
+            else:
+                note = (
+                    f"ยังไม่พบตารางที่วางครบทุกคาบภายในเวลาที่กำหนด — นี่คือตารางที่วางได้มากที่สุด "
+                    f"(ขาด {missing} คาบ) แนะนำเพิ่มเวลาคำนวณ (preset ประณีต) "
+                    f"ลดคาบล็อกกิจกรรม/วิชาในห้องที่เต็ม หรือวางเองที่ช่องว่างที่ระบบแนะนำ"
+                )
+            post_diagnostics = DiagnosticsReport(
+                teacher_overloads=diagnostics.teacher_overloads,
+                room_overloads=diagnostics.room_overloads,
+                fixed_slot_conflicts=diagnostics.fixed_slot_conflicts,
+                class_capacity_issues=diagnostics.class_capacity_issues,
+                hard_rule_issues=diagnostics.hard_rule_issues,
+                notes=preflight_notes + [note],
+                unplaced_blocks=unplaced,
+            )
         elif status_str == "INFEASIBLE":
             post_diagnostics = DiagnosticsReport(
                 notes=preflight_notes + [

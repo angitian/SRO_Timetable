@@ -32,6 +32,7 @@ from utils import (
     filter_study_periods,
     filter_lunch_periods,
     is_in_lunch_window,
+    slot_key,
 )
 
 
@@ -392,7 +393,7 @@ def _count_teacher_available_slots(
         # Count usable slots
         day_usable = 0
         for (bid, p) in day_study_periods:
-            key = f"{d}-{p}"
+            key = slot_key(d, p)
             if key in unavailable or key in admin_free:
                 continue
             if teacher.no_first_period and p == 1:
@@ -446,7 +447,7 @@ def _count_teacher_available_slots(
                 for lp in _lunch_periods_in_window(blk, d):
                     if lp not in global_day_study:
                         continue
-                    key = f"{d}-{lp}"
+                    key = slot_key(d, lp)
                     if key in unavailable or key in admin_free:
                         continue
                     if teacher.no_first_period and lp == 1:
@@ -680,7 +681,7 @@ def _check_fixed_slot_conflicts(
         teacher = teacher_by_id.get(lb.teacher_id)
         # Teacher unavailable?
         if teacher:
-            key = f"{d}-{p}"
+            key = slot_key(d, p)
             if key in teacher.unavailable_slots or key in teacher.admin_free_slots:
                 report.fixed_slot_conflicts.append(
                     FixedSlotConflict(
@@ -752,7 +753,7 @@ def _check_fixed_slot_conflicts(
             if not teacher:
                 continue
             for p in fs.effective_periods():
-                key = f"{fs.day}-{p}"
+                key = slot_key(fs.day, p)
                 if key in teacher.unavailable_slots or key in teacher.admin_free_slots:
                     report.fixed_slot_conflicts.append(
                         FixedSlotConflict(

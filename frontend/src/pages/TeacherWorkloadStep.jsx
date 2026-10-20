@@ -3,11 +3,12 @@ import {
   Plus, Trash2, ArrowRight, ArrowLeft, User, BookOpen,
   Users, Layers, AlertTriangle, Flag, Home, Compass, X, Pencil,
   Sunrise, Sunset, Sparkles, Ban, Settings, ShieldCheck, ChevronDown,
+  Pin, Lock,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { buildClassBlockMap } from '../utils/periods.js'
 import { getSmartDefaultInfo, getSafetyWarning } from '../utils/smartDefaults.js'
-import { computeTeacherAvailableSlots, computeFixedSupervision } from '../utils/teacherLoad.js'
+import { computeTeacherAvailableSlots, computeFixedSupervision, deriveTeacherPeriodSet, checkTeacherLockIssues, deriveTeacherBlockedCells } from '../utils/teacherLoad.js'
 import { gradeLevelToLabel } from '../utils/gradeLabels.js'
 
 const QUICK_TOGGLES = [
@@ -28,7 +29,7 @@ function getTeacherTypeInfo(type) {
 }
 
 export default function TeacherWorkloadStep() {
-  const { fixtureData, updateFixtureData, setStep } = useApp()
+  const { fixtureData, updateFixtureData, setStep, userPlacements } = useApp()
   const [expandedTeacher, setExpandedTeacher] = useState(null)
   const [showAddTeacher, setShowAddTeacher] = useState(false)
   const [showSubjectMaster, setShowSubjectMaster] = useState(false)
@@ -41,6 +42,21 @@ export default function TeacherWorkloadStep() {
 
   const classBlockMap = useMemo(() => buildClassBlockMap(scheduleBlocks), [scheduleBlocks])
   const blockMap = useMemo(() => new Map(scheduleBlocks.map((b) => [b.id, b])), [scheduleBlocks])
+
+  // Pre-generation lock warnings (mirrors backend preflight): too-few slots
+  // after locks, lock vs supervision duty, lock vs pinned placement.
+  const lockIssues = useMemo(
+    () => checkTeacherLockIssues(fixtureData, userPlacements),
+    [fixtureData, userPlacements],
+  )
+  const lockIssuesByTeacher = useMemo(() => {
+    const map = new Map()
+    for (const i of lockIssues) {
+      if (!map.has(i.teacherId)) map.set(i.teacherId, [])
+      map.get(i.teacherId).push(i)
+    }
+    return map
+  }, [lockIssues])
 
   // Global default ceiling for new teachers / imports (editable in Global Conditions)
   const defaultMaxPeriods = fixtureData?.schedule_config?.default_max_periods_per_week || 30
@@ -240,6 +256,7 @@ export default function TeacherWorkloadStep() {
         const teacherBlockIds = getTeacherBlocks(teacher.id)
         const isCrossBlock = teacherBlockIds.length > 1
         const availableSlots = teacherAvailableMap[teacher.id] || 0
+        const teacherLockIssues = lockIssuesByTeacher.get(teacher.id) || []
 
         return (
           <TeacherCard
@@ -268,6 +285,8 @@ export default function TeacherWorkloadStep() {
             onRemoveLb={(lbId) => removeLessonBlock(lbId)}
             onUpdateLb={(lbId, updates) => updateLessonBlock(lbId, updates)}
             onQuickToggle={(toggle) => addQuickToggle(teacher.id, toggle)}
+            lockIssues={teacherLockIssues}
+            userPlacements={userPlacements}
           />
         )
       })}
@@ -769,7 +788,7 @@ function GlobalConditionsCard({ fixtureData, updateFixtureData }) {
 function TeacherCard({
   teacher, load, pct, isOver, availableSlots, isExpanded, teacherLbs,
   subjects, classes, teachers, subjectMap, classMap, blockMap, classBlockMap,
-  isCrossBlock, teacherBlockIds, fixtureData,
+  isCrossBlock, teacherBlockIds, fixtureData, lockIssues, userPlacements,
   onToggle, onRemove, onUpdateTeacher, onAddLb, onRemoveLb, onUpdateLb, onQuickToggle,
 }) {
   const [showAddRow, setShowAddRow] = useState(false)
@@ -1052,6 +1071,8 @@ function TeacherCard({
           <TeacherPreferencesSection
             teacher={teacher}
             fixtureData={fixtureData}
+            lockIssues={lockIssues}
+            userPlacements={userPlacements}
             onUpdateTeacher={onUpdateTeacher}
           />
 
@@ -1082,7 +1103,7 @@ const PREF_ADMIN_ROLES = [
   { value: 'dept_head', label: 'หัวหน้าหมวด' },
 ]
 
-function TeacherPreferencesSection({ teacher, fixtureData, onUpdateTeacher }) {
+function TeacherPreferencesSection({ teacher, fixtureData, lockIssues = [], userPlacements = {}, onUpdateTeacher }) {
   const smartInfo = useMemo(
     () => getSmartDefaultInfo(teacher, fixtureData),
     [teacher, fixtureData]
@@ -1092,10 +1113,35 @@ function TeacherPreferencesSection({ teacher, fixtureData, onUpdateTeacher }) {
     [teacher, fixtureData]
   )
 
-  const scheduleConfig = fixtureData?.schedule_config || { days_per_week: 5, periods_per_day: 8, lunch_periods: [4] }
-  const days = Array.from({ length: scheduleConfig.days_per_week || 5 }, (_, i) => i + 1)
-  const periods = Array.from({ length: scheduleConfig.periods_per_day || 8 }, (_, i) => i + 1)
-  const lunchSet = new Set(scheduleConfig.lunch_periods || [4])
+  // Grid derived from the schedule blocks THIS teacher teaches in (period_no
+  // union across blocks — may include decimals like 3.5). This matches what
+  // the backend solver checks unavailable_slots against; previously the grid
+  // used only schedule_config (block[0]), which desynced for multi-block data.
+  const teacherPeriods = useMemo(
+    () => deriveTeacherPeriodSet(
+      teacher,
+      fixtureData?.lesson_blocks || [],
+      fixtureData?.schedule_blocks || [],
+      fixtureData?.schedule_config,
+    ),
+    [teacher, fixtureData],
+  )
+  const days = Array.from({ length: teacherPeriods.days }, (_, i) => i + 1)
+  const periods = teacherPeriods.allPeriodNos
+  const studySet = teacherPeriods.studySet
+  const studySetByDay = teacherPeriods.studySetByDay || {}
+  const lunchSet = teacherPeriods.lunchSet
+
+  // Cells already blocked school-wide (กิจกรรม/คาบดูแล/ปักหมุด) — ห้ามล็อก.
+  const blockedCells = useMemo(
+    () => deriveTeacherBlockedCells(teacher, fixtureData, userPlacements),
+    [teacher, fixtureData, userPlacements],
+  )
+  const blockedCount = blockedCells.size
+  const blockedTypes = useMemo(
+    () => new Set([...blockedCells.values()].map((c) => c.kind)),
+    [blockedCells],
+  )
 
   const noFirst = teacher.no_first_period || false
   const noLast = teacher.no_last_period || false
@@ -1132,8 +1178,15 @@ function TeacherPreferencesSection({ teacher, fixtureData, onUpdateTeacher }) {
     onUpdateTeacher({ spread_free_periods: checked })
   }
   function toggleUnavailableSlot(day, period) {
-    if (lunchSet.has(period)) return
+    // Only STUDY periods in at least one of the teacher's blocks ON THAT DAY
+    // are lockable — prevents no-op locks (e.g. clicking the "last" column on
+    // a day that ends earlier in a per-day-variation block).
+    if (!studySet.has(period) || !(studySetByDay[day] || new Set()).has(period)) return
     const key = `${day}-${period}`
+    // ห้ามล็อกช่องที่ถูกกิจกรรม/ปักหมุดบังคับว่างอยู่แล้ว — อนุญาตเฉพาะการ
+    // "ปลด" ล็อกเก่าที่ซ้ำซ้อนออก
+    const bc = blockedCells.get(key)
+    if (bc && bc.kind !== 'class-partial' && !unavailable.includes(key)) return
     const newSlots = unavailable.includes(key)
       ? unavailable.filter((s) => s !== key)
       : [...unavailable, key]
@@ -1146,6 +1199,21 @@ function TeacherPreferencesSection({ teacher, fixtureData, onUpdateTeacher }) {
         <User className="w-4 h-4" />
         เงื่อนไขส่วนตัว
       </div>
+
+      {/* Lock warnings — mirrors backend preflight blocking conditions */}
+      {lockIssues.length > 0 && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-lg p-2.5 space-y-1">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-red-800">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            ล็อกนี้ทำให้จัดตารางไม่ได้ ({lockIssues.length} ปัญหา)
+          </div>
+          {lockIssues.map((issue, i) => (
+            <div key={i} className="text-[11px] text-red-700 leading-snug">
+              • {issue.message}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Workload bounds */}
       <div className="grid grid-cols-2 gap-2">
@@ -1257,6 +1325,14 @@ function TeacherPreferencesSection({ teacher, fixtureData, onUpdateTeacher }) {
         <label className="text-xs font-medium text-gray-600 block mb-1.5 flex items-center gap-1.5">
           <Ban className="w-3.5 h-3.5 text-red-500" />
           ช่องที่ห้ามจัดสอน (คลิกเพื่อสลับ)
+          {teacherPeriods.multiBlock && (
+            <span
+              className="text-[10px] font-normal text-amber-600"
+              title="ครูคนนี้สอนข้ามบล็อก — การล็อก 'วัน-คาบ' มีผลกับเลขคาบเดียวกันของทุกบล็อกที่สอน"
+            >
+              • สอนข้ามบล็อก — ล็อกมีผลทุกบล็อกที่เลขคาบตรงกัน
+            </span>
+          )}
         </label>
         <div className="overflow-x-auto">
           <div
@@ -1264,32 +1340,78 @@ function TeacherPreferencesSection({ teacher, fixtureData, onUpdateTeacher }) {
             style={{ gridTemplateColumns: `42px repeat(${periods.length}, minmax(34px, 1fr))` }}
           >
             <div className="text-[10px] text-gray-400 flex items-center justify-center">วัน\คาบ</div>
-            {periods.map((p) => (
-              <div key={p} className={`text-center text-[10px] font-bold py-0.5 rounded
-                ${lunchSet.has(p) ? 'bg-gray-200 text-gray-400' : 'text-gray-600'}`}>
-                {p}
-              </div>
-            ))}
+            {periods.map((p) => {
+              const isStudy = studySet.has(p)
+              const isLunchSome = lunchSet.has(p)
+              return (
+                <div
+                  key={p}
+                  title={isLunchSome && isStudy ? 'คาบนี้เป็นพักเที่ยงในบางบล็อก แต่เป็นคาบเรียนในบล็อกอื่น' : undefined}
+                  className={`text-center text-[10px] font-bold py-0.5 rounded
+                    ${!isStudy ? 'bg-gray-200 text-gray-400' : isLunchSome ? 'bg-amber-50 text-amber-600' : 'text-gray-600'}`}
+                >
+                  {p}
+                </div>
+              )
+            })}
             {days.map((d) => (
               <div key={d} className="contents">
                 <div className="flex items-center justify-center text-[10px] font-bold text-gray-600 bg-gray-100 rounded">
                   {PREF_DAY_LABELS[d]}
                 </div>
                 {periods.map((p) => {
-                  const isLunch = lunchSet.has(p)
+                  const isStudy = studySet.has(p)
+                  const studyToday = (studySetByDay[d] || new Set()).has(p)
+                  const isLunchSome = lunchSet.has(p)
                   const key = `${d}-${p}`
                   const isUnavailable = unavailable.includes(key)
-                  if (isLunch) {
-                    return <div key={key} className="bg-gray-100 rounded" />
+                  const bc = blockedCells.get(key)
+                  if (!isStudy || !studyToday) {
+                    return (
+                      <div
+                        key={key}
+                        title={isStudy ? 'ไม่มีคาบนี้ในวันนี้ (อยู่ในบางวัน/บางบล็อก)' : undefined}
+                        className="bg-gray-100 rounded"
+                      />
+                    )
+                  }
+                  // School-blocked cell (กิจกรรมทั้งโรงเรียน/คาบดูแล/ปักหมุด/กิจกรรมครบห้อง)
+                  // — ห้ามล็อก แต่ถ้าผู้ใช้ล็อกซ้ำไว้อยู่แล้ว ให้คลิกเพื่อปลดล็อกซ้ำได้
+                  if (bc && bc.kind !== 'class-partial') {
+                    const kindStyle = {
+                      pinned: 'bg-purple-100 border-purple-400 text-purple-600',
+                      supervision: 'bg-blue-100 border-blue-300 text-blue-600',
+                      assembly: 'bg-sky-50 border-sky-300 text-sky-500',
+                      'class-full': 'bg-slate-100 border-slate-300 text-slate-500',
+                    }[bc.kind]
+                    const KindIcon = bc.kind === 'pinned' ? Pin : bc.kind === 'supervision' ? ShieldCheck : Lock
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        disabled={!isUnavailable}
+                        onClick={isUnavailable ? () => toggleUnavailableSlot(d, p) : undefined}
+                        title={bc.title + (isUnavailable ? ' (ล็อกซ้ำซ้อน — คลิกเพื่อปลดล็อก)' : '')}
+                        className={`w-full h-8 rounded text-[10px] font-medium border-2 transition-all flex items-center justify-center
+                          ${kindStyle} ${isUnavailable ? 'ring-1 ring-red-400' : 'opacity-80'}`}
+                      >
+                        <KindIcon className="w-3 h-3" />
+                      </button>
+                    )
                   }
                   return (
                     <button
                       key={key}
                       onClick={() => toggleUnavailableSlot(d, p)}
+                      title={bc?.title || (isLunchSome ? 'คาบนี้เป็นพักเที่ยงในบางบล็อก — ล็อกจะมีผลเฉพาะบล็อกที่เป็นคาบเรียน' : undefined)}
                       className={`w-full h-8 rounded text-[10px] font-medium border-2 transition-all
                         ${isUnavailable
                           ? 'bg-red-100 border-red-400 text-red-700'
-                          : 'bg-white border-gray-200 text-gray-300 hover:border-gray-300'
+                          : bc?.kind === 'class-partial'
+                            ? 'bg-amber-50/60 border-amber-300 border-dashed text-amber-600 hover:border-amber-500'
+                            : isLunchSome
+                              ? 'bg-amber-50/50 border-amber-200 text-amber-500 hover:border-amber-400'
+                              : 'bg-white border-gray-200 text-gray-300 hover:border-gray-300'
                         }`}
                     >
                       {isUnavailable ? '✕' : ''}
@@ -1310,6 +1432,36 @@ function TeacherPreferencesSection({ teacher, fixtureData, onUpdateTeacher }) {
                 </span>
               )
             })}
+          </div>
+        )}
+        {blockedCount > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-[10px] text-gray-500">
+            <span className="font-medium text-gray-600">ช่องที่ไม่ต้องล็อก (ถูกบังคับว่างอยู่แล้ว):</span>
+            {blockedTypes.has('pinned') && (
+              <span className="inline-flex items-center gap-0.5 text-purple-600">
+                <Pin className="w-3 h-3" /> คาบปักหมุด
+              </span>
+            )}
+            {blockedTypes.has('supervision') && (
+              <span className="inline-flex items-center gap-0.5 text-blue-600">
+                <ShieldCheck className="w-3 h-3" /> คาบดูแลกิจกรรม
+              </span>
+            )}
+            {blockedTypes.has('assembly') && (
+              <span className="inline-flex items-center gap-0.5 text-sky-600">
+                <Lock className="w-3 h-3" /> กิจกรรมทุกห้อง
+              </span>
+            )}
+            {blockedTypes.has('class-full') && (
+              <span className="inline-flex items-center gap-0.5 text-slate-500">
+                <Lock className="w-3 h-3" /> กิจกรรมห้องที่สอน
+              </span>
+            )}
+            {blockedTypes.has('class-partial') && (
+              <span className="border-b border-dashed border-amber-400 text-amber-600">
+                กิจกรรมบางห้อง (ล็อกเพิ่มได้)
+              </span>
+            )}
           </div>
         )}
       </div>

@@ -13,6 +13,7 @@ import {
   getUserId,
 } from '../api/client.js'
 import { cacheTimetable, getCachedTimetable, getCachedMeta, clearCache } from '../utils/cache.js'
+import { checkResultAgainstLocks } from '../utils/teacherLoad.js'
 import { resolveSolverParams } from '../utils/scoreCalculator.js'
 import {
   listSnapshots,
@@ -27,12 +28,39 @@ import {
 
 const AppContext = createContext(null)
 
+// Sentinels meaning "every class" stored literally by older data instead of []
+const ALL_CLASSES_SENTINELS = new Set(['ทุกห้อง', 'ทุกห้องเรียน', 'ทุกชั้น', 'ทุกห้องเรียนในชั้น', 'all', 'every'])
+const SLOT_KEY_RE = /^\d+-\d+(\.\d+)?$/
+
+// Normalize a fixture payload once at load time so every downstream consumer
+// (UI grids, payload builder, capacity checks) sees canonical data:
+//  - fixed_slots.class_ids: 'ทุกห้อง' sentinels → removed (empty = all classes)
+//  - teachers.unavailable_slots/admin_free_slots: null → [], garbage like '—' dropped
+function normalizeFixtureData(data) {
+  if (!data) return data
+  const fixed_slots = (data.fixed_slots || []).map((fs) => ({
+    ...fs,
+    class_ids: (fs.class_ids || []).filter(
+      (c) => c != null && !ALL_CLASSES_SENTINELS.has(String(c).trim().toLowerCase()),
+    ),
+  }))
+  const teachers = (data.teachers || []).map((t) => ({
+    ...t,
+    unavailable_slots: (t.unavailable_slots || []).filter((s) => SLOT_KEY_RE.test(s)),
+    admin_free_slots: (t.admin_free_slots || []).filter((s) => SLOT_KEY_RE.test(s)),
+  }))
+  return { ...data, fixed_slots, teachers }
+}
+
 const initialState = {
   selectedFixture: 'small',
   fixtureData: null,
   isLoadingFixture: false,
   isGenerating: false,
   result: null,
+  // resultStale: true when the displayed result came from the offline cache
+  // because the latest solve failed — the grid may not reflect current data.
+  resultStale: false,
   error: null,
   errorResponse: null, // full TimetableResponse payload when 422 INFEASIBLE
   activeStep: 0,
@@ -79,12 +107,13 @@ function reducer(state, action) {
       return {
         ...state,
         fixtureData: action.payload
-          ? { ...action.payload, special_rooms: action.payload.special_rooms || [] }
+          ? normalizeFixtureData({ ...action.payload, special_rooms: action.payload.special_rooms || [] })
           : action.payload,
         isLoadingFixture: false,
         isDirty: false,
         // ล้าง result/placements เก่าเมื่อเปลี่ยน fixture
         result: null,
+        resultStale: false,
         userPlacements: {},
         substitutes: [],
         dailySchedules: {},
@@ -97,7 +126,21 @@ function reducer(state, action) {
     case 'SET_GENERATING':
       return { ...state, isGenerating: action.payload }
     case 'SET_RESULT':
-      return { ...state, result: action.payload, isGenerating: false, error: null, errorResponse: null, isDirty: false, activeStep: 5 }
+      return { ...state, result: action.payload, resultStale: false, isGenerating: false, error: null, errorResponse: null, isDirty: false, activeStep: 5 }
+    case 'SET_STALE_RESULT':
+      // Backend solve failed but a cached timetable exists — show it while
+      // keeping the error visible so the user knows the grid is stale and
+      // their newest changes (e.g. locked slots) are NOT reflected.
+      return {
+        ...state,
+        result: action.payload.result,
+        resultStale: true,
+        isGenerating: false,
+        isDirty: true,
+        error: action.payload.message,
+        errorResponse: action.payload.response || null,
+        activeStep: 5,
+      }
     case 'SET_ERROR':
       return { ...state, error: action.payload.message, errorResponse: action.payload.response || null, isGenerating: false }
     case 'SET_STEP':
@@ -116,13 +159,14 @@ function reducer(state, action) {
       return {
         ...state,
         fixtureData: action.payload
-          ? { ...action.payload, special_rooms: action.payload.special_rooms || [] }
+          ? normalizeFixtureData({ ...action.payload, special_rooms: action.payload.special_rooms || [] })
           : action.payload,
         isLoadingFixture: false,
         selectedFixture: 'custom',
         isDirty: true,
         // ล้าง state เก่าทั้งหมดเมื่ออัปโหลดไฟล์ใหม่/สร้างใหม่
         result: null,
+        resultStale: false,
         userPlacements: {},
         substitutes: [],
         dailySchedules: {},
@@ -133,7 +177,7 @@ function reducer(state, action) {
         cacheHint: null,
       }
     case 'UPDATE_FIXTURE_DATA':
-      return { ...state, fixtureData: { ...state.fixtureData, ...action.payload }, isDirty: true }
+      return { ...state, fixtureData: normalizeFixtureData({ ...state.fixtureData, ...action.payload }), isDirty: true }
     case 'SET_DIRTY':
       return { ...state, isDirty: action.payload }
     case 'SET_CACHE_INFO':
@@ -231,7 +275,7 @@ function reducer(state, action) {
       // Keep cacheKey so the result-cache effect (below) can delete the stale
       // IndexedDB entry — otherwise "ทำงานต่อ" would resurrect the old result.
       // cacheHint is cleared so the resume card disappears in this session too.
-      return { ...state, result: null, error: null, errorResponse: null, lastSync: null, cacheHint: null }
+      return { ...state, result: null, resultStale: false, error: null, errorResponse: null, lastSync: null, cacheHint: null }
     case 'RESTORE_PLACEMENTS': {
       // Filter out placements whose lesson_block_id no longer exists in the
       // current fixtureData. This prevents stale placements from a previous
@@ -252,6 +296,7 @@ function reducer(state, action) {
         ...state,
         userPlacements: {},
         result: null,
+        resultStale: false,
         error: null,
         errorResponse: null,
         lastSync: null,
@@ -378,7 +423,7 @@ function reducer(state, action) {
       return {
         ...state,
         result: action.payload.result,
-        fixtureData: action.payload.fixtureData,
+        fixtureData: normalizeFixtureData(action.payload.fixtureData),
         userPlacements: filteredPlacements,
         substitutes: Array.isArray(action.payload.substitutes) ? action.payload.substitutes : [],
         dailySchedules: (action.payload.dailySchedules && typeof action.payload.dailySchedules === 'object') ? action.payload.dailySchedules : {},
@@ -387,6 +432,10 @@ function reducer(state, action) {
         lastSync: action.payload.lastSync,
         isLoadingFixture: false,
         isDirty: false,
+        // resumeFromCache marks the restored result stale when it violates the
+        // current locks (i.e. the timetable predates them) so Step 5 shows the
+        // stale banner instead of silently displaying an out-of-date grid.
+        resultStale: action.payload.resultStale || false,
         activeStep: 5,
       }
     }
@@ -399,7 +448,7 @@ function reducer(state, action) {
       return {
         ...state,
         fixtureData: action.payload.fixtureData
-          ? { ...action.payload.fixtureData, special_rooms: action.payload.fixtureData.special_rooms || [] }
+          ? normalizeFixtureData({ ...action.payload.fixtureData, special_rooms: action.payload.fixtureData.special_rooms || [] })
           : null,
         result: action.payload.result,
         userPlacements: action.payload.userPlacements || {},
@@ -415,6 +464,7 @@ function reducer(state, action) {
         lastSnapshotSaveAt: action.payload.updatedAt || Date.now(),
         error: null,
         errorResponse: null,
+        resultStale: false,
         cacheHint: null,
         cacheKey: `timetable_${action.payload.fixtureName || 'custom'}`,
         activeStep: 5,
@@ -461,7 +511,7 @@ function reducer(state, action) {
       const ws = action.payload
       return {
         ...state,
-        fixtureData: ws.fixtureData || null,
+        fixtureData: normalizeFixtureData(ws.fixtureData) || null,
         result: ws.result || null,
         userPlacements: ws.userPlacements || {},
         substitutes: ws.substitutes || [],
@@ -476,6 +526,7 @@ function reducer(state, action) {
         isDirty: false,
         error: null,
         errorResponse: null,
+        resultStale: false,
         cacheHint: null,
         // Cloud workspaces don't carry a fixture name — track under the
         // current fixture's cache key only when there IS a result, so the
@@ -854,6 +905,28 @@ export function AppProvider({ children }) {
       // The legacy generateFromFile path ignored these parameters.
       let payload = {
         ...currentFixtureData,
+        // Normalize optional teacher fields that older fixtures/snapshots may
+        // store as `null` — pydantic rejects null and the whole request would
+        // fail validation (silently falling back to the cached timetable).
+        teachers: (currentFixtureData.teachers || []).map((t) => ({
+          ...t,
+          // Drop nulls AND garbage entries like '—' (em-dash placeholder from
+          // old Excel imports) — only 'day-period' keys are valid.
+          unavailable_slots: (t.unavailable_slots || []).filter((s) => /^\d+-\d+(\.\d+)?$/.test(s)),
+          admin_free_slots: (t.admin_free_slots || []).filter((s) => /^\d+-\d+(\.\d+)?$/.test(s)),
+          no_first_period: !!t.no_first_period,
+          no_last_period: !!t.no_last_period,
+          admin_role: t.admin_role || 'none',
+        })),
+        // Normalize fixed_slots class_ids — old snapshots may store the literal
+        // 'ทุกห้อง' string instead of [] (assembly). Without this the sentinel
+        // was treated as a non-existent class id and the activity blocked nothing.
+        fixed_slots: (currentFixtureData.fixed_slots || []).map((fs) => ({
+          ...fs,
+          class_ids: (fs.class_ids || []).filter(
+            (c) => !['ทุกห้อง', 'ทุกห้องเรียน', 'ทุกชั้น', 'all', 'every'].includes(String(c).trim().toLowerCase()),
+          ),
+        })),
         optimization_mode: optimizationMode,
         solver_time_limit_seconds: timeLimitSeconds,
       }
@@ -902,10 +975,22 @@ export function AppProvider({ children }) {
       try {
         const cached = await getCachedTimetable(cacheKey)
         if (cached?.result) {
-          dispatch({ type: 'SET_RESULT', payload: cached.result })
           if (cached.fixtureData && !state.fixtureData) {
             dispatch({ type: 'SET_FIXTURE_DATA', payload: cached.fixtureData })
           }
+          // Keep the cached timetable visible BUT surface the error: the grid
+          // now shows stale data that does not include the user's latest
+          // changes (e.g. locked slots). Previously this silently dispatched
+          // SET_RESULT, which cleared the error and looked like the lock was
+          // ignored.
+          dispatch({
+            type: 'SET_STALE_RESULT',
+            payload: {
+              result: cached.result,
+              message: `จัดตารางไม่สำเร็จ — กำลังแสดงผลลัพธ์เก่าจากแคช: ${err.message}`,
+              response: err.payload || null,
+            },
+          })
           dispatch({ type: 'SET_CACHE_INFO', payload: { cacheKey, lastSync: cached._cachedAt } })
         } else {
           // err.payload holds the full TimetableResponse (with diagnostics)
@@ -947,17 +1032,24 @@ export function AppProvider({ children }) {
           return fallback
         }
       }
+      // Detect whether the cached result violates the CURRENT locks in the
+      // cached fixtureData — a correct solve can never contain these, so any
+      // hit means the timetable predates the locks. Mark stale so Step 5 shows
+      // the banner instead of silently displaying an out-of-date timetable.
+      const restoredPlacements = readLocal(`placements_${fixtureName}`, cached.userPlacements || {})
+      const staleViolations = checkResultAgainstLocks(cached.result, cached.fixtureData, restoredPlacements)
       dispatch({
         type: 'RESTORE_FROM_CACHE',
         payload: {
           result: cached.result,
           fixtureData: cached.fixtureData,
-          userPlacements: readLocal(`placements_${fixtureName}`, cached.userPlacements || {}),
+          userPlacements: restoredPlacements,
           substitutes: readLocal(`substitutes_${fixtureName}`, cached.substitutes || []),
           dailySchedules: readLocal(`daily_schedules_${fixtureName}`, cached.dailySchedules || {}),
           selectedFixture: fixtureName,
           cacheKey,
           lastSync: cached._cachedAt,
+          resultStale: staleViolations.length > 0,
         },
       })
       return { ok: true }

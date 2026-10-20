@@ -317,6 +317,37 @@ def main():
     success = test_am_pm_hard_with_blocks()
     all_pass = all_pass and success
 
+    # Period-key normalization + determinism regression tests
+    print(f"\n{'='*60}")
+    print("  TESTING LOCK KEY NORMALIZATION + SEED (multi-block regression)")
+    print(f"{'='*60}")
+
+    success = test_unavailable_slots_multiblock_float_period()
+    all_pass = all_pass and success
+
+    success = test_admin_free_and_first_last_multiblock()
+    all_pass = all_pass and success
+
+    success = test_teacher_null_fields_normalized()
+    all_pass = all_pass and success
+
+    success = test_preflight_agrees_with_solver_on_locks()
+    all_pass = all_pass and success
+
+    success = test_solver_seed_run_stability()
+    all_pass = all_pass and success
+
+    # Data-quality normalization regression tests
+    print(f"\n{'='*60}")
+    print("  TESTING DATA NORMALIZATION (sentinels + garbage keys)")
+    print(f"{'='*60}")
+
+    success = test_all_classes_sentinel_normalized()
+    all_pass = all_pass and success
+
+    success = test_garbage_slot_keys_filtered()
+    all_pass = all_pass and success
+
     print(f"\n{'='*60}")
     if all_pass:
         print("  🎉 ALL TESTS PASSED")
@@ -1836,6 +1867,268 @@ def test_am_pm_hard_with_blocks() -> bool:
         return False
 
     print(f"  ✅ PASS: block mode + hard — no crash, ครูทุกคนมีว่างเช้า+บ่าย")
+    return True
+
+
+def _multiblock_lock_request(**teacher_overrides) -> TimetableRequest:
+    """Synthetic multi-block request: 1 teacher / 1 class / 1 subject,
+    6 study periods/day x 5 days (lunch period 4). SchedulePeriod.period_no
+    is a float in the model, so keys were previously serialized as 'd-p.0'
+    and never matched UI locks like 'd-p' — the root cause of the
+    "ล็อกบางรอบทำได้บางรอบไม่ได้" bug in multi-block mode."""
+    block = ScheduleBlock(
+        id="B1", name="Block", target_classes=["C1"], days_per_week=5,
+        start_time="08:30", period_duration_mins=50, break_duration_mins=10,
+        periods=_single_block_periods(), apply_to_all_days=True,
+    )
+    teacher = Teacher(id="T1", name="ครู A", max_periods_per_week=30,
+                      min_periods_per_week=0, **teacher_overrides)
+    subj = Subject(id="S1", name="คณิตศาสตร์", category=SubjectCategory.CORE)
+    return TimetableRequest(
+        teachers=[teacher],
+        rooms=[Room(id="R_C1", name="R_C1")],
+        subjects=[subj],
+        classes=[ClassGroup(id="C1", name="ป.1/1", grade_level=1)],
+        lesson_blocks=[LessonBlock(id="LB1", subject_id="S1", teacher_id="T1",
+                                   class_id="C1", room_id="R_C1",
+                                   periods_per_week=10, block_id="B1")],
+        fixed_slots=[],
+        schedule_blocks=[block],
+    )
+
+
+def test_unavailable_slots_multiblock_float_period() -> bool:
+    """unavailable_slots '1-2' must block period_no=2.0 in multi-block mode."""
+    print(f"\n{'='*60}")
+    print("  TEST: unavailable_slots multi-block (float period_no key match)")
+    print(f"{'='*60}")
+
+    request = _multiblock_lock_request(unavailable_slots=["1-2", "2-3"])
+    result = TimetableSolver(request).solve()
+
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE (locks should leave 28 free slots)")
+        return False
+
+    violations = [
+        f"T1 teaching at locked ({s.day},{s.period})"
+        for s in result.slots
+        if (s.day, s.period) in ((1, 2), (2, 3))
+    ]
+    if violations:
+        print(f"  ❌ FAIL: {len(violations)} violation(s)")
+        for v in violations:
+            print(f"     - {v}")
+        return False
+    print(f"  ✅ PASS: locks '1-2','2-3' respected in multi-block mode "
+          f"({len(result.slots)} slots placed)")
+    return True
+
+
+def test_admin_free_and_first_last_multiblock() -> bool:
+    """admin_free_slots / no_first_period / no_last_period must also match
+    normalized keys in multi-block mode."""
+    print(f"\n{'='*60}")
+    print("  TEST: admin_free_slots + no_first/last multi-block")
+    print(f"{'='*60}")
+
+    request = _multiblock_lock_request(
+        admin_free_slots=["3-5"],
+        no_first_period=True,
+        no_last_period=True,
+    )
+    result = TimetableSolver(request).solve()
+
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE")
+        return False
+
+    violations = []
+    for s in result.slots:
+        if (s.day, s.period) == (3, 5):
+            violations.append(f"T1 teaching at admin-free (3,5)")
+        if s.period == 1:
+            violations.append(f"T1 teaching at first period D{s.day}")
+        if s.period == 7:
+            violations.append(f"T1 teaching at last period D{s.day}")
+    if violations:
+        print(f"  ❌ FAIL: {len(violations)} violation(s)")
+        for v in violations[:8]:
+            print(f"     - {v}")
+        return False
+    print(f"  ✅ PASS: admin-free '3-5', first(1) & last(7) periods all free")
+    return True
+
+
+def test_teacher_null_fields_normalized() -> bool:
+    """null teacher fields from old fixtures/snapshots must not crash validation."""
+    print(f"\n{'='*60}")
+    print("  TEST: Teacher null-field normalization (pydantic)")
+    print(f"{'='*60}")
+
+    try:
+        t = Teacher(
+            id="T1", name="ครู A",
+            unavailable_slots=None,
+            admin_free_slots=None,
+            no_first_period=None,
+            no_last_period=None,
+            admin_role=None,
+            spread_free_periods=None,
+            enable_consecutive_limit=None,
+            is_consecutive_customized=None,
+        )
+    except Exception as e:
+        print(f"  ❌ FAIL: Teacher(**nulls) raised {type(e).__name__}: {e}")
+        return False
+
+    ok = (t.unavailable_slots == [] and t.admin_free_slots == []
+          and t.no_first_period is False and t.no_last_period is False
+          and t.enable_consecutive_limit is True)
+    if not ok:
+        print(f"  ❌ FAIL: unexpected normalized values: {t.model_dump()}")
+        return False
+
+    # Real values still preserved
+    t2 = Teacher(id="T2", name="ครู B", unavailable_slots=["1-2"], no_first_period=True)
+    if t2.unavailable_slots != ["1-2"] or t2.no_first_period is not True:
+        print(f"  ❌ FAIL: real values clobbered: {t2.model_dump()}")
+        return False
+    print(f"  ✅ PASS: nulls -> []/False, real values preserved")
+    return True
+
+
+def test_preflight_agrees_with_solver_on_locks() -> bool:
+    """Preflight available-slot count must equal solver eligibility:
+    30 study slots - 2 unavailable - 1 admin-free = 27."""
+    print(f"\n{'='*60}")
+    print("  TEST: preflight/solver agreement on normalized lock keys")
+    print(f"{'='*60}")
+
+    request = _multiblock_lock_request(
+        unavailable_slots=["1-2", "4-6"],
+        admin_free_slots=["5-3"],
+    )
+    report = run_preflight(request)
+    if report.has_blocking_issues():
+        print(f"  ❌ FAIL: preflight flagged issues on a feasible request: "
+              f"{[t.reason for t in report.teacher_overloads]}")
+        return False
+
+    from preflight import (
+        _count_teacher_available_slots,
+        _build_class_to_block,
+        _build_assembly_and_class_blocks,
+        _build_fixed_slot_teacher_map,
+    )
+    ctb = _build_class_to_block(request)
+    bby = {b.id: b for b in request.schedule_blocks}
+    asm, fpc = _build_assembly_and_class_blocks(request)
+    fpt = _build_fixed_slot_teacher_map(request)
+    avail = _count_teacher_available_slots(
+        request.teachers[0], request, ctb, bby, asm, fpc, fpt,
+    )
+    if avail != 27:
+        print(f"  ❌ FAIL: expected 27 available slots (30 - 3 locked), got {avail}")
+        return False
+
+    result = TimetableSolver(request).solve()
+    bad = [s for s in result.slots
+           if (s.day, s.period) in ((1, 2), (4, 6), (5, 3))]
+    if bad:
+        print(f"  ❌ FAIL: solver placed {len(bad)} slot(s) in locked periods")
+        return False
+    print(f"  ✅ PASS: preflight available=27, solver respects all 3 locks")
+    return True
+
+
+def test_solver_seed_run_stability() -> bool:
+    """Solving the same request twice must always satisfy the hard locks.
+
+    With num_search_workers=8 CP-SAT interleaving is intentionally racy — the
+    exact timetable may differ run-to-run, and that's acceptable. What must
+    NOT vary is hard-constraint compliance: every run must be feasible and
+    must respect every unavailable/admin-free lock. This guards against a
+    regression where the lock check stops applying (e.g. key-format drift)."""
+    print(f"\n{'='*60}")
+    print("  TEST: solver run stability (hard locks hold every run)")
+    print(f"{'='*60}")
+
+    request = _multiblock_lock_request(
+        unavailable_slots=["1-2", "2-3", "5-6"],
+        admin_free_slots=["3-5"],
+    )
+    locked = {(1, 2), (2, 3), (5, 6), (3, 5)}
+
+    for run in (1, 2, 3):
+        result = TimetableSolver(request).solve()
+        if result.metrics.status == "INFEASIBLE":
+            print(f"  ❌ FAIL: run {run} INFEASIBLE on a feasible request")
+            return False
+        bad = [s for s in result.slots if (s.day, s.period) in locked]
+        if bad:
+            print(f"  ❌ FAIL: run {run} placed {len(bad)} slot(s) in locked periods")
+            return False
+
+    print(f"  ✅ PASS: 3 runs all feasible, all 4 locks respected every time")
+    return True
+
+
+def test_all_classes_sentinel_normalized() -> bool:
+    """class_ids=['ทุกห้อง'] (legacy literal) must behave like [] = all classes.
+
+    Real-world snapshots stored the literal string 'ทุกห้อง' which was treated
+    as a non-existent class id — homeroom/scout slots silently blocked NOTHING
+    and the solver happily placed lessons during them."""
+    print(f"\n{'='*60}")
+    print("  TEST: 'ทุกห้อง' sentinel in class_ids -> all-classes assembly")
+    print(f"{'='*60}")
+
+    fs = FixedSlot(id="FS1", name="โฮมรูม", slot_type=FixedSlotType.HOMEROOM,
+                   day=1, period=1, class_ids=["ทุกห้อง"])
+    if fs.class_ids != []:
+        print(f"  ❌ FAIL: 'ทุกห้อง' not normalized, class_ids={fs.class_ids}")
+        return False
+
+    # Mixed list keeps real ids, drops sentinel
+    fs2 = FixedSlot(id="FS2", name="x", slot_type=FixedSlotType.SCOUT, day=1, period=2,
+                    class_ids=["C1", "ทุกห้อง", "C2"])
+    if fs2.class_ids != ["C1", "C2"]:
+        print(f"  ❌ FAIL: mixed list mangled, class_ids={fs2.class_ids}")
+        return False
+
+    request = _synthetic_request(fixed_slots=[
+        FixedSlot(id="FS3", name="ลูกเสือ", slot_type=FixedSlotType.SCOUT,
+                  day=1, period=6, class_ids=["ทุกห้อง"]),
+    ])
+    result = TimetableSolver(request).solve()
+    if result.metrics.status == "INFEASIBLE":
+        print(f"  ❌ FAIL: INFEASIBLE")
+        return False
+    violations = [s for s in result.slots if s.day == 1 and s.period == 6]
+    if violations:
+        print(f"  ❌ FAIL: {len(violations)} slot(s) placed during 'ทุกห้อง' activity")
+        return False
+    print(f"  ✅ PASS: 'ทุกห้อง' -> [], (1,6) blocked for every class")
+    return True
+
+
+def test_garbage_slot_keys_filtered() -> bool:
+    """Garbage slot keys like '—' (em-dash from old Excel imports) are dropped.
+
+    They could never match a 'day-period' key so the lock was silently dead;
+    they also polluted the UI lock chips."""
+    print(f"\n{'='*60}")
+    print("  TEST: garbage unavailable/admin-free slot keys filtered")
+    print(f"{'='*60}")
+
+    t = Teacher(id="T1", name="ครู A",
+                unavailable_slots=["—", "  ", "ไม่มี", "1-2"],
+                admin_free_slots=["-", "3-4"])
+    if t.unavailable_slots != ["1-2"] or t.admin_free_slots != ["3-4"]:
+        print(f"  ❌ FAIL: slots={t.unavailable_slots} admin={t.admin_free_slots}")
+        return False
+    print(f"  ✅ PASS: '—'/garbage dropped, real keys kept")
     return True
 
 

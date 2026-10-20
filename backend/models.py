@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re as _re
 from enum import Enum
 from typing import Optional
 
@@ -97,6 +98,35 @@ class Teacher(BaseModel):
         description="Soft constraint: teacher should have >=1 free period in the morning AND >=1 free period in the afternoon each day (opt-in)",
     )
 
+    @field_validator(
+        "unavailable_slots", "admin_free_slots",
+        "no_first_period", "no_last_period", "admin_role",
+        "spread_free_periods", "enable_consecutive_limit",
+        "is_consecutive_customized",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_nullable_fields(cls, v, info):
+        """Backward compat: older fixtures/snapshots may store optional fields
+        as `null`. Pydantic rejects null for non-Optional fields and the whole
+        request would fail validation — coerce to sane defaults instead."""
+        if v is not None:
+            if info.field_name in ("unavailable_slots", "admin_free_slots"):
+                # Drop garbage entries like '—' (em-dash placeholder from old
+                # Excel imports) that can never match a 'day-period' key.
+                return [
+                    str(s).strip() for s in v
+                    if isinstance(s, str) and _SLOT_KEY_RE.match(str(s).strip())
+                ]
+            return v
+        if info.field_name in ("unavailable_slots", "admin_free_slots"):
+            return []
+        if info.field_name == "admin_role":
+            return AdminRole.NONE
+        if info.field_name == "enable_consecutive_limit":
+            return True
+        return False
+
 
 class Room(BaseModel):
     id: str
@@ -157,6 +187,18 @@ class LessonBlock(BaseModel):
     block_id: Optional[str] = Field(default=None, description="Schedule block this lesson belongs to (auto-derived from class)")
 
 
+_SLOT_KEY_RE = _re.compile(r"^\d+-\d+(?:\.\d+)?$")
+
+
+# class_ids values meaning "every class" (assembly). Older snapshots/imports
+# may store the literal string 'ทุกห้อง' instead of an empty list — without
+# normalization the sentinel is treated as a non-existent class id, so the
+# fixed slot silently blocks NOTHING.
+ALL_CLASSES_SENTINELS = {
+    "ทุกห้อง", "ทุกห้องเรียน", "ทุกชั้น", "all", "every", "ทุกห้องเรียนในชั้น",
+}
+
+
 class FixedSlot(BaseModel):
     id: str
     name: str
@@ -175,6 +217,25 @@ class FixedSlot(BaseModel):
         default_factory=dict,
         description="ครูผู้ดูแลกิจกรรมรายชั้น: { class_id: [teacher_id, ...] } — รองรับหลายครูต่อห้อง; ครูทุกคนที่เข้าร่วมนับภาระ 1 คาบ/สัปดาห์ (ไม่คูณจำนวนห้อง)",
     )
+
+    @field_validator("class_ids", mode="before")
+    @classmethod
+    def _normalize_class_ids(cls, v):
+        """Empty list = all classes. Older snapshots/imports may store the
+        literal string 'ทุกห้อง' (or 'all'/'every') instead of an empty list —
+        without this the sentinel was treated as a non-existent class id and
+        the fixed slot silently blocked NOTHING."""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = [v]
+        out = [
+            str(c).strip() for c in v
+            if c is not None and str(c).strip()
+            and str(c).strip().lower() not in ALL_CLASSES_SENTINELS
+            and str(c).strip() not in ALL_CLASSES_SENTINELS
+        ]
+        return out
 
     @field_validator("class_teachers", mode="before")
     @classmethod
@@ -456,6 +517,29 @@ class ClassCapacityIssue(BaseModel):
     overflow: int  # needed - available (positive when over capacity)
 
 
+class UnplacedSlotInfo(BaseModel):
+    """One candidate (day, period) for an unplaced lesson block, annotated with
+    every hard-rule reason that blocks it — or empty reasons when the slot is
+    legal but the solver simply did not use it."""
+    day: int
+    period: float  # float to support decimal period_no in multi-block schedules
+    reasons: list[str] = Field(default_factory=list)
+    # reason codes: class_occupied | class_activity | teacher_busy |
+    # teacher_supervising | teacher_unavailable | room_busy
+
+
+class UnplacedBlockReport(BaseModel):
+    """Why a lesson block could not be fully placed.
+
+    `open_slots` are legal candidates under every hard rule (the solver did
+    not use them — typically a time limit or pairing interaction);
+    `blocked_slots` carry the reasons so the UI can explain the conflict."""
+    lesson_block_id: str
+    missing_periods: int
+    open_slots: list[UnplacedSlotInfo] = Field(default_factory=list)
+    blocked_slots: list[UnplacedSlotInfo] = Field(default_factory=list)
+
+
 class DiagnosticsReport(BaseModel):
     teacher_overloads: list[TeacherOverload] = Field(default_factory=list)
     room_overloads: list[RoomOverload] = Field(default_factory=list)
@@ -464,6 +548,10 @@ class DiagnosticsReport(BaseModel):
     hard_rule_issues: list[str] = Field(
         default_factory=list,
         description="Human-readable reasons why a HARD global rule is provably impossible",
+    )
+    unplaced_blocks: list[UnplacedBlockReport] = Field(
+        default_factory=list,
+        description="Per-lesson-block explanation when the solver left periods unplaced",
     )
     notes: list[str] = Field(default_factory=list)
 

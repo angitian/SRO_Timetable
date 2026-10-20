@@ -551,13 +551,18 @@ def _parse_sheet(ws) -> tuple[list[str], list[list[str]]]:
 
 
 def _parse_unavailable_slots(raw: str) -> list[str]:
-    """Parse comma-separated 'day-period' strings, e.g. '1-5, 2-3' → ['1-5', '2-3']."""
+    """Parse comma-separated 'day-period' strings, e.g. '1-5, 2-3' → ['1-5', '2-3'].
+
+    Skips non-slot placeholders like '—', '-', 'ไม่มี', 'ว่าง', 'none' so they
+    don't pollute unavailable_slots (they never match 'day-period' keys but
+    pollute the data)."""
     if not raw:
         return []
+    _GARBAGE = {"—", "-", "–", "ไม่มี", "ว่าง", "none", "-", "n/a", "ไม่ต้องการ"}
     slots = []
     for part in raw.split(","):
         part = part.strip()
-        if not part:
+        if not part or part.lower() in _GARBAGE:
             continue
         m = re.match(r"(\d+)\s*[-/]\s*(\d+)", part)
         if m:

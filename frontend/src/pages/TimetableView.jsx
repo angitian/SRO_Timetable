@@ -18,7 +18,10 @@ import {
   computeNeededPerClass,
   computeNeededPerTeacher,
   computeFixedSupervision,
+  checkResultAgainstLocks,
+  getPlacementBlockReason,
 } from '../utils/teacherLoad.js'
+import DiagnosticsPanel from '../components/common/DiagnosticsPanel.jsx'
 import { computePlacedCounts } from '../utils/placementCounts.js'
 import { gradeLevelToLabel } from '../utils/gradeLabels.js'
 
@@ -31,6 +34,7 @@ export default function TimetableView() {
     isDirty,
     error,
     errorResponse,
+    resultStale,
     setStep,
     runSolver,
     isGenerating,
@@ -121,6 +125,7 @@ export default function TimetableView() {
   const [exportToast, setExportToast] = useState(null)
   // ── Placement feedback toast (sidebar → grid drop) ───────────────
   const [placementToast, setPlacementToast] = useState(null)
+  const [placementBlock, setPlacementBlock] = useState(null)
   const placementTimerRef = useRef(null)
 
   // ── Auto-toast when solver finishes ───────────────────────────────
@@ -552,6 +557,19 @@ export default function TimetableView() {
   // ── Handlers ──────────────────────────────────────────────────────
   function handleDropFromSidebar(lessonBlock, day, period, classId) {
     if (classId && lessonBlock.class_id !== classId) return
+    // Hard-rule validation — mirrors the solver's constraints. Without this a
+    // silent drop creates a REAL conflict (teacher double-booked / supervising
+    // an activity / locked slot / class activity) and looks like the solver's
+    // "cannot place" report was wrong. Block with the reason + force option.
+    const blocked = getPlacementBlockReason(lessonBlock, day, period, {
+      resultSlots,
+      userPlacements,
+      fixtureData,
+    })
+    if (blocked) {
+      setPlacementBlock({ msg: blocked.message, lbId: lessonBlock.id, day, period })
+      return
+    }
     // Predict the post-placement remaining count using the same formula
     // the reducer uses (solver slots + user placements, deduped at this
     // day/period). This is only shown as feedback — the reducer remains
@@ -619,6 +637,14 @@ export default function TimetableView() {
 
   const hasResult = result?.slots && result.slots.length > 0
   const hasPlacements = Object.keys(userPlacements).length > 0
+
+  // Slots in the displayed result that violate the CURRENT teacher locks —
+  // a correct solver result can never contain these, so any hit means the
+  // shown timetable predates the locks (stale result / restored old cache).
+  const lockViolations = useMemo(
+    () => checkResultAgainstLocks(result, fixtureData, userPlacements),
+    [result, fixtureData, userPlacements],
+  )
 
   function handleSelectClass(classId) {
     const idx = classes.findIndex((c) => c.id === classId)
@@ -740,16 +766,25 @@ export default function TimetableView() {
         </div>
       )}
 
-      {/* Result-stale banner — จำนวนคาบที่วางไม่ตรงกับข้อมูลปัจจุบัน
-          (เช่น แก้ข้อมูล/import ใหม่หลังจัด หรือคาบบางส่วนวางไม่ได้) */}
+      {/* Partial-timetable banner — placed < needed. Distinguishes the two
+          cases: OPTIMAL means the solver PROVED the remaining lessons have no
+          legal slot (hard rules block every candidate), while FEASIBLE/UNKNOWN
+          only means the time limit was hit and a complete solution may exist.
+          Renders result.diagnostics (unplaced_blocks + notes) so the user can
+          see WHICH lesson and WHY — previously this report was never shown. */}
       {hasResult && placedCount < totalCount && (
-        <div className="flex items-center justify-between px-4 py-2 bg-red-50 border border-red-300 text-red-800 rounded-xl mb-3 text-xs sm:text-sm">
-          <div className="flex items-center gap-2 min-w-0">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <span className="font-medium min-w-0">
-              วางแล้ว <b>{placedCount}</b>/{totalCount} คาบ — ข้อมูลอาจเปลี่ยนหลังจัดตาราง (เช่น แก้/เพิ่มวิชา, import ใหม่) หรือคาบบางส่วนวางไม่ได้ —
-              กรุณาจัดตารางใหม่เพื่อให้ผลลัพธ์ตรงข้อมูลปัจจุบัน
-            </span>
+        <div className="flex items-start justify-between gap-3 px-4 py-2 bg-red-50 border border-red-300 text-red-800 rounded-xl mb-3 text-xs sm:text-sm">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span className="font-medium min-w-0">
+                วางแล้ว <b>{placedCount}</b>/{totalCount} คาบ
+                {result?.metrics?.status === 'OPTIMAL'
+                  ? ' — พิสูจน์แล้วว่าวางครบไม่ได้ภายใต้เงื่อนไขปัจจุบัน คาบที่เหลือไม่มีช่องที่ถูกกฎ'
+                  : ' — ยังไม่พบวิธีวางครบภายในเวลาที่กำหนด (อาจวางครบได้ถ้าเพิ่มเวลา/วางเองที่ช่องแนะนำด้านล่าง)'}
+              </span>
+            </div>
+            <DiagnosticsPanel diagnostics={result?.diagnostics} fixtureData={fixtureData} />
           </div>
           <div className="flex items-center gap-2 shrink-0 ml-3">
             <button
@@ -764,6 +799,53 @@ export default function TimetableView() {
         </div>
       )}
 
+      {/* Lock-vs-result banner — the displayed timetable violates the CURRENT
+          teacher locks. A correct solver result can never do this, so any hit
+          means the grid is stale (generated before the lock / restored from an
+          old cache). Listing the exact slots makes "ล็อกไม่ทำงาน" actionable. */}
+      {hasResult && lockViolations.length > 0 && (
+        <div className="flex items-start justify-between gap-3 px-4 py-3 bg-red-50 border border-red-300 text-red-800 rounded-xl mb-3 text-xs sm:text-sm">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 font-bold">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              ตารางนี้ไม่ตรงกับล็อกปัจจุบัน ({lockViolations.length} จุด) — คาบที่ล็อกไว้แต่ยังมีคาบสอนอยู่
+            </div>
+            <ul className="list-disc pl-5 mt-1 space-y-0.5">
+              {lockViolations.slice(0, 8).map((v, i) => (
+                <li key={i}>
+                  <b>{v.teacherName}</b> — {v.dayName} คาบ{v.period} ({v.subjectName} {v.className}) · {v.lockType}
+                </li>
+              ))}
+              {lockViolations.length > 8 && (
+                <li>…และอีก {lockViolations.length - 8} จุด</li>
+              )}
+            </ul>
+            <div className="mt-1 italic text-red-600">
+              ตารางนี้จัดก่อนที่จะล็อก/แก้ไขล่าสุด — กดจัดใหม่เพื่อให้ผลลัพธ์ตรงเงื่อนไขปัจจุบัน
+            </div>
+          </div>
+          <button
+            onClick={() => runSolver({ preAssignments: userPlacements })}
+            disabled={isGenerating}
+            className="shrink-0 flex items-center gap-1 bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg font-medium text-xs transition-colors disabled:opacity-60"
+          >
+            <Rocket className="w-3 h-3" />
+            จัดใหม่
+          </button>
+        </div>
+      )}
+
+      {/* Stale-result banner — the grid below is a cached OLD timetable because
+          the latest solve failed (locks/edits not reflected). */}
+      {hasResult && resultStale && !isGenerating && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl mb-3 text-xs sm:text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span className="font-medium">
+            กำลังแสดงตารางเก่าจากแคช — การจัดรอบล่าสุดไม่สำเร็จ ตารางด้านล่างอาจไม่ตรงกับเงื่อนไขล่าสุด (เช่น คาบที่ล็อก/แก้ไข)
+          </span>
+        </div>
+      )}
+
       {/* Solver error banner — shows backend failures (e.g. 500) instead of silence */}
       {error && !isGenerating && (
         <div className="flex items-start justify-between gap-3 px-4 py-3 bg-red-50 border border-red-200 text-red-800 rounded-xl mb-3 text-xs sm:text-sm">
@@ -773,23 +855,13 @@ export default function TimetableView() {
               จัดตารางไม่สำเร็จ
             </div>
             <div className="mt-0.5 break-words">{error}</div>
-            {errorResponse?.diagnostics?.hard_rule_issues?.length > 0 && (
-              <ul className="list-disc pl-5 mt-1">
-                {errorResponse.diagnostics.hard_rule_issues.map((h, i) => (
-                  <li key={i}>{h}</li>
-                ))}
-              </ul>
-            )}
-            {errorResponse?.diagnostics?.teacher_overloads?.length > 0 && (
-              <div className="mt-1 text-red-700">
-                ครูที่เกินขีดจำกัด: {errorResponse.diagnostics.teacher_overloads.map((t) => t.teacher_name).join(', ')}
-              </div>
-            )}
-            {errorResponse?.diagnostics?.notes?.length > 0 && (
-              <div className="mt-1 italic text-red-600">
-                {errorResponse.diagnostics.notes.map((n, i) => <div key={i}>{n}</div>)}
-              </div>
-            )}
+            <DiagnosticsPanel
+              diagnostics={errorResponse?.diagnostics}
+              fixtureData={fixtureData}
+              onUnpinConflicts={(conflicts) => {
+                conflicts.forEach((c) => removePlacement(c.lesson_block_id, c.day, c.period))
+              }}
+            />
           </div>
           <button
             onClick={() => setStep(4)}
@@ -1454,6 +1526,34 @@ export default function TimetableView() {
             ? <CheckCircle className="w-5 h-5 shrink-0" />
             : <XCircle className="w-5 h-5 shrink-0" />}
           {exportToast.msg}
+        </div>
+      )}
+
+      {/* ── Blocked-placement toast — manual drop violates a hard rule ── */}
+      {placementBlock && (
+        <div className="fixed bottom-6 left-6 z-[120] px-4 py-3 rounded-xl shadow-lg
+          text-sm font-medium flex flex-col gap-2 max-w-md bg-red-600 text-white">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+            <span>วางไม่ได้ตามกฎ — {placementBlock.msg}</span>
+          </div>
+          <div className="flex items-center gap-2 pl-7">
+            <button
+              onClick={() => {
+                placeLessonBlock(placementBlock.lbId, placementBlock.day, placementBlock.period)
+                setPlacementBlock(null)
+              }}
+              className="bg-white text-red-700 px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-red-50 transition-colors"
+            >
+              บังคับวาง (ยอมรับขัดกฎ)
+            </button>
+            <button
+              onClick={() => setPlacementBlock(null)}
+              className="bg-red-500/60 text-white px-2.5 py-1 rounded-lg text-xs hover:bg-red-500 transition-colors"
+            >
+              ยกเลิก
+            </button>
+          </div>
         </div>
       )}
 
