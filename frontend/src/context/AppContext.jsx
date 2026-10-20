@@ -936,14 +936,25 @@ export function AppProvider({ children }) {
       }
       skipCacheRestoreRef.current = true
       const fixtureName = cacheKey.replace('timetable_', '')
+      // localStorage is written synchronously on every change, so it is always
+      // at least as fresh as the debounced IndexedDB cache — prefer it when
+      // present, fall back to the cache payload otherwise.
+      const readLocal = (key, fallback) => {
+        try {
+          const raw = localStorage.getItem(key)
+          return raw !== null ? JSON.parse(raw) : fallback
+        } catch (e) {
+          return fallback
+        }
+      }
       dispatch({
         type: 'RESTORE_FROM_CACHE',
         payload: {
           result: cached.result,
           fixtureData: cached.fixtureData,
-          userPlacements: cached.userPlacements || {},
-          substitutes: cached.substitutes || [],
-          dailySchedules: cached.dailySchedules || {},
+          userPlacements: readLocal(`placements_${fixtureName}`, cached.userPlacements || {}),
+          substitutes: readLocal(`substitutes_${fixtureName}`, cached.substitutes || []),
+          dailySchedules: readLocal(`daily_schedules_${fixtureName}`, cached.dailySchedules || {}),
           selectedFixture: fixtureName,
           cacheKey,
           lastSync: cached._cachedAt,
@@ -1286,11 +1297,10 @@ export function AppProvider({ children }) {
     if (state.fixtureData && state.selectedFixture) {
       const key = `placements_${state.selectedFixture}`
       try {
-        if (Object.keys(state.userPlacements).length > 0) {
-          localStorage.setItem(key, JSON.stringify(state.userPlacements))
-        } else {
-          localStorage.removeItem(key)
-        }
+        // Write a sentinel ('{}') instead of removing the key so resume can
+        // distinguish "user cleared placements" from "never saved" — without
+        // it a missing key would fall back to stale cache data.
+        localStorage.setItem(key, JSON.stringify(state.userPlacements || {}))
       } catch (e) {
         // localStorage quota exceeded or unavailable — best-effort
         console.warn('[AppContext] placements persist failed:', e.message)
@@ -1318,11 +1328,7 @@ export function AppProvider({ children }) {
     if (state.fixtureData && state.selectedFixture) {
       const key = `substitutes_${state.selectedFixture}`
       try {
-        if (state.substitutes && state.substitutes.length > 0) {
-          localStorage.setItem(key, JSON.stringify(state.substitutes))
-        } else {
-          localStorage.removeItem(key)
-        }
+        localStorage.setItem(key, JSON.stringify(state.substitutes || []))
       } catch (e) {
         console.warn('[AppContext] substitutes persist failed:', e.message)
       }
@@ -1363,7 +1369,11 @@ export function AppProvider({ children }) {
       })
       return
     }
-    resultCacheTimerRef.current = setTimeout(() => {
+    const writeNow = () => {
+      if (resultCacheTimerRef.current) {
+        clearTimeout(resultCacheTimerRef.current)
+        resultCacheTimerRef.current = null
+      }
       cacheTimetable(state.cacheKey, {
         result: state.result,
         fixtureData: state.fixtureData,
@@ -1378,9 +1388,16 @@ export function AppProvider({ children }) {
         .catch((e) => {
           console.warn('[AppContext] result cache write failed:', e.message)
         })
-    }, 400)
+    }
+    // Flush the pending write if the page is closing/reloading — otherwise a
+    // debounced write still waiting in the timer is dropped and the cache
+    // keeps a stale workspace for the next session.
+    const flushOnHide = () => writeNow()
+    window.addEventListener('pagehide', flushOnHide)
+    resultCacheTimerRef.current = setTimeout(writeNow, 400)
     return () => {
       if (resultCacheTimerRef.current) clearTimeout(resultCacheTimerRef.current)
+      window.removeEventListener('pagehide', flushOnHide)
     }
   }, [state.result, state.cacheKey, state.fixtureData, state.userPlacements, state.substitutes, state.dailySchedules])
 
@@ -1390,11 +1407,7 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!dailyStorageKey) return
     try {
-      if (state.dailySchedules && Object.keys(state.dailySchedules).length > 0) {
-        localStorage.setItem(dailyStorageKey, JSON.stringify(state.dailySchedules))
-      } else {
-        localStorage.removeItem(dailyStorageKey)
-      }
+      localStorage.setItem(dailyStorageKey, JSON.stringify(state.dailySchedules || {}))
     } catch (e) {
       console.warn('[AppContext] dailySchedules persist failed:', e.message)
     }
