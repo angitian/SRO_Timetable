@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, Fragment } from 'react'
 import {
   Plus, Trash2, ArrowRight, ArrowLeft, Clock, Layers, BookOpen, Coffee,
   UtensilsCrossed, X, Check, ChevronDown, ZoomIn, ZoomOut, Edit2, CalendarHeart, Star, Calendar,
-  AlertTriangle, Users, Upload, FileSpreadsheet,
+  AlertTriangle, Users, Upload, FileSpreadsheet, Download, HelpCircle,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { generatePeriods, createDefaultBlock, buildClassBlockMap, insertBreakPeriod } from '../utils/periods.js'
@@ -1028,6 +1028,7 @@ function SpecialActivitiesSection() {
   const [importBusy, setImportBusy] = useState(false)
   const [importPreview, setImportPreview] = useState(null) // { slots, warnings, fileName, totalRows, error? }
   const [importNotice, setImportNotice] = useState(null)
+  const [showImportHelp, setShowImportHelp] = useState(false)
 
   async function handleImportFile(e) {
     const file = e.target.files?.[0]
@@ -1327,13 +1328,32 @@ function SpecialActivitiesSection() {
 
   return (
     <div className="card space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <CalendarHeart className="w-5 h-5 text-purple-600" />
           <h3 className="font-bold text-gray-900">กิจกรรมพิเศษ (ล็อกสล็อต)</h3>
+          <button
+            onClick={() => setShowImportHelp((v) => !v)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold
+              text-purple-600 hover:bg-purple-50 transition-colors"
+            title="ดูวิธีเตรียมไฟล์ Excel คาบพิเศษ"
+          >
+            <HelpCircle className="w-4 h-4" />
+            วิธีใช้งาน
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showImportHelp ? 'rotate-180' : ''}`} />
+          </button>
         </div>
         {!showForm && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <a
+              href="/samples/ตัวอย่างคาบพิเศษ.xlsx"
+              download
+              className="btn-secondary flex items-center gap-1"
+              title="ดาวน์โหลดไฟล์ Excel ตัวอย่างคาบพิเศษ — ผ่านการจัดตารางแล้ว ใช้เป็นแนวทางหรือแก้ไขเป็นกิจกรรมของโรงเรียนคุณ"
+            >
+              <Download className="w-4 h-4" />
+              ไฟล์ตัวอย่าง
+            </a>
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={importBusy}
@@ -1361,6 +1381,40 @@ function SpecialActivitiesSection() {
         />
       </div>
 
+      {showImportHelp && (
+        <div className="text-xs bg-purple-50/70 border border-purple-200 rounded-lg p-3 space-y-2.5">
+          <p className="font-bold text-purple-800">
+            วิธีเตรียมไฟล์ Excel คาบพิเศษ — 1 ชีท แถวแรกเป็นหัวคอลัมน์ (ระบบอ่านคอลัมน์ตามชื่อ ไม่สนลำดับ)
+          </p>
+          <div className="overflow-x-auto">
+            <table className="min-w-full border border-purple-200 bg-white rounded">
+              <thead className="bg-purple-100 text-purple-800">
+                <tr>
+                  <th className="px-2 py-1 text-left font-semibold">คอลัมน์</th>
+                  <th className="px-2 py-1 text-left font-semibold whitespace-nowrap">จำเป็น</th>
+                  <th className="px-2 py-1 text-left font-semibold">รูปแบบ + ตัวอย่าง</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-purple-100 text-gray-700">
+                <tr><td className="px-2 py-1 font-medium">ชื่อกิจกรรม</td><td className="px-2 py-1 text-red-600">จำเป็น</td><td className="px-2 py-1">เช่น ลูกเสือ, บูรณาการ, ศักยภาพ, อาชีพ, โฮมรูม</td></tr>
+                <tr><td className="px-2 py-1 font-medium">ช่วงชั้น/ห้อง</td><td className="px-2 py-1 text-gray-400">—</td><td className="px-2 py-1">ป.1,ป.2,ป.3 / ม.1-3 / ทุกห้อง (ว่าง = ทุกห้อง)</td></tr>
+                <tr><td className="px-2 py-1 font-medium">วัน</td><td className="px-2 py-1 text-red-600">จำเป็น</td><td className="px-2 py-1">จันทร์–ศุกร์ หรือเลข 1–5 (จันทร์ = 1)</td></tr>
+                <tr><td className="px-2 py-1 font-medium">คาบ</td><td className="px-2 py-1 text-red-600">จำเป็น</td><td className="px-2 py-1">คาบเดียว "6" / หลายคาบ "6,7" / ช่วง "5-7"</td></tr>
+                <tr><td className="px-2 py-1 font-medium">จำนวนคาบ</td><td className="px-2 py-1 text-gray-400">—</td><td className="px-2 py-1">ใช้ขยายคาบอัตโนมัติ เช่น คาบ "6" + จำนวน 2 → ล็อกคาบ 6,7</td></tr>
+                <tr><td className="px-2 py-1 font-medium">ครูผู้สอน</td><td className="px-2 py-1 text-gray-400">—</td><td className="px-2 py-1">หลายชื่อคั่นด้วยคอมม่า เช่น อ.สมชาย ใจดี, อ.สมหญิง รักเรียน</td></tr>
+                <tr><td className="px-2 py-1 font-medium">ตรึงคาบ</td><td className="px-2 py-1 text-gray-400">—</td><td className="px-2 py-1">ว่าง/TRUE = ตรึง · FALSE = ข้ามแถว (ระบบรองรับเฉพาะกิจกรรมตรึงคาบ)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <ul className="list-disc pl-4 space-y-0.5 text-gray-600">
+            <li>ชื่อชั้น/ชื่อครู ต้องตรงกับข้อมูลที่นำเข้าในขั้นตอนก่อนหน้า — ชื่อที่ไม่พบจะถูกข้าม พร้อมแจ้งเตือนในหน้าพรีวิว</li>
+            <li>คาบพิเศษจะล็อกช่องในตาราง = ลดช่องว่างของห้อง — ถ้าห้องใช้คาบเต็มแล้ว ระบบจะเตือนก่อนบันทึก</li>
+            <li>กิจกรรมที่คาบซ้ำกับกิจกรรมเดิมจะเตือนและบันทึกไม่ได้จนกว่าจะแก้</li>
+            <li>ลองดาวน์โหลด "ไฟล์ตัวอย่าง" แล้วแก้ไขข้อมูลเป็นกิจกรรมของโรงเรียนคุณได้เลย</li>
+          </ul>
+        </div>
+      )}
+
       {importNotice && (
         <div className="flex items-center justify-between gap-2 text-xs bg-green-50 border border-green-200 text-green-700 rounded-lg px-3 py-2">
           <span className="flex items-center gap-1.5">
@@ -1374,7 +1428,7 @@ function SpecialActivitiesSection() {
 
       {activities.length === 0 && !showForm && (
         <p className="text-gray-400 text-center py-4">
-          ยังไม่มีกิจกรรมพิเศษ — เพิ่มได้ถ้าต้องการล็อกสล็อตกิจกรรม เช่น ลูกเสือ, โฮมรูม, ชุมนุม
+          ยังไม่มีกิจกรรมพิเศษ — เพิ่มเองหรืออัปโหลดจาก Excel (กด "วิธีใช้งาน" เพื่อดูรูปแบบไฟล์ หรือโหลด "ไฟล์ตัวอย่าง" เป็นแนวทาง) เช่น ลูกเสือ, โฮมรูม, ชุมนุม
         </p>
       )}
 

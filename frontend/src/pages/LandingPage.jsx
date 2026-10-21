@@ -5,7 +5,6 @@ import {
   History, Download, Rocket,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
-import { BASE_URL } from '../api/config.js'
 import { formatSnapshotDate } from '../utils/versionManager.js'
 import { formatLastSync } from '../utils/cache.js'
 
@@ -38,18 +37,19 @@ const ACCENT_STYLES = {
 
 export default function LandingPage() {
   const {
-    setStep, setFixtureDataDirect, importSnapshot, selectFixture,
+    createNewWorkspace, importSnapshot, selectFixture,
     user, listCloudWorkspaces, loadFromCloud, deleteFromCloud, cloudWorkspaces, cloudSyncing,
-    // Snapshot versioning (local)
+    // Workspace snapshots saved in this browser
     snapshots, loadSnapshot, deleteSnapshot, exportSnapshot,
     // Resume last session from IndexedDB cache
     cacheHint, resumeFromCache,
   } = useApp()
   const fileInputRef = useRef(null)
   const [toast, setToast] = useState(null) // { type: 'ok'|'err', msg }
-  const [isDragOver, setIsDragOver] = useState(false)
   const [showCloudModal, setShowCloudModal] = useState(false)
   const [cloudLoading, setCloudLoading] = useState(false)
+  const [showNewModal, setShowNewModal] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
 
   // Preload the cloud workspace list once when logged in so the landing page
   // can show recent cloud timetables without requiring an extra click.
@@ -64,41 +64,38 @@ export default function LandingPage() {
     setTimeout(() => setToast(null), 4000)
   }, [])
 
+  // "สร้างตารางใหม่" opens a small title dialog first — the actual work
+  // happens in createNewWorkspace(), which auto-saves the current workspace
+  // before resetting, so a second timetable never overwrites the first.
   function handleCreateNew() {
-    setFixtureDataDirect({
-      teachers: [],
-      rooms: [],
-      subjects: [],
-      classes: [],
-      lesson_blocks: [],
-      fixed_slots: [],
-      schedule_blocks: [],
-      special_activities: [],
-      schedule_config: {
-        days_per_week: 5,
-        periods_per_day: 8,
-        lunch_periods: [4],
-        assembly_slots: [],
-        max_consecutive_teaching: 4,
-        pe_hot_periods: [],
-      },
-      solver_time_limit_seconds: 5.0,
-    })
-    setStep(1)
+    setNewTitle(`ตารางใหม่ ${new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}`)
+    setShowNewModal(true)
+  }
+
+  function handleConfirmCreate() {
+    const result = createNewWorkspace(newTitle)
+    setShowNewModal(false)
+    if (!result?.ok) {
+      showToast('err', result?.error || 'สร้างตารางใหม่ไม่สำเร็จ')
+      return
+    }
+    if (result.savedLabel) {
+      showToast('ok', `บันทึก "${result.savedLabel}" ไว้ในรายการงานแล้ว`)
+    }
   }
 
   async function handleFile(file) {
     if (!file) return
     // Quick extension check
     if (!file.name.endsWith('.json')) {
-      showToast('err', 'รูปแบบไฟล์ไม่ถูกต้อง กรุณาใช้ไฟล์ Snapshot (.json) ของระบบ')
+      showToast('err', 'รูปแบบไฟล์ไม่ถูกต้อง กรุณาใช้ไฟล์สำรอง (.json) ของระบบ')
       return
     }
     const result = await importSnapshot(file)
     if (result?.ok) {
       showToast('ok', 'โหลดข้อมูลตารางสำเร็จ')
     } else {
-      showToast('err', result?.error || 'รูปแบบไฟล์ไม่ถูกต้อง กรุณาใช้ไฟล์ Snapshot (.json) ของระบบ')
+      showToast('err', result?.error || 'รูปแบบไฟล์ไม่ถูกต้อง กรุณาใช้ไฟล์สำรอง (.json) ของระบบ')
     }
   }
 
@@ -108,30 +105,13 @@ export default function LandingPage() {
     e.target.value = ''
   }
 
-  function handleDragOver(e) {
-    e.preventDefault()
-    setIsDragOver(true)
-  }
-
-  function handleDragLeave(e) {
-    e.preventDefault()
-    setIsDragOver(false)
-  }
-
-  async function handleDrop(e) {
-    e.preventDefault()
-    setIsDragOver(false)
-    const file = e.dataTransfer.files?.[0]
-    if (file) await handleFile(file)
-  }
-
   function handleLoadDemo() {
     selectFixture('primary_mock')
     showToast('ok', 'กำลังโหลดข้อมูลตัวอย่าง...')
   }
 
   function handleDownloadTemplate() {
-    window.open(`${BASE_URL}/api/import/excel/template`, '_blank')
+    window.open('/samples/ตัวอย่างข้อมูลการเรียน.xlsx', '_blank')
   }
 
   async function handleOpenCloud() {
@@ -181,11 +161,11 @@ export default function LandingPage() {
     }
   }
 
-  // ── Local snapshot version actions ────────────────────────────────────
+  // ── Local workspace snapshot actions ─────────────────────────────────
   function handleOpenSnapshot(id) {
     const result = loadSnapshot(id)
     if (result.ok) {
-      showToast('ok', 'เปิดเวอร์ชันแล้ว')
+      showToast('ok', 'เปิดงานแล้ว')
     } else {
       showToast('err', result.error || 'เปิดไม่สำเร็จ')
     }
@@ -206,24 +186,34 @@ export default function LandingPage() {
     }
   }
 
-  const hasRecent = Boolean(cacheHint) || snapshots.length > 0 || (user && cloudWorkspaces.length > 0)
+  // Merge local workspace snapshots + cloud workspaces into ONE list sorted
+  // by last-modified — the user sees "งาน/ตารางของฉัน" regardless of where
+  // each timetable is stored.
+  const localItems = snapshots.map((s) => ({
+    type: 'local',
+    id: s.id,
+    title: s.label,
+    status: s.status,
+    updatedAt: s.updatedAt || 0,
+    counts: s.counts,
+  }))
+  const cloudItems = (user ? cloudWorkspaces : []).map((w) => ({
+    type: 'cloud',
+    id: w.id,
+    title: w.title,
+    updatedAt: w.updated_at ? new Date(w.updated_at).getTime() : 0,
+    academic_year: w.academic_year,
+    term: w.term,
+  }))
+  const allItems = [...localItems, ...cloudItems].sort((a, b) => b.updatedAt - a.updatedAt)
+  // Show the "ทำงานต่อ" card only when the cache is newer than every saved
+  // workspace — otherwise the newest workspace card already covers it.
+  const showResumeCard = Boolean(cacheHint) &&
+    (allItems.length === 0 || cacheHint.lastCachedAt > Math.max(...allItems.map((i) => i.updatedAt)))
+  const hasRecent = showResumeCard || allItems.length > 0
 
   return (
-    <div
-      className="min-h-[calc(100vh-3.5rem)] bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex flex-col"
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
-      {/* Drag overlay */}
-      {isDragOver && (
-        <div className="fixed inset-0 z-50 bg-blue-50/80 backdrop-blur-sm flex items-center justify-center pointer-events-none">
-          <div className="border-4 border-dashed border-blue-400 rounded-3xl px-12 py-16 bg-white/90">
-            <FolderOpen className="w-16 h-16 text-blue-500 mx-auto mb-4" />
-            <p className="text-2xl font-bold text-blue-700">วางไฟล์ .json ที่นี่</p>
-          </div>
-        </div>
-      )}
+    <div className="min-h-[calc(100vh-3.5rem)] bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex flex-col">
 
       <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 flex flex-col justify-center">
         {/* ── Hero Title Section ─────────────────────────────────────── */}
@@ -236,14 +226,8 @@ export default function LandingPage() {
           </p>
         </div>
 
-        {/* ── Actions & Drag-Drop Area ───────────────────────────────── */}
-        <div
-          className={`w-full max-w-4xl mx-auto border-2 border-dashed rounded-2xl p-8 bg-slate-50/50 my-4 transition-all
-            ${isDragOver
-              ? 'border-blue-500 bg-blue-50/80 scale-[1.01]'
-              : 'border-slate-300 hover:border-slate-400'
-            }`}
-        >
+        {/* ── Main Actions ───────────────────────────────────────────── */}
+        <div className="w-full max-w-4xl mx-auto border-2 border-dashed border-slate-300 hover:border-slate-400 rounded-2xl p-8 bg-slate-50/50 my-4 transition-all">
           <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
             {/* Primary: Create new */}
             <button
@@ -251,26 +235,10 @@ export default function LandingPage() {
               className="flex items-center gap-2 px-6 py-3.5 text-base font-semibold rounded-xl shadow-sm bg-blue-600 text-white hover:bg-blue-700 transition-all whitespace-nowrap"
             >
               <Plus className="w-5 h-5 flex-shrink-0" />
-              สร้างตารางสอน
+              สร้างตารางใหม่
             </button>
 
-            {/* Secondary: Open existing .json */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json,application/json"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-6 py-3.5 text-base font-semibold rounded-xl shadow-sm bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition-all whitespace-nowrap"
-            >
-              <FolderOpen className="w-5 h-5 text-slate-500 flex-shrink-0" />
-              เปิดไฟล์ตารางเดิม (.json)
-            </button>
-
-            {/* Tertiary: Open from cloud (requires login) */}
+            {/* Secondary: Open from cloud (requires login) */}
             <button
               onClick={handleOpenCloud}
               className={`flex items-center gap-2 px-6 py-3.5 text-base font-semibold rounded-xl shadow-sm transition-all whitespace-nowrap
@@ -286,7 +254,7 @@ export default function LandingPage() {
 
           {/* Hint text */}
           <p className="mt-4 text-center text-sm text-slate-500">
-            ลากไฟล์ .json มาวางที่หน้านี้ หรือกดปุ่มด้านบนเพื่อเลือกไฟล์
+            งานทั้งหมดถูกบันทึกอัตโนมัติ — เลือกเปิดงานเก่าได้จากรายการ &quot;งาน/ตารางของฉัน&quot; ด้านล่าง
           </p>
         </div>
 
@@ -304,20 +272,21 @@ export default function LandingPage() {
             onClick={handleDownloadTemplate}
             className="text-blue-600 font-medium hover:underline mx-1"
           >
-            ดาวน์โหลด Template Excel
+            ดาวน์โหลดไฟล์ตัวอย่าง Excel
           </button>
         </p>
 
-        {/* ── Recent Workspaces & Versions ───────────────────────────── */}
+        {/* ── My Workspaces (งาน/ตารางของฉัน) ────────────────────────── */}
         {hasRecent && (
-          <div className="w-full max-w-4xl mx-auto mb-10">
+          <div className="w-full max-w-4xl mx-auto mb-6">
             <h2 className="text-lg font-bold text-slate-800 mb-3 flex items-center gap-2">
               <History className="w-5 h-5 text-slate-500" />
-              งานล่าสุดของฉัน
+              งาน/ตารางของฉัน
             </h2>
             <div className="space-y-3">
-              {/* Resume card — most recent IndexedDB cache */}
-              {cacheHint && (
+              {/* Resume card — shown only when the cache is newer than every
+                  saved workspace */}
+              {showResumeCard && (
                 <div className="flex items-center gap-3 p-4 rounded-xl border border-blue-200 bg-blue-50/70">
                   <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
                     <Rocket className="w-5 h-5 text-blue-600" />
@@ -341,102 +310,106 @@ export default function LandingPage() {
                 </div>
               )}
 
-              {/* Local snapshot versions */}
-              {snapshots.length > 0 && (
-                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                  <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-500">
-                      เวอร์ชันที่บันทึกไว้ในเครื่องนี้ ({snapshots.length} รายการ)
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      💻 เก็บในเบราว์เซอร์นี้ — ส่งออก .json เพื่อสำรอง
-                    </span>
-                  </div>
-                  <ul className="divide-y divide-slate-100">
-                    {snapshots.map((snap) => (
-                      <li key={snap.id} className="flex items-center gap-2 px-4 py-2.5 hover:bg-slate-50/60 transition-colors">
-                        <button
-                          onClick={() => handleOpenSnapshot(snap.id)}
-                          className="flex-1 text-left min-w-0"
-                          title={`เปิด "${snap.label}"`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-slate-800 truncate">{snap.label}</span>
+              {/* One unified workspace list — local + cloud, newest first */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">
+                    {allItems.length} งาน
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    💻 เก็บในเบราว์เซอร์นี้ · ☁️ = บนคลาวด์
+                  </span>
+                </div>
+                <ul className="divide-y divide-slate-100">
+                  {allItems.map((item) => (
+                    <li key={`${item.type}-${item.id}`} className="flex items-center gap-2 px-4 py-2.5 hover:bg-slate-50/60 transition-colors">
+                      <button
+                        onClick={() => (item.type === 'local'
+                          ? handleOpenSnapshot(item.id)
+                          : handleLoadCloudWorkspace(item.id))}
+                        disabled={item.type === 'cloud' && cloudSyncing}
+                        className="flex-1 text-left min-w-0"
+                        title={`เปิด "${item.title}"`}
+                      >
+                        <div className="flex items-center gap-2">
+                          {item.type === 'cloud' && (
+                            <Cloud className="w-3.5 h-3.5 text-violet-500 shrink-0" />
+                          )}
+                          <span className="text-sm font-semibold text-slate-800 truncate">{item.title}</span>
+                          {item.type === 'local' && (
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0
-                              ${snap.status === 'final' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                              {snap.status === 'final' ? 'สมบูรณ์' : 'ร่าง'}
+                              ${item.status === 'final' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                              {item.status === 'final' ? 'สมบูรณ์' : 'ร่าง'}
                             </span>
-                          </div>
-                          <div className="text-xs text-slate-400 mt-0.5">
-                            {formatSnapshotDate(snap.updatedAt)}
-                            {snap.solverPreset ? ` · ${snap.solverPreset}` : ''}
-                          </div>
-                        </button>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          {item.type === 'local'
+                            ? formatSnapshotDate(item.updatedAt)
+                            : item.updatedAt
+                              ? new Date(item.updatedAt).toLocaleDateString('th-TH', {
+                                  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                                })
+                              : '—'}
+                          {item.type === 'local' && item.counts?.teachers > 0 && (
+                            <span> · ครู {item.counts.teachers} · ห้อง {item.counts.classes} · วิชา {item.counts.subjects}</span>
+                          )}
+                          {item.type === 'cloud' && ` · ปีการศึกษา ${item.academic_year}/${item.term}`}
+                        </div>
+                      </button>
+                      {item.type === 'local' && (
                         <button
-                          onClick={() => handleExportSnapshot(snap.id)}
+                          onClick={() => handleExportSnapshot(item.id)}
                           className="p-2 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0"
                           title="ส่งออกไฟล์ .json สำรอง"
                         >
                           <Download className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => handleDeleteSnapshot(snap.id, snap.label)}
-                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0"
-                          title="ลบเวอร์ชันนี้"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Cloud workspaces (only when logged in) */}
-              {user && cloudWorkspaces.length > 0 && (
-                <div className="bg-white rounded-xl border border-violet-200 shadow-sm overflow-hidden">
-                  <div className="px-4 py-2.5 bg-violet-50 border-b border-violet-100 flex items-center justify-between">
-                    <span className="text-xs font-bold text-violet-600">
-                      ตารางบนคลาวด์ ({cloudWorkspaces.length} รายการ)
-                    </span>
-                    <span className="text-[10px] text-violet-400">☁️ เปิดได้จากเครื่องอื่นเมื่อเข้าสู่ระบบ</span>
-                  </div>
-                  <ul className="divide-y divide-slate-100">
-                    {cloudWorkspaces.map((ws) => (
-                      <li key={ws.id} className="flex items-center gap-2 px-4 py-2.5 hover:bg-violet-50/30 transition-colors">
-                        <button
-                          onClick={() => handleLoadCloudWorkspace(ws.id)}
-                          disabled={cloudSyncing}
-                          className="flex-1 text-left min-w-0"
-                          title={`เปิด "${ws.title}"`}
-                        >
-                          <div className="text-sm font-semibold text-slate-800 truncate">{ws.title}</div>
-                          <div className="text-xs text-slate-400 mt-0.5">
-                            {ws.updated_at
-                              ? new Date(ws.updated_at).toLocaleDateString('th-TH', {
-                                  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                                })
-                              : '—'}
-                            {' · '}
-                            ปีการศึกษา {ws.academic_year}/{ws.term}
-                          </div>
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCloudWorkspace(ws.id, ws.title)}
-                          disabled={cloudSyncing}
-                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0"
-                          title="ลบจากคลาวด์"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                      )}
+                      <button
+                        onClick={() => (item.type === 'local'
+                          ? handleDeleteSnapshot(item.id, item.title)
+                          : handleDeleteCloudWorkspace(item.id, item.title))}
+                        disabled={item.type === 'cloud' && cloudSyncing}
+                        className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0"
+                        title={item.type === 'local' ? 'ลบงานนี้' : 'ลบจากคลาวด์'}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </div>
         )}
+
+        {/* ── Backup (.json) — secondary ─────────────────────────────── */}
+        <div className="w-full max-w-4xl mx-auto mb-10">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-4 py-3 flex flex-wrap items-center gap-3">
+            <FolderOpen className="w-4 h-4 text-slate-400 shrink-0" />
+            <div className="flex-1 min-w-[200px]">
+              <div className="text-xs font-semibold text-slate-600">ข้อมูลสำรอง (.json)</div>
+              <div className="text-[11px] text-slate-400">
+                สำหรับสำรองงานไว้ภายนอกหรือย้ายไปเครื่องอื่น — ปกติไม่จำเป็นต้องใช้ ระบบบันทึกอัตโนมัติ
+              </div>
+            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-600 hover:bg-slate-100 transition-colors"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              นำเข้าไฟล์สำรอง (.json)
+            </button>
+          </div>
+        </div>
 
         {/* ── Feature Highlight Grid ─────────────────────────────────── */}
         <div className="w-full max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-5 mb-10">
@@ -487,6 +460,45 @@ export default function LandingPage() {
             ? <Check className="w-5 h-5" />
             : <AlertCircle className="w-5 h-5" />}
           {toast.msg}
+        </div>
+      )}
+
+      {/* ── New Workspace Modal ───────────────────────────────────────── */}
+      {showNewModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowNewModal(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-bold text-gray-900 mb-1 flex items-center gap-2">
+              <Plus className="w-5 h-5 text-blue-600" />
+              สร้างตารางใหม่
+            </h3>
+            <p className="text-xs text-gray-500 mb-4">
+              ตั้งชื่องานนี้ — งานเก่าทั้งหมดจะถูกเก็บไว้ในรายการ &quot;งาน/ตารางของฉัน&quot; ไม่ถูกลบหรือเขียนทับ
+            </p>
+            <input
+              type="text"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleConfirmCreate() }}
+              placeholder="เช่น ตารางภาคเรียนที่ 1/2569"
+              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-4"
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowNewModal(false)}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={handleConfirmCreate}
+                className="px-5 py-2 rounded-lg text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+              >
+                สร้างตาราง
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

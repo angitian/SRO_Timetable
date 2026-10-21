@@ -38,7 +38,7 @@ export function listSnapshots() {
     if (!raw) return []
     const all = JSON.parse(raw)
     if (!Array.isArray(all)) return []
-    // Return lightweight metadata for the dropdown
+    // Return lightweight metadata for the dropdown/workspace list
     return all
       .map((s) => ({
         id: s.id,
@@ -51,6 +51,14 @@ export function listSnapshots() {
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
         bytes: s._bytes || estimateBytes(s),
+        // Summary counts for workspace cards on the landing page
+        counts: {
+          teachers: s.fixtureData?.teachers?.length || 0,
+          classes: s.fixtureData?.classes?.length || 0,
+          subjects: s.fixtureData?.subjects?.length || 0,
+          lessonBlocks: s.fixtureData?.lesson_blocks?.length || 0,
+          hasResult: !!s.result,
+        },
       }))
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   } catch (e) {
@@ -90,7 +98,7 @@ function writeAllSnapshots(snapshots) {
 /**
  * Build a snapshot object from the current workspace state.
  */
-export function buildSnapshot({ label, status, fixtureName, fixtureData, result, userPlacements, solverPreset, solverCustomTime, solverCustomMode, description, version }) {
+export function buildSnapshot({ label, status, fixtureName, fixtureData, result, userPlacements, substitutes, dailySchedules, solverPreset, solverCustomTime, solverCustomMode, description, version }) {
   const now = Date.now()
   const snap = {
     id: `snap_${now}_${Math.random().toString(36).slice(2, 8)}`,
@@ -102,6 +110,8 @@ export function buildSnapshot({ label, status, fixtureName, fixtureData, result,
     fixtureData: fixtureData || null,
     result: result || null,
     userPlacements: userPlacements || {},
+    substitutes: substitutes || [],
+    dailySchedules: dailySchedules || {},
     solverPreset: solverPreset || 'balanced',
     solverCustomTime: solverCustomTime ?? 60,
     solverCustomMode: solverCustomMode || 'BALANCED',

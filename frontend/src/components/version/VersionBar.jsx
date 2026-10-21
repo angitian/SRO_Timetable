@@ -80,7 +80,7 @@ export default function VersionBar() {
   function handleLoad(id) {
     const result = loadSnapshot(id)
     if (result.ok) {
-      showToast('ok', 'โหลดเวอร์ชันแล้ว')
+      showToast('ok', 'เปิดงานแล้ว')
     } else {
       showToast('err', result.error || 'โหลดไม่สำเร็จ')
     }
@@ -179,7 +179,7 @@ export default function VersionBar() {
                   <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
-                        เวอร์ชันที่บันทึกไว้
+                        งาน/ตารางที่บันทึกไว้
                       </span>
                       <span className="text-xs text-gray-400">{snapshots.length} รายการ</span>
                     </div>
@@ -189,9 +189,9 @@ export default function VersionBar() {
                   <div className="max-h-80 overflow-y-auto">
                     {snapshots.length === 0 ? (
                       <div className="px-4 py-8 text-center text-sm text-gray-400">
-                        ยังไม่มีเวอร์ชันที่บันทึกไว้
+                        ยังไม่มีงานที่บันทึกไว้
                         <br />
-                        กด "บันทึกเวอร์ชันใหม่" เพื่อเริ่ม
+                        กด "บันทึกใหม่" เพื่อเริ่ม
                       </div>
                     ) : (
                       snapshots.map((snap) => (
@@ -228,7 +228,7 @@ export default function VersionBar() {
                             onClick={(e) => { e.stopPropagation(); handleDelete(snap.id, snap.label) }}
                             className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50
                               transition-colors shrink-0"
-                            title="ลบเวอร์ชันนี้"
+                            title="ลบงานนี้"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -246,7 +246,7 @@ export default function VersionBar() {
                         transition-colors"
                     >
                       <Plus className="w-4 h-4" />
-                      บันทึกเวอร์ชันใหม่
+                      บันทึกเป็นงานใหม่
                     </button>
                     {activeSnapshotId && (
                       <button
@@ -254,7 +254,7 @@ export default function VersionBar() {
                         className="flex items-center justify-center gap-1.5 px-3 py-2
                           rounded-lg text-sm font-semibold bg-gray-100 text-gray-700
                           hover:bg-gray-200 transition-colors"
-                        title="บันทึกทับเวอร์ชันปัจจุบัน"
+                        title="บันทึกทับงานปัจจุบัน"
                       >
                         <Save className="w-4 h-4" />
                         บันทึกทับ
@@ -284,7 +284,7 @@ export default function VersionBar() {
                     ? 'bg-green-600 text-white hover:bg-green-700'
                     : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                 title={isSnapshotDirty
-                  ? 'บันทึกทับเวอร์ชันปัจจุบันลงในเครื่องนี้ (ออฟไลน์)'
+                  ? 'บันทึกทับงานปัจจุบันลงในเครื่องนี้ (ออฟไลน์)'
                   : 'ไม่มีการเปลี่ยนแปลงที่ต้องบันทึก'}
               >
                 <Save className="w-4 h-4" />
@@ -296,7 +296,7 @@ export default function VersionBar() {
               onClick={() => setShowSaveDialog(true)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-bold
                 bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm"
-              title="บันทึกเป็นเวอร์ชันใหม่ในเครื่องนี้ (ออฟไลน์ — ใช้ได้เฉพาะเบราว์เซอร์นี้ อย่าลืมส่งออก .json เพื่อสำรอง)"
+              title="บันทึกเป็นงานใหม่ในเครื่องนี้ (ออฟไลน์ — ใช้ได้เฉพาะเบราว์เซอร์นี้ อย่าลืมส่งออก .json เพื่อสำรอง)"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">บันทึกใหม่</span>
@@ -373,7 +373,7 @@ export default function VersionBar() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40" onClick={() => setShowSaveDialog(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-bold text-gray-900 mb-3">บันทึกเวอร์ชันใหม่</h3>
+            <h3 className="text-lg font-bold text-gray-900 mb-3">บันทึกเป็นงานใหม่</h3>
             <input
               type="text"
               value={saveLabel}

@@ -164,6 +164,10 @@ function reducer(state, action) {
         isLoadingFixture: false,
         selectedFixture: 'custom',
         isDirty: true,
+        // Mark dirty so the auto-save effect persists this state into the
+        // active workspace snapshot (when one exists) instead of requiring
+        // the user to press "บันทึกใหม่".
+        isSnapshotDirty: true,
         // ล้าง state เก่าทั้งหมดเมื่ออัปโหลดไฟล์ใหม่/สร้างใหม่
         result: null,
         resultStale: false,
@@ -177,7 +181,10 @@ function reducer(state, action) {
         cacheHint: null,
       }
     case 'UPDATE_FIXTURE_DATA':
-      return { ...state, fixtureData: normalizeFixtureData({ ...state.fixtureData, ...action.payload }), isDirty: true }
+      // isSnapshotDirty ensures edits made in the data-entry steps (1-4)
+      // are captured by the workspace auto-save — previously only result
+      // edits (step 5) were auto-saved, so draft work could be lost.
+      return { ...state, fixtureData: normalizeFixtureData({ ...state.fixtureData, ...action.payload }), isDirty: true, isSnapshotDirty: true }
     case 'SET_DIRTY':
       return { ...state, isDirty: action.payload }
     case 'SET_CACHE_INFO':
@@ -453,6 +460,7 @@ function reducer(state, action) {
         result: action.payload.result,
         userPlacements: action.payload.userPlacements || {},
         substitutes: action.payload.substitutes || [],
+        dailySchedules: action.payload.dailySchedules || {},
         selectedFixture: action.payload.fixtureName || 'custom',
         solverPreset: action.payload.solverPreset || state.solverPreset,
         solverCustomTime: action.payload.solverCustomTime ?? state.solverCustomTime,
@@ -515,6 +523,7 @@ function reducer(state, action) {
         result: ws.result || null,
         userPlacements: ws.userPlacements || {},
         substitutes: ws.substitutes || [],
+        dailySchedules: ws.dailySchedules || {},
         solverPreset: ws.solverPreset || 'balanced',
         solverCustomTime: ws.solverCustomTime ?? 60,
         solverCustomMode: ws.solverCustomMode || 'BALANCED',
@@ -958,6 +967,10 @@ export function AppProvider({ children }) {
           userPlacements: preAssignments || state.userPlacements,
           substitutes: state.substitutes,
           dailySchedules: state.dailySchedules,
+          // Link the cache to the workspace snapshot it belongs to so
+          // resumeFromCache can re-attach edits to the same workspace
+          // instead of creating a duplicate.
+          snapshotId: state.activeSnapshotId,
           version: 1,
         })
         dispatch({ type: 'SET_CACHE_INFO', payload: { cacheKey, lastSync: Date.now() } })
@@ -1010,11 +1023,39 @@ export function AppProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.selectedFixture, state.fixtureData, state.solverPreset])
 
+  // Flush pending auto-save changes to the CURRENT workspace synchronously.
+  // Auto-save is debounced 2s, so switching workspaces (open another snapshot,
+  // resume from cache, load from cloud) could otherwise drop the most recent
+  // edits — the effect cleanup cancels the pending timer.
+  const flushPendingSave = useCallback(() => {
+    if (!state.isSnapshotDirty || !state.activeSnapshotId) return
+    const snap = buildSnapshot({
+      label: state.activeSnapshotLabel || 'ตารางฉบับร่าง',
+      fixtureName: state.selectedFixture,
+      fixtureData: state.fixtureData,
+      result: state.result,
+      userPlacements: state.userPlacements,
+      substitutes: state.substitutes,
+      dailySchedules: state.dailySchedules,
+      solverPreset: state.solverPreset,
+      solverCustomTime: state.solverCustomTime,
+      solverCustomMode: state.solverCustomMode,
+    })
+    snap.id = state.activeSnapshotId
+    snap.createdAt = state.lastSnapshotSaveAt || Date.now()
+    const res = vmSaveSnapshot(snap)
+    if (res.ok) {
+      dispatch({ type: 'ADD_SNAPSHOT_TO_LIST', payload: listSnapshots().find((s) => s.id === snap.id) })
+      dispatch({ type: 'MARK_SNAPSHOT_SAVED' })
+    }
+  }, [state.isSnapshotDirty, state.activeSnapshotId, state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.dailySchedules, state.solverPreset, state.solverCustomTime, state.solverCustomMode, state.lastSnapshotSaveAt])
+
   // Resume the most recently cached workspace from IndexedDB (landing page
   // "ทำงานต่อ" card). Loads the full payload and jumps to step 5.
   const resumeFromCache = useCallback(async (cacheKey) => {
     if (!cacheKey) return { ok: false, error: 'ไม่มีข้อมูลงานเก่า' }
     try {
+      flushPendingSave()
       const cached = await getCachedTimetable(cacheKey)
       if (!cached?.result || !cached?.fixtureData) {
         return { ok: false, error: 'ไม่พบข้อมูลงานเก่าในเครื่องนี้' }
@@ -1037,6 +1078,8 @@ export function AppProvider({ children }) {
       // hit means the timetable predates the locks. Mark stale so Step 5 shows
       // the banner instead of silently displaying an out-of-date timetable.
       const restoredPlacements = readLocal(`placements_${fixtureName}`, cached.userPlacements || {})
+      const restoredSubstitutes = readLocal(`substitutes_${fixtureName}`, cached.substitutes || [])
+      const restoredDailySchedules = readLocal(`daily_schedules_${fixtureName}`, cached.dailySchedules || {})
       const staleViolations = checkResultAgainstLocks(cached.result, cached.fixtureData, restoredPlacements)
       dispatch({
         type: 'RESTORE_FROM_CACHE',
@@ -1044,35 +1087,46 @@ export function AppProvider({ children }) {
           result: cached.result,
           fixtureData: cached.fixtureData,
           userPlacements: restoredPlacements,
-          substitutes: readLocal(`substitutes_${fixtureName}`, cached.substitutes || []),
-          dailySchedules: readLocal(`daily_schedules_${fixtureName}`, cached.dailySchedules || {}),
+          substitutes: restoredSubstitutes,
+          dailySchedules: restoredDailySchedules,
           selectedFixture: fixtureName,
           cacheKey,
           lastSync: cached._cachedAt,
           resultStale: staleViolations.length > 0,
         },
       })
+      // Bind the resumed work to a workspace snapshot so further edits are
+      // auto-saved. If the cache was written while a workspace snapshot was
+      // active, re-attach to it; otherwise persist a new workspace snapshot.
+      const linkedSnap = cached.snapshotId ? loadSnapshot(cached.snapshotId) : null
+      if (linkedSnap) {
+        dispatch({ type: 'SET_ACTIVE_SNAPSHOT', payload: { id: linkedSnap.id, label: linkedSnap.label } })
+        // The cache may be slightly newer than the snapshot (its debounce is
+        // shorter) — mark dirty so the auto-save persists the restored state.
+        dispatch({ type: 'MARK_SNAPSHOT_DIRTY' })
+      } else {
+        const snap = buildSnapshot({
+          label: `ตารางกู้คืน ${new Date(cached._cachedAt || Date.now()).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}`,
+          status: 'draft',
+          fixtureName,
+          fixtureData: cached.fixtureData,
+          result: cached.result,
+          userPlacements: restoredPlacements,
+          substitutes: restoredSubstitutes,
+          dailySchedules: restoredDailySchedules,
+        })
+        const saveRes = vmSaveSnapshot(snap)
+        if (saveRes.ok) {
+          dispatch({ type: 'ADD_SNAPSHOT_TO_LIST', payload: listSnapshots().find((s) => s.id === snap.id) })
+          dispatch({ type: 'SET_ACTIVE_SNAPSHOT', payload: { id: snap.id, label: snap.label } })
+        }
+      }
       return { ok: true }
     } catch (e) {
       console.warn('[AppContext] resumeFromCache failed:', e.message)
       return { ok: false, error: 'อ่านข้อมูลจากเครื่องไม่สำเร็จ' }
     }
-  }, [])
-
-  // ── Auto-resume last workspace on load ───────────────────────────────
-  // After a refresh/reopen, if a recent cached workspace exists, jump
-  // straight into the timetable step (step 5) instead of parking on the
-  // landing page. Runs ONCE per session (autoResumedRef); skipCacheRestoreRef
-  // guards the "user started a new session (upload/import)" path.
-  const autoResumedRef = useRef(false)
-  useEffect(() => {
-    if (!state.cacheHint || autoResumedRef.current) return
-    if (state.activeStep !== 0 || state.fixtureData) return
-    autoResumedRef.current = true
-    resumeFromCache(state.cacheHint.cacheKey).then((r) => {
-      if (!r.ok) autoResumedRef.current = false
-    })
-  }, [state.cacheHint, state.activeStep, state.fixtureData, resumeFromCache])
+  }, [flushPendingSave])
 
   const setStep = useCallback((step) => {
     dispatch({ type: 'SET_STEP', payload: step })
@@ -1277,6 +1331,7 @@ export function AppProvider({ children }) {
       result: state.result,
       userPlacements: state.userPlacements,
       substitutes: state.substitutes,
+      dailySchedules: state.dailySchedules,
       solverPreset: state.solverPreset,
       solverCustomTime: state.solverCustomTime,
       solverCustomMode: state.solverCustomMode,
@@ -1293,14 +1348,17 @@ export function AppProvider({ children }) {
       dispatch({ type: 'SET_ACTIVE_SNAPSHOT', payload: { id: snap.id, label: snap.label } })
     }
     return result
-  }, [state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.solverCustomTime, state.solverCustomMode, state.snapshots.length, state.activeSnapshotId, state.lastSnapshotSaveAt])
+  }, [state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.dailySchedules, state.solverPreset, state.solverCustomTime, state.solverCustomMode, state.snapshots.length, state.activeSnapshotId, state.lastSnapshotSaveAt])
 
   const doLoadSnapshot = useCallback((id) => {
+    // Flush pending edits to the current workspace before switching —
+    // the debounced auto-save would otherwise drop the last <2s of work.
+    if (state.activeSnapshotId !== id) flushPendingSave()
     const snap = loadSnapshot(id)
     if (!snap) return { ok: false, error: 'ไม่พบ snapshot' }
     dispatch({ type: 'LOAD_SNAPSHOT', payload: snap })
     return { ok: true }
-  }, [])
+  }, [state.activeSnapshotId, flushPendingSave])
 
   const doDeleteSnapshot = useCallback((id) => {
     const ok = vmDeleteSnapshot(id)
@@ -1316,16 +1374,18 @@ export function AppProvider({ children }) {
       result: state.result,
       userPlacements: state.userPlacements,
       substitutes: state.substitutes,
+      dailySchedules: state.dailySchedules,
       solverPreset: state.solverPreset,
       solverCustomTime: state.solverCustomTime,
       solverCustomMode: state.solverCustomMode,
     })
     if (!snap) return
     exportToFile(snap)
-  }, [state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.solverCustomTime, state.solverCustomMode])
+  }, [state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.dailySchedules, state.solverPreset, state.solverCustomTime, state.solverCustomMode])
 
   const doImportSnapshot = useCallback(async (file) => {
     try {
+      flushPendingSave()
       const snap = await importFromFile(file)
       const result = vmSaveSnapshot(snap)
       if (result.ok) {
@@ -1353,7 +1413,66 @@ export function AppProvider({ children }) {
     } catch (e) {
       return { ok: false, error: e.message }
     }
-  }, [])
+  }, [flushPendingSave])
+
+  // ── Workspace (งาน/ตาราง) ───────────────────────────────────────────
+  // Creates a brand-new workspace. Any current work is auto-saved to its
+  // own snapshot FIRST so switching to a new timetable never overwrites or
+  // loses the previous one — each workspace lives as its own snapshot.
+  const createNewWorkspace = useCallback((title) => {
+    let savedLabel = null
+    const hasWork = !!(state.fixtureData && (
+      (state.fixtureData.teachers?.length || 0) > 0 ||
+      (state.fixtureData.classes?.length || 0) > 0 ||
+      (state.fixtureData.lesson_blocks?.length || 0) > 0 ||
+      state.result
+    ))
+    if (hasWork) {
+      const label = state.activeSnapshotLabel || generateLabel(state.snapshots.length)
+      doSaveSnapshot(label, { updateExisting: !!state.activeSnapshotId })
+      savedLabel = label
+    }
+    const newLabel = (title && String(title).trim())
+      || `ตารางใหม่ ${new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}`
+    const emptyFixture = {
+      teachers: [],
+      rooms: [],
+      subjects: [],
+      classes: [],
+      lesson_blocks: [],
+      fixed_slots: [],
+      schedule_blocks: [],
+      special_activities: [],
+      schedule_config: {
+        days_per_week: 5,
+        periods_per_day: 8,
+        lunch_periods: [4],
+        assembly_slots: [],
+        max_consecutive_teaching: 4,
+        pe_hot_periods: [],
+      },
+      solver_time_limit_seconds: 5.0,
+    }
+    // Persist an empty workspace snapshot immediately so it shows up on the
+    // landing page list even if the user leaves before entering data.
+    const snap = buildSnapshot({
+      label: newLabel,
+      status: 'draft',
+      fixtureName: 'custom',
+      fixtureData: emptyFixture,
+    })
+    const saveRes = vmSaveSnapshot(snap)
+    if (!saveRes.ok) {
+      return { ok: false, error: saveRes.error || 'บันทึกงานใหม่ไม่สำเร็จ' }
+    }
+    dispatch({ type: 'ADD_SNAPSHOT_TO_LIST', payload: listSnapshots().find((s) => s.id === snap.id) })
+    // Reset working state (also clears IndexedDB cache + placement keys),
+    // then bind the fresh workspace so every later edit auto-saves to it.
+    setFixtureDataDirect(emptyFixture)
+    dispatch({ type: 'SET_ACTIVE_SNAPSHOT', payload: { id: snap.id, label: snap.label } })
+    dispatch({ type: 'SET_STEP', payload: 1 })
+    return { ok: true, savedLabel }
+  }, [state.fixtureData, state.result, state.activeSnapshotId, state.activeSnapshotLabel, state.snapshots.length, doSaveSnapshot, setFixtureDataDirect])
 
   // ── Auto-save (debounced) ───────────────────────────────────────────
   const autoSaveTimerRef = useRef(null)
@@ -1367,7 +1486,8 @@ export function AppProvider({ children }) {
         fixtureData: state.fixtureData,
         result: state.result,
         userPlacements: state.userPlacements,
-      substitutes: state.substitutes,
+        substitutes: state.substitutes,
+        dailySchedules: state.dailySchedules,
         solverPreset: state.solverPreset,
         solverCustomTime: state.solverCustomTime,
         solverCustomMode: state.solverCustomMode,
@@ -1382,7 +1502,7 @@ export function AppProvider({ children }) {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     }
-  }, [state.isSnapshotDirty, state.activeSnapshotId, state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.solverCustomTime, state.solverCustomMode, state.lastSnapshotSaveAt])
+  }, [state.isSnapshotDirty, state.activeSnapshotId, state.activeSnapshotLabel, state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.dailySchedules, state.solverPreset, state.solverCustomTime, state.solverCustomMode, state.lastSnapshotSaveAt])
 
   // Persist userPlacements to localStorage
   useEffect(() => {
@@ -1472,6 +1592,7 @@ export function AppProvider({ children }) {
         userPlacements: state.userPlacements,
         substitutes: state.substitutes,
         dailySchedules: state.dailySchedules,
+        snapshotId: state.activeSnapshotId,
         version: 1,
       })
         .then(() => {
@@ -1491,7 +1612,7 @@ export function AppProvider({ children }) {
       if (resultCacheTimerRef.current) clearTimeout(resultCacheTimerRef.current)
       window.removeEventListener('pagehide', flushOnHide)
     }
-  }, [state.result, state.cacheKey, state.fixtureData, state.userPlacements, state.substitutes, state.dailySchedules])
+  }, [state.result, state.cacheKey, state.fixtureData, state.userPlacements, state.substitutes, state.dailySchedules, state.activeSnapshotId])
 
   // ── Daily schedules (สอนแทนรายวัน) persistence — localStorage ───────
   const dailyStorageKey = state.selectedFixture ? `daily_schedules_${state.selectedFixture}` : null
@@ -1581,7 +1702,8 @@ export function AppProvider({ children }) {
         fixtureData: state.fixtureData,
         result: state.result,
         userPlacements: state.userPlacements,
-      substitutes: state.substitutes,
+        substitutes: state.substitutes,
+        dailySchedules: state.dailySchedules,
         solverPreset: state.solverPreset,
         solverCustomTime: state.solverCustomTime,
         solverCustomMode: state.solverCustomMode,
@@ -1604,6 +1726,7 @@ export function AppProvider({ children }) {
   }, [state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotLabel, doListCloudWorkspaces])
 
   const doLoadFromCloud = useCallback(async (id) => {
+    flushPendingSave()
     dispatch({ type: 'SET_CLOUD_SYNCING', payload: true })
     try {
       const record = await fetchCloudWorkspace(id)
@@ -1618,7 +1741,7 @@ export function AppProvider({ children }) {
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
       return { ok: false, error: e.message }
     }
-  }, [])
+  }, [flushPendingSave])
 
   const doDeleteFromCloud = useCallback(async (id) => {
     try {
@@ -1687,6 +1810,7 @@ export function AppProvider({ children }) {
         deleteSnapshot: doDeleteSnapshot,
         exportSnapshot: doExportSnapshot,
         importSnapshot: doImportSnapshot,
+        createNewWorkspace,
         // Auth
         login: doLogin,
         logout: doLogout,

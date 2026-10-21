@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  Upload, Plus, Trash2, ArrowRight, ArrowLeft, FileSpreadsheet, X, Check,
-  Users, Layers, BookOpen, Download, FlaskConical, AlertCircle,
+  Upload, Plus, ArrowRight, ArrowLeft, FileSpreadsheet, X, Check,
+  Users, Layers, Download, FlaskConical, AlertCircle,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import useToast from '../hooks/useToast.js'
@@ -43,7 +43,7 @@ const GRADE_RANGE_PRESETS = [
 export default function DataIngestionStep() {
   const { fixtureData, updateFixtureData, setStep, selectFixture } = useApp()
   const { toast, showToast } = useToast()
-  const [showExcelImport, setShowExcelImport] = useState(false)  // false | { file, mode } where mode = 'full' | 'minimum'
+  const [showExcelImport, setShowExcelImport] = useState(null)  // null | File
 
   // Quick-start helpers for new users who don't have a file yet.
   function handleLoadDemo() {
@@ -111,68 +111,44 @@ export default function DataIngestionStep() {
             โหลดข้อมูลตัวอย่าง
           </button>
           <button
-            onClick={() => window.open(`${BASE_URL}/api/import/excel/template`, '_blank')}
+            onClick={() => window.open('/samples/ตัวอย่างข้อมูลการเรียน.xlsx', '_blank')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold
               bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors"
-            title="ดาวน์โหลด Template Excel เพื่อกรอกข้อมูลโรงเรียนของคุณ"
+            title="ดาวน์โหลดไฟล์ตัวอย่าง Excel ที่ผ่านการจัดตารางแล้ว เพื่อดูเป็นแนวทาง"
           >
             <Download className="w-4 h-4" />
-            ดาวน์โหลด Excel Template
+            ดาวน์โหลดไฟล์ตัวอย่าง
           </button>
         </div>
       </div>
 
-      {/* Upload options */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Option 1: Quick Import */}
-        <div className="card border-2 border-emerald-200 bg-emerald-50/50">
-          <div className="flex items-center gap-2 mb-3">
-            <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
-            <h3 className="font-bold text-gray-900">1. นำเข้าข้อมูลแบบด่วน (Quick Import)</h3>
-            <span className="badge bg-emerald-100 text-emerald-800 text-xs">แนะนำสำหรับเริ่มต้น</span>
-          </div>
-          <p className="text-sm text-gray-600 mb-3">
-            อัปโหลดไฟล์ Excel <strong>ชีทเดียว</strong> เพียงมีข้อมูลพื้นฐาน <code className="bg-gray-100 px-1 rounded">ชื่อครู</code> <code className="bg-gray-100 px-1 rounded">วิชา</code> <code className="bg-gray-100 px-1 rounded">ห้องเรียน</code> <code className="bg-gray-100 px-1 rounded">จำนวนคาบ/สัปดาห์</code> และคอลัมน์เสริม <code className="bg-gray-100 px-1 rounded">ห้องปฏิบัติการ</code> + <code className="bg-gray-100 px-1 rounded">คาบแล็บ</code> สำหรับวิชาที่ใช้ห้องแล็บ ระบบจะสกัดรายชื่อและจับคู่ภาระงานให้อัตโนมัติทันที
-          </p>
-          <p className="text-xs text-gray-500 italic mb-4">
-            💡 คำแนะนำ: หากยังไม่มีวิชาหรือห้องเรียนครบ ไม่เป็นไร สามารถใส่นำเข้าเฉพาะรายชื่อครูมาก่อน แล้วไปเพิ่มรายละเอียดในหน้าเว็บทีหลังได้
-          </p>
-          <ExcelDropZone
-            onFile={(file) => setShowExcelImport({ file, mode: 'minimum' })}
-            label="ลากไฟล์ Excel แบบด่วนมาวางที่นี่ หรือ คลิกเพื่อเลือกไฟล์"
-            accent="emerald"
-          />
-          <button
-            onClick={() => window.open(`${BASE_URL}/api/import/excel/template`, '_blank')}
-            className="flex items-center gap-1.5 text-sm text-emerald-700 hover:text-emerald-800 font-medium mt-3 bg-emerald-100 hover:bg-emerald-200 rounded-lg px-3 py-1.5 transition-all"
-          >
-            <Download className="w-4 h-4" />
-            ดาวน์โหลดเทมเพลตแบบด่วน (.xlsx)
-          </button>
+      {/* Upload: Excel import */}
+      <div className="card border-2 border-emerald-200 bg-emerald-50/50">
+        <div className="flex items-center gap-2 mb-3">
+          <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
+          <h3 className="font-bold text-gray-900">นำเข้าข้อมูลจาก Excel</h3>
+          <span className="badge bg-emerald-100 text-emerald-800 text-xs">แนะนำสำหรับเริ่มต้น</span>
         </div>
-
-        {/* Option 2: Advanced Custom Import */}
-        <div className="card border-2 border-blue-200 bg-blue-50/50">
-          <div className="flex items-center gap-2 mb-3">
-            <FileSpreadsheet className="w-5 h-5 text-blue-600" />
-            <h3 className="font-bold text-gray-900">2. นำเข้าแบบกำหนดเองระดับสูง (Advanced Custom Import)</h3>
-            <span className="badge bg-blue-100 text-blue-800 text-xs">สำหรับตารางขนาดใหญ่ / มีเงื่อนไขซับซ้อน</span>
-          </div>
-          <p className="text-sm text-gray-600 mb-4">
-            สำหรับอัปโหลดไฟล์โครงสร้างแบบหลายชีท (Multi-Sheets) รวมข้อมูลภาระงาน เงื่อนไขข้อห้ามสอนของครู (Teacher Constraints) และคาบล็อกตายตัว (Fixed Slots) พร้อมระบบเลือกจับคู่คอลัมน์ (Column Mapping) ได้ตามต้องการ
-          </p>
-          <ExcelDropZone
-            onFile={(file) => setShowExcelImport({ file, mode: 'full' })}
-            label="ลากไฟล์ Excel สมบูรณ์มาวางที่นี่ หรือ คลิกเพื่อเลือกไฟล์"
-            accent="blue"
-          />
+        <p className="text-sm text-gray-600 mb-3">
+          อัปโหลดไฟล์ Excel <strong>ชีทเดียว</strong> เพียงมีข้อมูลพื้นฐาน <code className="bg-gray-100 px-1 rounded">ชื่อครู</code> <code className="bg-gray-100 px-1 rounded">วิชา</code> <code className="bg-gray-100 px-1 rounded">ห้องเรียน</code> <code className="bg-gray-100 px-1 rounded">จำนวนคาบ/สัปดาห์</code> และคอลัมน์เสริม <code className="bg-gray-100 px-1 rounded">ห้องปฏิบัติการ</code> + <code className="bg-gray-100 px-1 rounded">คาบแล็บ</code> สำหรับวิชาที่ใช้ห้องแล็บ ระบบจะสกัดรายชื่อและจับคู่ภาระงานให้อัตโนมัติทันที
+        </p>
+        <p className="text-xs text-gray-500 italic mb-4">
+          💡 คำแนะนำ: หากยังไม่มีวิชาหรือห้องเรียนครบ ไม่เป็นไร สามารถใส่นำเข้าเฉพาะรายชื่อครูมาก่อน แล้วไปเพิ่มรายละเอียดในหน้าเว็บทีหลังได้
+        </p>
+        <ExcelDropZone
+          onFile={(file) => setShowExcelImport(file)}
+          label="ลากไฟล์ Excel มาวางที่นี่ หรือ คลิกเพื่อเลือกไฟล์"
+          accent="emerald"
+        />
+        <div className="mt-3 flex items-center gap-3 flex-wrap">
           <button
-            onClick={() => window.open(`${BASE_URL}/api/import/excel/template-full`, '_blank')}
-            className="flex items-center gap-1.5 text-sm text-blue-700 hover:text-blue-800 font-medium mt-3 bg-blue-100 hover:bg-blue-200 rounded-lg px-3 py-1.5 transition-all"
+            onClick={() => window.open('/samples/ตัวอย่างข้อมูลการเรียน.xlsx', '_blank')}
+            className="flex items-center gap-1.5 text-sm text-emerald-700 hover:text-emerald-800 font-medium bg-emerald-100 hover:bg-emerald-200 rounded-lg px-3 py-1.5 transition-all"
           >
             <Download className="w-4 h-4" />
-            ดาวน์โหลดเทมเพลตแบบสมบูรณ์ (.xlsx)
+            ดาวน์โหลดไฟล์ตัวอย่าง (.xlsx)
           </button>
+          <span className="text-xs text-gray-500">ไฟล์ตัวอย่างที่ผ่านการจัดตารางแล้ว — เปิดดูเป็นแนวทาง หรือลบข้อมูลแล้วกรอกของโรงเรียนคุณ</span>
         </div>
       </div>
 
@@ -279,10 +255,9 @@ export default function DataIngestionStep() {
       {/* Excel Import Modal */}
       {showExcelImport && (
         <ExcelImportModal
-          initialFile={showExcelImport.file}
-          mode={showExcelImport.mode}
-          onClose={() => setShowExcelImport(false)}
-          onDone={() => setShowExcelImport(false)}
+          initialFile={showExcelImport}
+          onClose={() => setShowExcelImport(null)}
+          onDone={() => setShowExcelImport(null)}
         />
       )}
 
@@ -593,23 +568,12 @@ function ExcelDropZone({ onFile, label = 'ลากไฟล์ Excel มาว�
 
 // ── Excel Import Modal ──────────────────────────────────────────────────────
 
-function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
+function ExcelImportModal({ initialFile, onClose, onDone }) {
   const { setFixtureDataDirect, clearResult, fixtureData } = useApp()
   const [step, setStep] = useState('upload')
-  const [file, setFile] = useState(null)
-  const [detectResult, setDetectResult] = useState(null)
-  const [mapping, setMapping] = useState({})
   const [importResult, setImportResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-
-  const FIELDS = [
-    { key: 'teacher_name', label: 'ชื่อครู' },
-    { key: 'subject', label: 'วิชา' },
-    { key: 'class_name', label: 'ห้องเรียน' },
-    { key: 'periods_per_week', label: 'คาบ/สัปดาห์' },
-    { key: 'is_double', label: 'คาบคู่ (optional)' },
-  ]
 
   // แปลง error ฝั่ง network (fetch ล้มเพราะ backend ยังไม่รัน/ปิด port) เป็นข้อความไทยที่บอกสาเหตุชัดเจน
   function friendlyFetchError(err) {
@@ -622,30 +586,9 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
 
   async function handleFileSelect(selectedFile) {
     if (!selectedFile) return
-    setFile(selectedFile)
     setLoading(true)
     setError(null)
-    try {
-      if (mode === 'minimum') {
-        // Minimum mode: skip detect/mapping, import directly
-        await handleMinimumImport(selectedFile)
-      } else {
-        // Full mode: detect columns then show mapping
-        const formData = new FormData()
-        formData.append('file', selectedFile)
-        const res = await fetch(`${BASE_URL}/api/import/excel/detect`, {
-          method: 'POST',
-          body: formData,
-        })
-        if (!res.ok) throw new Error((await res.text()) || 'Failed to parse')
-        const data = await res.json()
-        setDetectResult(data)
-        setMapping(data.auto_mapping || {})
-        setStep('mapping')
-      }
-    } catch (err) {
-      setError(friendlyFetchError(err))
-    }
+    await handleMinimumImport(selectedFile)
     setLoading(false)
   }
 
@@ -709,68 +652,11 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
     setLoading(false)
   }
 
-  async function handleImport() {
-    if (!file) return
-    setLoading(true)
-    setError(null)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('mapping', JSON.stringify(mapping))
-      const res = await fetch(`${BASE_URL}/api/import/excel/import`, {
-        method: 'POST',
-        body: formData,
-      })
-      if (!res.ok) throw new Error((await res.text()) || 'Failed to import')
-      const data = await res.json()
-      setImportResult(data)
-      clearResult()
-
-      const defaultMax = fixtureData?.schedule_config?.default_max_periods_per_week || 30
-      const teachers = (data.teachers || []).map((t) => ({
-        id: t.id, name: t.name,
-        max_periods_per_week: t.max_periods_per_week || defaultMax,
-        min_periods_per_week: t.min_periods_per_week || 0,
-        unavailable_slots: t.unavailable_slots || [],
-        admin_role: t.admin_role || 'none',
-      }))
-      const classRooms = (data.classes || []).map((c) => ({
-        id: `R_${c.id}`, name: `ห้อง ${c.name}`, room_type: 'classroom',
-      }))
-      const specialRooms = data.special_rooms || []
-      const rooms = (data.rooms && data.rooms.length > 0) ? data.rooms : [...classRooms, ...specialRooms]
-
-      setFixtureDataDirect({
-        teachers,
-        rooms,
-        special_rooms: specialRooms,
-        subjects: data.subjects || [],
-        classes: data.classes || [],
-        lesson_blocks: data.lesson_blocks || [],
-        fixed_slots: data.fixed_slots || [],
-        schedule_blocks: [],
-        special_activities: [],
-        schedule_config: {
-          days_per_week: 5, periods_per_day: 8, lunch_periods: [4],
-          assembly_slots: [], max_consecutive_teaching: 4, pe_hot_periods: [],
-          default_max_periods_per_week: defaultMax,
-        },
-        solver_time_limit_seconds: 5.0,
-      })
-      setStep('done')
-    } catch (err) {
-      setError(friendlyFetchError(err))
-    }
-    setLoading(false)
-  }
-
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-lg space-y-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="font-bold text-gray-900">
-            {mode === 'minimum' ? 'นำเข้าไฟล์ Excel (แบบกรอกขั้นต่ำ)' : 'นำเข้าไฟล์ Excel (แบบเติม)'}
-          </h3>
+          <h3 className="font-bold text-gray-900">นำเข้าไฟล์ Excel</h3>
           <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
         </div>
 
@@ -789,41 +675,13 @@ function ExcelImportModal({ initialFile, mode = 'full', onClose, onDone }) {
                 <>
                   <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                   <div className="font-medium text-gray-700">คลิกหรือลากไฟล์ Excel มาวาง</div>
-                  <div className="text-xs text-gray-400 mt-1">
-                    {mode === 'minimum' ? 'รองรับ .xlsx (1 ชีท, ขั้นต่ำ)' : 'รองรับ .xlsx (หลายชีท)'}
-                  </div>
+                  <div className="text-xs text-gray-400 mt-1">รองรับ .xlsx (1 ชีท)</div>
                 </>
               )}
             </div>
             <input type="file" accept=".xlsx,.xls" className="hidden"
               onChange={(e) => handleFileSelect(e.target.files[0])} />
           </label>
-        )}
-
-        {step === 'mapping' && detectResult && (
-          <div className="space-y-3">
-            <div className="text-sm text-gray-600">{detectResult.row_count} แถว</div>
-            {FIELDS.map((field) => (
-              <div key={field.key} className="flex items-center gap-2">
-                <div className="w-32 text-sm font-medium text-gray-700">{field.label}</div>
-                <select
-                  value={mapping[field.key] || ''}
-                  onChange={(e) => setMapping({ ...mapping, [field.key]: e.target.value || null })}
-                  className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
-                >
-                  <option value="">— ไม่เลือก —</option>
-                  {detectResult.headers.map((h) => <option key={h} value={h}>{h}</option>)}
-                </select>
-              </div>
-            ))}
-            <button
-              onClick={handleImport}
-              disabled={loading || !mapping.teacher_name || !mapping.subject || !mapping.class_name}
-              className="btn-primary text-sm w-full"
-            >
-              {loading ? 'กำลังนำเข้า...' : 'นำเข้าข้อมูล'}
-            </button>
-          </div>
         )}
 
         {step === 'done' && importResult && (
