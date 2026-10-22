@@ -2,6 +2,17 @@
 
 ระบบ deploy 2 ส่วน: **Render** (backend FastAPI) + **Cloudflare Workers** (frontend Vite SPA)
 
+## Production Account Map (สถานะจริง ณ 2026-10-22)
+
+| ส่วน | Account | รายละเอียด |
+|---|---|---|
+| GitHub repo | `angitian` | `angitian/SRO_Timetable`, branch `main` |
+| Frontend | Cloudflare acct `angitian02@gmail...` | Worker `sro-timetable` (workers.dev: `sro-timetable.angitian02.workers.dev`) — **ชื่อจริงต่างจาก `wrangler.toml`** (`sro-timetable-frontend`) เพราะสร้างผ่าน dashboard git integration |
+| Custom domain | Cloudflare เดียวกัน | `timetable.kru-platform.com` (zone `kru-platform.com` อยู่ acct นี้) |
+| D1 database | Cloudflare เดียวกัน | `kru-timetable-db` (id `f4f9b107-8cf5-4c8f-a340-4f5ef9106736`) — ชื่อจริง ไม่ใช่ `sro-timetable-db` |
+| Backend | Render acct ที่ผูก GitHub `angitian` | `sro-timetable-2.onrender.com` — **active ตั้งแต่ 2026-10-22** (เดิม `sro-timetable.onrender.com` อยู่ acct ที่เข้าไม่ได้ → orphan, ไม่มี traffic แล้ว) |
+| Google OAuth | Google Cloud Console | OAuth client เดิม — redirect URIs มีทั้ง backend เก่าและใหม่ (`google_sub` คงเดิม user เห็นของเดิม) |
+
 ---
 
 ## สถาปัยร overall
@@ -138,16 +149,17 @@ PrintStudio "บันทึก & แชร์"
 
 1. **สร้าง D1 database** ใน Cloudflare dashboard หรือ CLI:
    ```bash
-   npx wrangler d1 create sro-timetable-db
+   npx wrangler d1 create kru-timetable-db
    ```
+   (ของจริงชื่อ `kru-timetable-db` — ถ้าใช้ของเดิมอยู่แล้ว ข้ามขั้นนี้)
 
 2. **รัน schema migration** (จาก root ของ repo):
    ```bash
-   npx wrangler d1 execute sro-timetable-db --remote --file scripts/init_d1.sql
+   npx wrangler d1 execute kru-timetable-db --remote --file scripts/init_d1.sql
    ```
    หรือสำหรับ local dev:
    ```bash
-   npx wrangler d1 execute sro-timetable-db --local --file scripts/init_d1.sql
+   npx wrangler d1 execute kru-timetable-db --local --file scripts/init_d1.sql
    ```
 
 3. **ตั้ง environment variables บน Render** (Settings → Environment):
@@ -157,7 +169,7 @@ PrintStudio "บันทึก & แชร์"
    | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID (ดูที่มุมขวาบน dashboard) |
    | `CLOUDFLARE_D1_DATABASE_ID` | Database ID จากขั้นตอนที่ 1 |
    | `CLOUDFLARE_API_TOKEN` | API token ที่มี permission `D1 Edit` ([สร้างที่นี่](https://dash.cloudflare.com/profile/api-tokens)) |
-   | `FRONTEND_BASE_URL` | URL ของ frontend เช่น `https://sro-timetable-frontend.<acct>.workers.dev` |
+   | `FRONTEND_BASE_URL` | `https://timetable.kru-platform.com` |
 
 4. **Redeploy Render** — หลังตั้ง env vars แล้ว
 
