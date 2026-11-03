@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Plus, FolderOpen, Check, AlertCircle, Zap,
   Printer, ShieldCheck, Cloud, Loader2, Trash2,
-  History, Download, Rocket,
+  History, Download, Rocket, CalendarDays, Users, X,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { formatSnapshotDate } from '../utils/versionManager.js'
@@ -43,6 +43,7 @@ export default function LandingPage() {
     snapshots, loadSnapshot, deleteSnapshot, exportSnapshot,
     // Resume last session from IndexedDB cache
     cacheHint, resumeFromCache,
+    fixtureData, result, setStep, updateManagerEmails,
   } = useApp()
   const fileInputRef = useRef(null)
   const [toast, setToast] = useState(null) // { type: 'ok'|'err', msg }
@@ -50,6 +51,7 @@ export default function LandingPage() {
   const [cloudLoading, setCloudLoading] = useState(false)
   const [showNewModal, setShowNewModal] = useState(false)
   const [newTitle, setNewTitle] = useState('')
+  const [managerWs, setManagerWs] = useState(null) // cloud ws being manager-edited
 
   // Preload the cloud workspace list once when logged in so the landing page
   // can show recent cloud timetables without requiring an extra click.
@@ -224,6 +226,78 @@ export default function LandingPage() {
           <p className="text-base md:text-lg text-slate-600 max-w-2xl mx-auto leading-normal mb-8">
             จัดตารางรวดเร็ว ตรวจจับคาบชนอัตโนมัติ ส่งออกเอกสาร A4 พร้อมพิมพ์ และเปิดดูออนไลน์ผ่าน QR Code
           </p>
+        </div>
+
+        {/* ── เลือกงานที่จะทำ (3 การ์ด) ────────────────────────────── */}
+        <div className="w-full max-w-4xl mx-auto mb-6">
+          <h2 className="text-base font-bold text-slate-700 mb-3 flex items-center gap-2">
+            <Rocket className="w-4 h-4 text-slate-500" />
+            เลือกงานที่จะทำ
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[
+              {
+                icon: Zap,
+                accent: 'amber',
+                title: 'จัดตารางสอน',
+                desc: 'นำเข้าข้อมูล → ตั้งค่าคาบ → ภาระครู → ตรวจสอบ → จัดตาราง',
+                ready: true,
+                onClick: () => {
+                  if (!fixtureData) setStep(1)
+                  else if (result) setStep(5)
+                  else setStep(3)
+                },
+              },
+              {
+                icon: CalendarDays,
+                accent: 'blue',
+                title: 'จัดการสอนแทน + ภาระงาน',
+                desc: 'จัดครูสอนแทนรายวัน ดูตารางสอนแทน สถิติ เหตุผลลา',
+                ready: !!result,
+                needMsg: 'ต้องจัดตารางหลักก่อน',
+                onClick: () => {
+                  if (!result) { showToast('err', 'ต้องจัดตารางหลักก่อนใช้ระบบสอนแทน'); return }
+                  setStep(7)
+                },
+              },
+              {
+                icon: History,
+                accent: 'emerald',
+                title: 'Dashboard ภาระงานครู',
+                desc: 'ภาระสอนปกติ vs สอนแทน + สถิติเหตุผลลา รวมในหน้าเดียว',
+                ready: !!fixtureData,
+                needMsg: 'ต้องมีข้อมูลตารางก่อน',
+                onClick: () => {
+                  if (!fixtureData) { showToast('err', 'สร้างหรือเปิดตารางสอนก่อนดู Dashboard'); return }
+                  setStep(8)
+                },
+              },
+            ].map((card) => {
+              const Icon = card.icon
+              const s = ACCENT_STYLES[card.accent]
+              return (
+                <button
+                  key={card.title}
+                  onClick={card.onClick}
+                  disabled={!card.ready}
+                  title={!card.ready ? card.needMsg : ''}
+                  className={`p-5 rounded-xl border text-left transition-all relative
+                    ${card.ready
+                      ? 'border-slate-200 bg-white shadow-sm hover:shadow-md hover:border-blue-300'
+                      : 'border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed'}`}
+                >
+                  <div className={`w-10 h-10 rounded-lg ${s.bg} ${s.ring} ring-1 flex items-center justify-center mb-3`}>
+                    <Icon className={`w-5 h-5 ${s.icon}`} />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800 mb-1">{card.title}</h3>
+                  <p className="text-xs text-slate-500 leading-relaxed">{card.desc}</p>
+                  {!card.ready && (
+                    <div className="mt-2 text-[10px] text-amber-600 font-medium">⚠ {card.needMsg}</div>
+                  )}
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         {/* ── Main Actions ───────────────────────────────────────────── */}
@@ -555,6 +629,15 @@ export default function LandingPage() {
                         ปีการศึกษา {ws.academic_year}/{ws.term}
                       </div>
                     </button>
+                    {user && ws.user_id === user.id && (
+                      <button
+                        onClick={() => setManagerWs(ws)}
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors shrink-0"
+                        title="ตั้งค่าผู้จัดการ (เจ้าของเท่านั้น)"
+                      >
+                        <Users className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDeleteCloudWorkspace(ws.id, ws.title)}
                       className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors shrink-0"
@@ -569,6 +652,94 @@ export default function LandingPage() {
           </div>
         </div>
       )}
+
+      {/* ── Managers dialog (owner only) ────────────────────────────── */}
+      {managerWs && (
+        <ManagerDialog
+          ws={managerWs}
+          onClose={() => setManagerWs(null)}
+          onSave={async (emails) => {
+            const r = await updateManagerEmails(emails, managerWs.id)
+            showToast(r.ok ? 'ok' : 'err', r.ok ? 'บันทึกผู้จัดการแล้ว' : (r.error || 'บันทึกไม่สำเร็จ'))
+            if (r.ok) setManagerWs(null)
+            return r.ok
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+/* ═══ Dialog: ตั้งค่าผู้จัดการ workspace (owner only) ═══ */
+function ManagerDialog({ ws, onClose, onSave }) {
+  const [emails, setEmails] = useState(ws.manager_emails || [])
+  const [input, setInput] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const add = () => {
+    const v = input.trim()
+    if (!v || !v.includes('@')) return
+    if (!emails.includes(v)) setEmails([...emails, v])
+    setInput('')
+  }
+  const remove = (e) => setEmails(emails.filter((x) => x !== e))
+  const handleSave = async () => {
+    setSaving(true)
+    await onSave(emails)
+    setSaving(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+            <Users className="w-4 h-4 text-violet-600" />
+            ตั้งค่าผู้จัดการ
+          </h3>
+          <button onClick={onClose} className="p-1 rounded-lg text-gray-400 hover:bg-gray-100"><X className="w-4 h-4" /></button>
+        </div>
+        <p className="text-xs text-gray-500">
+          {ws.title} — เพิ่มอีเมล Google ของครูที่จะให้จัดการ workspace นี้ร่วมกัน
+          (จัดตาราง/สอนแทน/รายงานได้เท่าเจ้าของ; เพิ่ม/เพิกถอนผู้จัดการได้เฉพาะเจ้าของ)
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="email"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') add() }}
+            placeholder="teacher@school.ac.th"
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
+          />
+          <button onClick={add} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-violet-600 text-white hover:bg-violet-700 transition-colors">
+            เพิ่ม
+          </button>
+        </div>
+        {emails.length === 0 ? (
+          <p className="text-xs text-gray-400 italic">ยังไม่มีผู้จัดการ — คุณเป็นเจ้าของคนเดียว</p>
+        ) : (
+          <div className="space-y-1.5">
+            {emails.map((e) => (
+              <div key={e} className="flex items-center justify-between bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 text-xs">
+                <span className="text-violet-800 font-medium truncate">{e}</span>
+                <button onClick={() => remove(e)} className="shrink-0 text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors">ยกเลิก</button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 px-4 py-2 rounded-lg text-sm font-semibold bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:opacity-40"
+          >
+            {saving ? 'กำลังบันทึก…' : 'บันทึก'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

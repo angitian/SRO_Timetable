@@ -7,6 +7,7 @@ import {
   getAuthToken,
   fetchMySchedules,
   saveWorkspaceToCloud,
+  updateWorkspaceManagers,
   fetchCloudWorkspace,
   deleteCloudWorkspace,
   mergeGuestWorkspaces,
@@ -97,6 +98,9 @@ const initialState = {
   cloudWorkspaces: [], // list of cloud-saved workspaces (metadata)
   activeCloudWorkspaceId: null, // currently loaded cloud workspace id
   cloudSyncing: false, // true while saving/loading from cloud
+  // ── Workspace sharing (ผู้จัดการ 2+ คน) ──
+  managerEmails: [], // Google emails with manager access to the active workspace
+  workspaceOwnerId: null, // user_id of the cloud record owner (null for local snapshots)
 }
 
 function reducer(state, action) {
@@ -268,13 +272,14 @@ function reducer(state, action) {
       return {
         ...state,
         dailySchedules: { ...state.dailySchedules, [date]: action.payload },
+        isSnapshotDirty: true,
       }
     }
     case 'REMOVE_DAILY_SCHEDULE': {
       // payload: { date }
       const next = { ...state.dailySchedules }
       delete next[action.payload.date]
-      return { ...state, dailySchedules: next }
+      return { ...state, dailySchedules: next, isSnapshotDirty: true }
     }
     case 'RESTORE_DAILY_SCHEDULES':
       return { ...state, dailySchedules: (action.payload && typeof action.payload === 'object') ? action.payload : {} }
@@ -467,6 +472,10 @@ function reducer(state, action) {
         solverCustomMode: action.payload.solverCustomMode || state.solverCustomMode,
         activeSnapshotId: action.payload.id,
         activeSnapshotLabel: action.payload.label,
+        // Local snapshots may carry manager_emails embedded in workspace_json;
+        // owner id is unknown locally → treat as unrestricted when list is empty.
+        managerEmails: action.payload.managerEmails || [],
+        workspaceOwnerId: null,
         isSnapshotDirty: false,
         isDirty: false,
         lastSnapshotSaveAt: action.payload.updatedAt || Date.now(),
@@ -528,6 +537,8 @@ function reducer(state, action) {
         solverCustomTime: ws.solverCustomTime ?? 60,
         solverCustomMode: ws.solverCustomMode || 'BALANCED',
         activeCloudWorkspaceId: action.payload._cloudId || null,
+        managerEmails: action.payload._managerEmails || ws.managerEmails || [],
+        workspaceOwnerId: action.payload._ownerId || null,
         // Reset local snapshot tracking — cloud workspace is separate
         activeSnapshotId: null,
         activeSnapshotLabel: null,
@@ -547,7 +558,9 @@ function reducer(state, action) {
       }
     }
     case 'CLEAR_CLOUD_WORKSPACE':
-      return { ...state, activeCloudWorkspaceId: null }
+      return { ...state, activeCloudWorkspaceId: null, managerEmails: [], workspaceOwnerId: null }
+    case 'SET_MANAGER_EMAILS':
+      return { ...state, managerEmails: action.payload || [] }
     // ── Slot-level editing ───────────────────────────────────────────
     case 'MOVE_SLOT': {
       // payload: { lessonBlockId, day, period, newDay, newPeriod } — moves
@@ -1616,29 +1629,50 @@ export function AppProvider({ children }) {
 
   // ── Daily schedules (สอนแทนรายวัน) persistence — localStorage ───────
   const dailyStorageKey = state.selectedFixture ? `daily_schedules_${state.selectedFixture}` : null
+  // refs กันการเขียนทับข้อมูลที่เซฟไว้ก่อน hydrate เสร็จ (ต้นเหตุข้อมูลหายตอน refresh)
+  const dailyKeyRef = useRef(null) // key ที่ข้อมูลใน state เป็นของอยู่จริง
+  const dailyHydratedRef = useRef(false) // โหลดจาก storage ของ key ปัจจุบันเสร็จหรือยัง
+  const dailyWrittenRef = useRef(false) // เคยเขียนข้อมูลลง key นี้ในรอบ session หรือยัง
+  const hydratedFixturesRef = useRef(new Set()) // hydrate แล้วกี่ fixture
 
   useEffect(() => {
     if (!dailyStorageKey) return
+    // ห้ามเขียนก่อน hydrate — ไม่งั้น state ว่างตอนเปิดแอปจะทับข้อมูลที่เซฟไว้
+    if (!dailyHydratedRef.current) return
+    if (dailyKeyRef.current !== dailyStorageKey) return
+    const hasData = Object.keys(state.dailySchedules || {}).length > 0
+    // อย่าเขียน {} ทับข้อมูลเดิมโดยไม่ตั้งใจ (เช่น เปิด workspace ใหม่ที่ยังไม่มีสอนแทน)
+    if (!hasData && !dailyWrittenRef.current) return
     try {
       localStorage.setItem(dailyStorageKey, JSON.stringify(state.dailySchedules || {}))
+      dailyWrittenRef.current = hasData
     } catch (e) {
       console.warn('[AppContext] dailySchedules persist failed:', e.message)
     }
   }, [state.dailySchedules, dailyStorageKey])
 
-  // Restore daily schedules when fixture loads
+  // Restore daily schedules when fixture loads — hydrate 1 ครั้งต่อ fixture ต่อ session
   useEffect(() => {
-    if (state.fixtureData && state.selectedFixture) {
-      const key = `daily_schedules_${state.selectedFixture}`
-      try {
-        const saved = localStorage.getItem(key)
-        if (saved) {
-          dispatch({ type: 'RESTORE_DAILY_SCHEDULES', payload: JSON.parse(saved) })
-        }
-      } catch (e) {
-        console.warn('[AppContext] dailySchedules restore failed:', e.message)
-      }
+    if (!state.fixtureData || !state.selectedFixture) return
+    const key = `daily_schedules_${state.selectedFixture}`
+    if (hydratedFixturesRef.current.has(key)) return
+    hydratedFixturesRef.current.add(key)
+    dailyHydratedRef.current = false
+    let saved = {}
+    try {
+      const raw = localStorage.getItem(key)
+      if (raw) saved = JSON.parse(raw) || {}
+    } catch (e) {
+      console.warn('[AppContext] dailySchedules restore failed:', e.message)
     }
+    // ไม่ทับข้อมูลที่เพิ่งโหลดมาจาก snapshot/cloud (state มีข้อมูลอยู่แล้ว)
+    const stateEmpty = Object.keys(state.dailySchedules || {}).length === 0
+    if (stateEmpty && Object.keys(saved).length > 0) {
+      dispatch({ type: 'RESTORE_DAILY_SCHEDULES', payload: saved })
+      dailyWrittenRef.current = true
+    }
+    dailyKeyRef.current = key
+    dailyHydratedRef.current = true
   }, [state.fixtureData?.schedule_blocks, state.selectedFixture])
 
   // ── Auth actions (Google OAuth, optional) ───────────────────────────
@@ -1708,6 +1742,7 @@ export function AppProvider({ children }) {
         solverCustomTime: state.solverCustomTime,
         solverCustomMode: state.solverCustomMode,
         optimizationMode: state.optimizationMode,
+        managerEmails: state.managerEmails,
       }
       const result = await saveWorkspaceToCloud({
         id: state.activeCloudWorkspaceId || null,
@@ -1715,6 +1750,7 @@ export function AppProvider({ children }) {
         academicYear: 2569,
         term: 1,
         workspace,
+        managerEmails: state.managerEmails,
       })
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
       await doListCloudWorkspaces()
@@ -1733,7 +1769,12 @@ export function AppProvider({ children }) {
       const ws = record.workspace || {}
       dispatch({
         type: 'LOAD_CLOUD_WORKSPACE',
-        payload: { ...ws, _cloudId: id },
+        payload: {
+          ...ws,
+          _cloudId: id,
+          _managerEmails: record.manager_emails || [],
+          _ownerId: record.user_id || null,
+        },
       })
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
       return { ok: true }
@@ -1753,10 +1794,37 @@ export function AppProvider({ children }) {
     }
   }, [doListCloudWorkspaces])
 
+  // ── Workspace sharing: owner-only manager updates ──
+  const doUpdateManagerEmails = useCallback(async (emails, wsId) => {
+    const targetId = wsId || state.activeCloudWorkspaceId
+    if (!targetId) {
+      return { ok: false, error: 'ต้องบันทึกบนคลาวด์ก่อนจึงจะตั้งค่าผู้จัดการได้' }
+    }
+    try {
+      const res = await updateWorkspaceManagers(targetId, emails)
+      if (targetId === state.activeCloudWorkspaceId) {
+        dispatch({ type: 'SET_MANAGER_EMAILS', payload: res.manager_emails || [] })
+      }
+      await doListCloudWorkspaces()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }, [state.activeCloudWorkspaceId, doListCloudWorkspaces])
+
+  // สิทธิ์จัดการ: เจ้าของหรือผู้จัดการเท่านั้น (list ว่าง = ไม่จำกัด = พฤติกรรมเดิม)
+  const isWorkspaceOwner = !!(state.user && state.workspaceOwnerId && state.user.id === state.workspaceOwnerId)
+  const canManage = state.managerEmails.length === 0
+    || isWorkspaceOwner
+    || (!!state.user && state.managerEmails.includes(state.user.email))
+
   return (
     <AppContext.Provider
       value={{
         ...state,
+        canManage,
+        isWorkspaceOwner,
+        updateManagerEmails: doUpdateManagerEmails,
         selectFixture,
         runSolver,
         resumeFromCache,

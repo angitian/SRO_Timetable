@@ -7,7 +7,7 @@
  * ชั่วโมงคำนวณจากช่วงเวลาจริงของ schedule block (ไม่นับ lunch/break)
  */
 import { getPeriodDurationMinutes } from './dailySchedule.js'
-import { flattenClassTeachers } from './teacherLoad.js'
+import { flattenClassTeachers } from '../../utils/teacherLoad.js'
 
 /** ตรวจว่าวันที่อยู่ในช่วง (จาก/ถึง) หรือไม่ — เปรียบเทียบ string YYYY-MM-DD */
 export function isDateInRange(dateStr, fromDate, toDate) {
@@ -185,4 +185,62 @@ export function rangeLabel(fromDate, toDate) {
   }
   if (fromDate) return `ตั้งแต่วันที่ ${fromDate}`
   return `ถึงวันที่ ${toDate}`
+}
+
+/**
+ * จำนวนคาบสอนแทนที่ครูแต่ละคนรับไปแล้ว "สัปดาห์นี้" (จันทร์ → วันนี้)
+ * คืน { [teacherId]: count } — ใช้คู่กับ computeBaseTeacherLoad เพื่อเรียงครูว่าง
+ */
+export function computeSubstituteCountsThisWeek(dailySchedules, { scheduleBlocks, scheduleConfig } = {}) {
+  const today = new Date()
+  const m = String(today.getMonth() + 1).padStart(2, '0')
+  const d = String(today.getDate()).padStart(2, '0')
+  const todayStr = `${today.getFullYear()}-${m}-${d}`
+  const monday = mondayOfWeek(todayStr)
+  const stats = computeSubstituteStats(dailySchedules, {
+    fromDate: monday,
+    toDate: todayStr,
+    scheduleBlocks,
+    scheduleConfig,
+  })
+  const counts = {}
+  for (const [tid, s] of Object.entries(stats)) counts[tid] = s.periods
+  return counts
+}
+
+/**
+ * รวมรายชื่อครูว่าง + ภาระรวม — สำหรับเรียงรายชื่อ "ครูที่ว่างคาบนี้"
+ * เกณฑ์: totalLoad = ภาระปกติรายสัปดาห์ (จากตารางหลัก) + คาบสอนแทนสัปดาห์นี้
+ * เรียง totalLoad น้อยสุดก่อน (tie → ชื่อ)
+ * คืน [{ teacher, basePeriodsPerWeek, subPeriodsThisWeek, totalLoad }]
+ */
+export function buildFreeTeacherRows({ freeTeachers = [], baseLoads = {}, subCountsThisWeek = {} }) {
+  return freeTeachers
+    .map((t) => {
+      const base = baseLoads[t.id]?.periodsPerWeek || 0
+      const sub = subCountsThisWeek[t.id] || 0
+      return { teacher: t, basePeriodsPerWeek: base, subPeriodsThisWeek: sub, totalLoad: base + sub }
+    })
+    .sort((a, b) => a.totalLoad - b.totalLoad || (a.teacher.name || '').localeCompare(b.teacher.name || '', 'th'))
+}
+
+/**
+ * สถิติเหตุผลการลาจาก dailySchedules ตามช่วงวันที่
+ * คืน [{ reason, count }] เรียงมากสุดก่อน — normalize ข้อมูลเก่า (absentTeacherIds) ให้ด้วย
+ */
+export function computeAbsenceReasonStats(dailySchedules, { fromDate, toDate } = {}) {
+  const counts = new Map()
+  for (const ds of Object.values(dailySchedules || {})) {
+    if (!isDateInRange(ds?.date, fromDate, toDate)) continue
+    const absences = Array.isArray(ds?.absences)
+      ? ds.absences
+      : (ds?.absentTeacherIds || []).map((tid) => ({ teacherId: tid, reason: '', periodRange: 'all' }))
+    for (const a of absences) {
+      const reason = (a?.reason || '').trim() || 'ไม่ระบุ'
+      counts.set(reason, (counts.get(reason) || 0) + 1)
+    }
+  }
+  return [...counts.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason, 'th'))
 }

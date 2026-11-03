@@ -5,7 +5,7 @@ import io
 import functools
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -15,6 +15,10 @@ import schedule_store
 from excel_parser import parse_excel, import_with_mapping, import_multi_sheet, generate_minimum_template, import_minimum_template, generate_full_template
 from api.timetables import router as timetables_router
 from api.auth import router as auth_router
+from api.devtools import router as devtools_router, require_local_dev
+from api.substitutes import router as substitutes_router
+from config import settings as app_settings
+from fastapi.responses import FileResponse
 
 # Maximum accepted Excel upload size: 10 MB (prevents DoS via huge files)
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -52,6 +56,18 @@ app.add_middleware(
 
 app.include_router(timetables_router)
 app.include_router(auth_router)
+app.include_router(devtools_router)
+app.include_router(substitutes_router)
+
+# Dev-only DB inspector page (static file, no build step). Local-only + flag-gated.
+_DEV_DB_PAGE = Path(__file__).parent / "devtools" / "db.html"
+
+
+@app.get("/dev/db", include_in_schema=False)
+async def dev_db_page(_: None = Depends(require_local_dev)):
+    if not _DEV_DB_PAGE.is_file():
+        raise HTTPException(status_code=404, detail="Dev DB page not found")
+    return FileResponse(_DEV_DB_PAGE, media_type="text/html; charset=utf-8")
 
 
 @app.get("/health")

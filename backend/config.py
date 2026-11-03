@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_DAYS: int = 30
 
+    # Dev DB inspector (หน้า /dev/db + /api/v1/dev/db/*) — local-only tool.
+    # Set DEV_DB_INSPECTOR=false on production deployments.
+    DEV_DB_INSPECTOR: bool = True
+
     @property
     def d1_configured(self) -> bool:
         """True when all three Cloudflare credentials are provided."""

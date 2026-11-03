@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { X, UserX, CalendarClock, Check, Trash2, ArrowRight } from 'lucide-react'
+import { computeNeededPerTeacher } from '../../utils/teacherLoad.js'
 
 const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 const PERIODS = Array.from({ length: 12 }, (_, i) => i + 1)
@@ -40,20 +41,31 @@ export default function SubstituteManagerModal({
   const absentSlots = useMemo(() => {
     if (!absentTeacherId) return []
     const res = []
+    const coName = (coId) => (coId ? (teachers.find((t) => t.id === coId)?.name || coId) : null)
     for (const s of slots) {
+      const lb = s.lesson_block_id ? lessonBlockMap.get(s.lesson_block_id) : null
+      const coId = s.co_teacher_id || lb?.co_teacher_id || null
       if (s.teacher_id === absentTeacherId && s.day === day && s.period === period) {
-        res.push({ class_id: s.class_id, subject_id: s.subject_id })
+        res.push({ class_id: s.class_id, subject_id: s.subject_id, co_teacher: coName(coId) })
+      }
+      // คาบที่ครูคนนี้เป็น "ครูร่วม" ก็ต้องถือเป็นคาบที่ต้องหาคนแทน
+      if (coId === absentTeacherId && s.day === day && s.period === period) {
+        res.push({ class_id: s.class_id, subject_id: s.subject_id, is_co_role: true, co_teacher: null })
       }
     }
     for (const [lbId, placements] of Object.entries(userPlacements || {})) {
       const lb = lessonBlockMap.get(lbId)
-      if (!lb || lb.teacher_id !== absentTeacherId) continue
+      if (!lb) continue
       if (placements.some((p) => p.day === day && p.period === period)) {
-        res.push({ class_id: lb.class_id, subject_id: lb.subject_id })
+        if (lb.teacher_id === absentTeacherId) {
+          res.push({ class_id: lb.class_id, subject_id: lb.subject_id, co_teacher: coName(lb.co_teacher_id) })
+        } else if (lb.co_teacher_id === absentTeacherId) {
+          res.push({ class_id: lb.class_id, subject_id: lb.subject_id, is_co_role: true, co_teacher: null })
+        }
       }
     }
     return res
-  }, [absentTeacherId, day, period, slots, userPlacements, lessonBlockMap])
+  }, [absentTeacherId, day, period, slots, userPlacements, lessonBlockMap, teachers])
 
   // ── 2. ครูที่ว่างคาบนั้น ──
   const freeTeachers = useMemo(() => {
@@ -68,7 +80,10 @@ export default function SubstituteManagerModal({
     for (const [lbId, placements] of Object.entries(userPlacements || {})) {
       if (!placements.some((p) => p.day === day && p.period === period)) continue
       const lb = lessonBlockMap.get(lbId)
-      if (lb) busy.add(lb.teacher_id)
+      if (lb) {
+        busy.add(lb.teacher_id)
+        if (lb.co_teacher_id) busy.add(lb.co_teacher_id)
+      }
     }
     const key = `${day}-${period}`
     return teachers.filter((t) => (
@@ -78,6 +93,18 @@ export default function SubstituteManagerModal({
       !(t.admin_free_slots || []).includes(key)
     ))
   }, [teachers, absentTeacherId, day, period, slots, userPlacements, lessonBlockMap])
+
+  // ── 3. ครูว่าง + ภาระ (ภาระปกติ + สอนแทนแล้ว) เรียงรวมน้อยสุดก่อน ──
+  const freeTeacherRows = useMemo(() => {
+    const needed = computeNeededPerTeacher(lessonBlocks || [])
+    const subCounts = {}
+    for (const s of substitutes || []) {
+      subCounts[s.substitute_teacher_id] = (subCounts[s.substitute_teacher_id] || 0) + 1
+    }
+    return freeTeachers
+      .map((t) => ({ teacher: t, base: needed[t.id] || 0, sub: subCounts[t.id] || 0 }))
+      .sort((a, b) => (a.base + a.sub) - (b.base + b.sub) || (a.teacher.name || '').localeCompare(b.teacher.name || '', 'th'))
+  }, [freeTeachers, lessonBlocks, substitutes])
 
   const periodDays = Array.from({ length: Math.max(1, days) }, (_, i) => i + 1)
   const periodNums = PERIODS.slice(0, Math.max(1, periods))
@@ -156,6 +183,12 @@ export default function SubstituteManagerModal({
                     </span>
                     <span className="text-gray-400">·</span>
                     <span className="text-gray-600">{classMap.get(s.class_id)?.name || s.class_id}</span>
+                    {s.is_co_role && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">ตำแหน่งครูร่วม</span>
+                    )}
+                    {s.co_teacher && (
+                      <span className="text-[10px] text-gray-400">+ ครูร่วม {s.co_teacher}</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -165,18 +198,18 @@ export default function SubstituteManagerModal({
           {/* ── ครูที่ว่างคาบนี้ ── */}
           <div>
             <div className="text-sm font-bold text-gray-700 mb-2">
-              ครูที่ว่างคาบนี้ ({absentTeacherId ? freeTeachers.length : 0})
-              <span className="text-xs font-normal text-gray-400 ml-2">— เลือกว่าจะให้ใครสอนแทน</span>
+              ครูที่ว่างคาบนี้ ({absentTeacherId ? freeTeacherRows.length : 0})
+              <span className="text-xs font-normal text-gray-400 ml-2">— เลือกว่าจะให้ใครสอนแทน (เรียงตามภาระน้อยสุด)</span>
             </div>
             {absentSlots.length === 0 ? (
               <p className="text-xs text-gray-400 italic py-2">ไม่มีคาบให้จัดการในวัน/คาบนี้</p>
-            ) : freeTeachers.length === 0 ? (
+            ) : freeTeacherRows.length === 0 ? (
               <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                 ไม่มีครูว่างในคาบนี้ — ต้องสลับคาบอื่นก่อน หรือปล่อยไว้ (คาบนี้จะไม่มีครูสอนแทน)
               </p>
             ) : (
               <div className="space-y-1.5">
-                {freeTeachers.map((t) => {
+                {freeTeacherRows.map(({ teacher: t, base, sub }) => {
                   const already = substitutes.find(
                     (s) => s.day === day && s.period === period && s.class_id === absentSlots[0].class_id,
                   )
@@ -186,8 +219,7 @@ export default function SubstituteManagerModal({
                       <div className="min-w-0">
                         <div className="text-sm font-medium text-gray-800 truncate">{t.name}</div>
                         <div className="text-[11px] text-gray-400">
-                          {absentSlots.map((s) => subjectMap.get(s.subject_id)?.name || s.subject_id).join(', ')} ·
-                          {absentSlots.map((s) => classMap.get(s.class_id)?.name || s.class_id).join(', ')}
+                          ภาระ {base} คาบ/สัปดาห์ · สอนแทนแล้ว {sub} คาบ
                         </div>
                       </div>
                       <button

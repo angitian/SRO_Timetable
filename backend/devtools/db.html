@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DB Inspector — local dev</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    background: #f8fafc; color: #0f172a;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #64748b; font-size: 12px; margin-bottom: 16px; }
+  .warn {
+    background: #fffbeb; border: 1px solid #fde68a; color: #92400e;
+    padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 16px;
+  }
+  .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+  .tabs button {
+    padding: 8px 14px; border-radius: 8px; border: 1px solid #e2e8f0;
+    background: #fff; cursor: pointer; font-size: 13px; font-weight: 600; color: #475569;
+  }
+  .tabs button.active { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+  .card .num { font-size: 26px; font-weight: 700; }
+  .card .lbl { font-size: 11px; color: #64748b; margin-top: 2px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+  input, select {
+    padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px;
+    font-size: 13px; background: #fff;
+  }
+  input[type="search"] { min-width: 240px; }
+  button.action {
+    padding: 7px 12px; border-radius: 8px; border: 1px solid #cbd5e1;
+    background: #fff; font-size: 13px; font-weight: 600; cursor: pointer; color: #334155;
+  }
+  button.action.primary { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; font-size: 12px; border-bottom: 1px solid #f1f5f9; }
+  th { background: #f1f5f9; color: #475569; font-weight: 700; white-space: nowrap; }
+  tr:hover td { background: #f8fafc; }
+  .mono { font-family: Consolas, monospace; font-size: 11px; color: #64748b; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; }
+  .pill.pub { background: #dcfce7; color: #15803d; }
+  .pill.priv { background: #e2e8f0; color: #475569; }
+  .pill.yes { background: #dbeafe; color: #1d4ed8; }
+  .pill.no { background: #f1f5f9; color: #94a3b8; }
+  .empty { padding: 32px; text-align: center; color: #94a3b8; font-size: 13px; background: #fff; border-radius: 10px; }
+  .err { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; padding: 10px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 12px; }
+  .copy { cursor: pointer; color: #1d4ed8; text-decoration: underline; font-size: 11px; background: none; border: 0; padding: 0; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <h1>DB Inspector</h1>
+  <div class="sub">เครื่องมือ dev สำหรับตรวจข้อมูลใน D1 — แสดงเฉพาะ metadata ไม่แสดงเนื้อหาตาราง</div>
+  <div class="warn">
+    ⚠ ใช้ได้เฉพาะเครื่อง local (loopback) และเมื่อเปิด <code>DEV_DB_INSPECTOR</code> — ห้ามเปิดบน production
+  </div>
+
+  <div class="tabs">
+    <button id="tab-overview" class="active" data-tab="overview">ภาพรวม</button>
+    <button id="tab-users" data-tab="users">ผู้ใช้</button>
+    <button id="tab-timetables" data-tab="timetables">ตาราง</button>
+  </div>
+
+  <div id="error" class="err hidden"></div>
+
+  <!-- ภาพรวม -->
+  <section id="panel-overview">
+    <div class="toolbar">
+      <button class="action primary" onclick="loadOverview()">รีเฟรช</button>
+    </div>
+    <div id="overview-cards" class="cards"></div>
+  </section>
+
+  <!-- ผู้ใช้ -->
+  <section id="panel-users" class="hidden">
+    <div class="toolbar">
+      <input type="search" id="user-q" placeholder="ค้นหา อีเมล / ชื่อ / id" />
+      <select id="user-sort">
+        <option value="timetables">เรียงตามจำนวนตาราง</option>
+        <option value="created">เรียงตามวันที่สร้าง</option>
+      </select>
+      <button class="action primary" onclick="loadUsers()">ค้นหา</button>
+      <button class="action" onclick="downloadCsv('users')">ดาวน์โหลด CSV</button>
+    </div>
+    <div id="users-table"></div>
+  </section>
+
+  <!-- ตาราง -->
+  <section id="panel-timetables" class="hidden">
+    <div class="toolbar">
+      <input type="search" id="tt-q" placeholder="ค้นหา ชื่อ / short code / อีเมลเจ้าของ" />
+      <select id="tt-visibility">
+        <option value="all">ทั้งหมด</option>
+        <option value="public">public</option>
+        <option value="private">private</option>
+      </select>
+      <select id="tt-has-result">
+        <option value="any">มี/ไม่มีผลลัพธ์</option>
+        <option value="yes">มีผลลัพธ์</option>
+        <option value="no">ยังไม่มีผลลัพธ์</option>
+      </select>
+      <select id="tt-sort">
+        <option value="updated">อัปเดตล่าสุด</option>
+        <option value="created">สร้างล่าสุด</option>
+        <option value="title">ชื่อ (ก-ฮ)</option>
+      </select>
+      <button class="action primary" onclick="loadTimetables()">ค้นหา</button>
+      <button class="action" onclick="downloadCsv('timetables')">ดาวน์โหลด CSV</button>
+    </div>
+    <div id="timetables-table"></div>
+  </section>
+
+<script>
+const API = '/api/v1/dev/db';
+let usersData = [];
+let timetablesData = [];
+
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c]));
+const fmtDate = (v) => {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return esc(v);
+  return d.toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' });
+};
+const fmtBytes = (n) => {
+  if (!n) return '0';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+};
+
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function clearError() {
+  document.getElementById('error').classList.add('hidden');
+}
+
+async function getJson(url) {
+  clearError();
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+// ── Tabs ────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tabs button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tabs button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    const tab = btn.dataset.tab;
+    for (const name of ['overview', 'users', 'timetables']) {
+      document.getElementById(`panel-${name}`).classList.toggle('hidden', name !== tab);
+    }
+    if (tab === 'users') loadUsers();
+    if (tab === 'timetables') loadTimetables();
+    if (tab === 'overview') loadOverview();
+  });
+});
+
+// ── Overview ────────────────────────────────────────────────────────────────
+async function loadOverview() {
+  try {
+    const o = await getJson(`${API}/overview`);
+    const cards = [
+      ['ผู้ใช้ทั้งหมด', o.users_total],
+      ['ตารางทั้งหมด', o.timetables_total],
+      ['public', o.public_total],
+      ['private', o.private_total],
+      ['มีผลลัพธ์', o.with_result_total],
+      ['มี workspace', o.with_workspace_total],
+    ];
+    document.getElementById('overview-cards').innerHTML = cards.map(([label, value]) => `
+      <div class="card">
+        <div class="num">${esc(value ?? 0)}</div>
+        <div class="lbl">${esc(label)}</div>
+      </div>`).join('') + `
+      <div class="card">
+        <div class="num" style="font-size:13px;">${fmtDate(o.first_created_at)}</div>
+        <div class="lbl">ตารางแรกที่สร้าง</div>
+      </div>
+      <div class="card">
+        <div class="num" style="font-size:13px;">${fmtDate(o.last_updated_at)}</div>
+        <div class="lbl">อัปเดตล่าสุด</div>
+      </div>`;
+  } catch (e) {
+    showError(`อ่านภาพรวมไม่สำเร็จ: ${e.message}`);
+  }
+}
+
+// ── Users ───────────────────────────────────────────────────────────────────
+async function loadUsers() {
+  const q = encodeURIComponent(document.getElementById('user-q').value.trim());
+  const sort = document.getElementById('user-sort').value;
+  try {
+    usersData = await getJson(`${API}/users?q=${q}&sort=${sort}&limit=500`);
+    if (!usersData.length) {
+      document.getElementById('users-table').innerHTML = '<div class="empty">ไม่พบผู้ใช้</div>';
+      return;
+    }
+    document.getElementById('users-table').innerHTML = `
+      <table>
+        <thead><tr>
+          <th>อีเมล</th><th>ชื่อ</th><th>จำนวนตาราง</th>
+          <th>สร้างเมื่อ</th><th>ใช้งานล่าสุด</th><th>user id</th>
+        </tr></thead>
+        <tbody>
+          ${usersData.map((u) => `
+            <tr>
+              <td>${esc(u.email) || '<span class="mono">(ไม่มีอีเมล)</span>'}</td>
+              <td>${esc(u.name) || '—'}</td>
+              <td><b>${esc(u.timetables_total)}</b></td>
+              <td>${fmtDate(u.created_at)}</td>
+              <td>${fmtDate(u.last_timetable_at)}</td>
+              <td class="mono" title="${esc(u.id)}">${esc(String(u.id || '').slice(0, 14))}…</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    showError(`อ่านรายชื่อผู้ใช้ไม่สำเร็จ: ${e.message}`);
+  }
+}
+
+// ── Timetables ──────────────────────────────────────────────────────────────
+async function loadTimetables() {
+  const q = encodeURIComponent(document.getElementById('tt-q').value.trim());
+  const visibility = document.getElementById('tt-visibility').value;
+  const hasResult = document.getElementById('tt-has-result').value;
+  const sort = document.getElementById('tt-sort').value;
+  try {
+    timetablesData = await getJson(
+      `${API}/timetables?q=${q}&visibility=${visibility}&has_result=${hasResult}&sort=${sort}&limit=500`,
+    );
+    if (!timetablesData.length) {
+      document.getElementById('timetables-table').innerHTML = '<div class="empty">ไม่พบตาราง</div>';
+      return;
+    }
+    document.getElementById('timetables-table').innerHTML = `
+      <table>
+        <thead><tr>
+          <th>ชื่อตาราง</th><th>เจ้าของ</th><th>สถานะ</th><th>ผลลัพธ์</th>
+          <th>ขนาด workspace</th><th>ผู้จัดการ</th><th>อัปเดต</th><th>ลิงก์</th>
+        </tr></thead>
+        <tbody>
+          ${timetablesData.map((t) => `
+            <tr>
+              <td>
+                <b>${esc(t.title)}</b>
+                <div class="mono">${esc(t.short_code)} · ปี ${esc(t.academic_year)}/${esc(t.term)}</div>
+              </td>
+              <td>
+                ${esc(t.owner_email) || '<span class="mono">(guest)</span>'}
+                ${t.owner_name ? `<div class="mono">${esc(t.owner_name)}</div>` : ''}
+              </td>
+              <td><span class="pill ${t.is_public ? 'pub' : 'priv'}">${t.is_public ? 'public' : 'private'}</span></td>
+              <td><span class="pill ${t.has_result ? 'yes' : 'no'}">${t.has_result ? 'มี' : 'ไม่มี'}</span></td>
+              <td>${fmtBytes(t.workspace_bytes)}</td>
+              <td>${(t.manager_emails || []).length ? esc(t.manager_emails.join(', ')) : '—'}</td>
+              <td>${fmtDate(t.updated_at)}</td>
+              <td><button class="copy" onclick="copyLink('${esc(t.short_code)}')">คัดลอก</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    showError(`อ่านรายการตารางไม่สำเร็จ: ${e.message}`);
+  }
+}
+
+function copyLink(code) {
+  const url = `${window.location.origin}/view?code=${code}`;
+  navigator.clipboard?.writeText(url).then(
+    () => { clearError(); },
+    () => showError('คัดลอกลิงก์ไม่สำเร็จ'),
+  );
+}
+
+// ── CSV ─────────────────────────────────────────────────────────────────────
+function toCsv(rows) {
+  return rows.map((row) => row.map((cell) => {
+    const s = String(cell ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }).join(',')).join('\r\n');
+}
+
+function downloadCsv(kind) {
+  let rows;
+  if (kind === 'users') {
+    rows = [['email', 'name', 'timetables_total', 'created_at', 'last_timetable_at', 'id'],
+      ...usersData.map((u) => [u.email, u.name, u.timetables_total, u.created_at, u.last_timetable_at, u.id])];
+  } else {
+    rows = [['title', 'short_code', 'owner_email', 'owner_name', 'is_public', 'has_result', 'workspace_bytes', 'manager_emails', 'created_at', 'updated_at', 'id'],
+      ...timetablesData.map((t) => [t.title, t.short_code, t.owner_email, t.owner_name, t.is_public, t.has_result, t.workspace_bytes, (t.manager_emails || []).join('|'), t.created_at, t.updated_at, t.id])];
+  }
+  const blob = new Blob(['\ufeff' + toCsv(rows)], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `db-${kind}-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+loadOverview();
+</script>
+</body>
+</html>

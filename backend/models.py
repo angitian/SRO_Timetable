@@ -628,6 +628,7 @@ class TimetableRecord(BaseModel):
     config: Optional[dict] = None
     result: Optional[dict] = None
     workspace: Optional[dict] = None
+    manager_emails: list[str] = Field(default_factory=list, description="Google emails with manager access to this workspace")
     is_public: bool = True
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -669,6 +670,7 @@ class WorkspaceSaveRequest(BaseModel):
     academic_year: int = Field(ge=1900, le=3000)
     term: int = Field(ge=1, le=3)
     workspace: dict = Field(description="Full workspace payload (fixtureData, result, userPlacements, ...)")
+    manager_emails: Optional[list[str]] = Field(default=None, description="Emails of additional managers (owner only may change)")
 
 
 class WorkspaceSaveResult(BaseModel):

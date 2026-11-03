@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS timetables (
     config_json TEXT NOT NULL,
     result_json TEXT,
     workspace_json TEXT,
+    manager_emails TEXT NOT NULL DEFAULT '[]',
     is_public INTEGER DEFAULT 1,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
@@ -33,3 +34,17 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_timetables_short_code ON timetables(short_code);
 CREATE INDEX IF NOT EXISTS idx_timetables_user_id ON timetables(user_id);
+
+-- Daily substitute share links (/view?sub=<short_code>)
+CREATE TABLE IF NOT EXISTS substitute_shares (
+    id TEXT PRIMARY KEY,
+    short_code TEXT UNIQUE NOT NULL,
+    date TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    user_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_substitute_shares_short_code ON substitute_shares(short_code);
+CREATE INDEX IF NOT EXISTS idx_substitute_shares_user_date ON substitute_shares(user_id, date);

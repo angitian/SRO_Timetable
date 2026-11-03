@@ -44,3 +44,7 @@ SYSTEM_REPORT.md
 
 # Temp commit message files
 .commit_msg*.txt
+
+# Editor/OS scratch files
+*.bak
+nul

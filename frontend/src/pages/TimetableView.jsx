@@ -9,7 +9,7 @@ import SolverToolbar from '../components/timetable/SolverToolbar.jsx'
 import StickyFooter from '../components/timetable/StickyFooter.jsx'
 import ConstraintsOverviewModal from '../components/modals/ConstraintsOverviewModal.jsx'
 import ExportExcelModal from '../components/timetable/ExportExcelModal.jsx'
-import SubstituteManagerModal from '../components/timetable/SubstituteManagerModal.jsx'
+import SubstituteManagerModal from '../features/substitute/SubstituteManagerModal.jsx'
 import { FACILITY_TYPE_ICONS, FACILITY_TYPE_LABELS } from '../utils/roomTypes.js'
 import { exportQuickTemplateExcel, exportFullTemplateExcel } from '../utils/exportTemplateExcel.js'
 import {

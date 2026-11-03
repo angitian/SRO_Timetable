@@ -276,7 +276,7 @@ export async function fetchMe() {
  * @param {{ id?: string, title: string, academicYear: number, term: number, workspace: object }} payload
  * @returns {Promise<{ id: string, title: string, updated_at: string }>}
  */
-export async function saveWorkspaceToCloud({ id, title, academicYear, term, workspace }) {
+export async function saveWorkspaceToCloud({ id, title, academicYear, term, workspace, managerEmails }) {
   const res = await fetch(`${BASE_URL}/api/v1/timetables/save-workspace`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -286,9 +286,63 @@ export async function saveWorkspaceToCloud({ id, title, academicYear, term, work
       academic_year: academicYear,
       term,
       workspace,
+      manager_emails: managerEmails ?? null,
     }),
   })
   if (res.status === 401) throw new Error('กรุณาเข้าสู่ระบบเพื่อบันทึกขึ้นคลาวด์')
+  if (!res.ok) {
+    const err = await res.text().catch(() => `HTTP ${res.status}`)
+    throw new Error(err)
+  }
+  return res.json()
+}
+
+/**
+ * Share the daily substitute documents (สร้าง/อัปเดตลิงก์ของวันนั้น).
+ * Re-sharing the same date reuses the existing short code.
+ * @param {{ date: string, payload: object }} body
+ * @returns {Promise<{ id: string, short_code: string, share_url: string, date: string }>}
+ */
+export async function shareSubstituteSchedule({ date, payload }) {
+  const res = await fetch(`${BASE_URL}/api/v1/substitutes/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ date, payload }),
+  })
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const body = await res.json()
+      if (body?.detail) detail = body.detail
+    } catch { /* ignore */ }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
+/**
+ * Public: fetch a shared substitute document set by short code.
+ * @param {string} code
+ */
+export async function fetchSubstituteShare(code) {
+  const res = await fetch(`${BASE_URL}/api/v1/substitutes/t/${encodeURIComponent(code)}`)
+  if (res.status === 404) throw new Error('ไม่พบลิงก์สอนแทน หรือลิงก์ถูกยกเลิกแล้ว')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+/**
+ * Update the manager_emails list on a workspace — owner only.
+ * @param {string} id
+ * @param {string[]} emails
+ */
+export async function updateWorkspaceManagers(id, emails) {
+  const res = await fetch(`${BASE_URL}/api/v1/timetables/workspace/${id}/managers`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ manager_emails: emails }),
+  })
+  if (res.status === 401) throw new Error('กรุณาเข้าสู่ระบบก่อน')
   if (!res.ok) {
     const err = await res.text().catch(() => `HTTP ${res.status}`)
     throw new Error(err)

@@ -42,10 +42,14 @@ function buildClassDailyHTML(classRow, { dateStr, dayLabel }) {
         <td class="empty" colspan="3">—</td>
       </tr>`
     }
-    const teacherHTML = cell.isSubstitute
+    const mainHTML = cell.mainIsSubstitute
       ? `<span class="sub">${esc(cell.teacherName)}</span>
          <div class="orig">(แทน ${esc(cell.originalName || '')})</div>`
-      : `${esc(cell.teacherName)}${cell.coTeacherName ? ` + ${esc(cell.coTeacherName)}` : ''}`
+      : esc(cell.teacherName)
+    const coHTML = !cell.coTeacherName ? '' : (cell.coIsSubstitute
+      ? `<div><span class="sub">+ ${esc(cell.coTeacherName)}</span><span class="orig"> (แทน ${esc(cell.coOriginalName || '')})</span></div>`
+      : `<div>+ ${esc(cell.coTeacherName)}</div>`)
+    const teacherHTML = `${mainHTML}${coHTML}`
     return `<tr>
       <td class="num">${p.period_no}</td>
       <td class="time">${esc(formatTimeRange(p.start_time, p.end_time))}</td>
@@ -73,7 +77,7 @@ export function buildDailyScheduleHTML({
   dayLabel,
   grid,
   assignments,
-  absentTeachers,
+  absences,
   teachers,
   subjects,
   classes,
@@ -83,24 +87,29 @@ export function buildDailyScheduleHTML({
   const teacherMap = new Map((teachers || []).map((t) => [t.id, t.name]))
   const subjectMap = new Map((subjects || []).map((s) => [s.id, s.name]))
   const classMap = new Map((classes || []).map((c) => [c.id, c.name]))
+  const RANGE = { all: 'ทั้งวัน', morning: 'เช้า', afternoon: 'บ่าย' }
+  const reasonOf = (tid) => (absences || []).find((a) => a.teacherId === tid)?.reason || ''
 
   const classPages = grid.rows
     .map((r) => buildClassDailyHTML(r, { dateStr, dayLabel }))
     .join('\n')
 
-  const absentHTML = (absentTeachers || []).length > 0
-    ? `<div class="absent-box"><strong>ครูที่ลา/ไม่มา:</strong> ${(absentTeachers || [])
-        .map((tid) => esc(teacherMap.get(tid) || tid)).join(', ')}</div>`
+  const absentHTML = (absences || []).length > 0
+    ? `<div class="absent-box"><strong>ครูที่ลา/ไม่มา:</strong> ${(absences || [])
+        .map((a) => `${esc(teacherMap.get(a.teacherId) || a.teacherId)}${a.reason ? ` (${esc(a.reason)})` : ''}`)
+        .join(', ')}</div>`
     : ''
 
   const assignRows = (assignments || []).map((a) => {
     const cls = classMap.get(a.class_id)
     const subj = subjectMap.get(a.subject_id)
+    const reason = reasonOf(a.original_teacher_id)
     return `<tr>
       <td>คาบ ${a.period}</td>
       <td>${esc(cls || a.class_id)}</td>
       <td>${esc(subj || a.subject_id)}</td>
-      <td>${esc(teacherMap.get(a.original_teacher_id) || a.original_teacher_id)}</td>
+      <td>${esc(teacherMap.get(a.original_teacher_id) || a.original_teacher_id)}${a.role === 'co' ? ' <span class="note">(ครูร่วม)</span>' : ''}</td>
+      <td>${esc(reason || '—')}</td>
       <td class="sub-cell">${esc(teacherMap.get(a.substitute_teacher_id) || a.substitute_teacher_id)}</td>
     </tr>`
   }).join('')
@@ -140,7 +149,7 @@ export function buildDailyScheduleHTML({
   <div class="assign-box">
     <div class="assign-title">สรุปรายการสอนแทน (${assignments.length} คาบ)</div>
     <table>
-      <thead><tr><th>คาบ</th><th>ห้อง</th><th>วิชา</th><th>ครูเดิม</th><th>ครูสอนแทน</th></tr></thead>
+      <thead><tr><th>คาบ</th><th>ห้อง</th><th>วิชา</th><th>ครูเดิม</th><th>เหตุผล</th><th>ครูสอนแทน</th></tr></thead>
       <tbody>${assignRows}</tbody>
     </table>
   </div>` : ''}
@@ -165,7 +174,7 @@ export async function exportDailySchedulePDF(opts) {
 
 /** export Excel ตารางรายวัน — sheet "ตารางรายวัน" + "รายการสอนแทน" */
 export async function exportDailyScheduleExcel(opts) {
-  const { dateStr, dayLabel, grid, assignments, teachers, subjects, classes, absentTeachers } = opts
+  const { dateStr, dayLabel, grid, assignments, teachers, subjects, classes, absences } = opts
   const ExcelJS = await import('exceljs')
   const Workbook = ExcelJS.default?.Workbook || ExcelJS.Workbook
   const wb = new Workbook()
@@ -187,8 +196,8 @@ export async function exportDailyScheduleExcel(opts) {
   ws.getRow(1).height = 24
   ws.mergeCells('A2:E2')
   const metaCell = ws.getCell('A2')
-  metaCell.value = absentTeachers?.length
-    ? `ครูที่ลา/ไม่มา: ${absentTeachers.map((t) => teacherMap.get(t) || t).join(', ')}`
+  metaCell.value = absences?.length
+    ? `ครูที่ลา/ไม่มา: ${absences.map((a) => `${teacherMap.get(a.teacherId) || a.teacherId}${a.reason ? ` (${a.reason})` : ''}`).join(', ')}`
     : 'ไม่มีครูที่ลา/ไม่มา'
   metaCell.font = { italic: true, size: 10, color: { argb: 'FF6B7280' } }
 
@@ -219,9 +228,13 @@ export async function exportDailyScheduleExcel(opts) {
       ws.getCell(row, 2).value = formatTimeRange(p.start_time, p.end_time)
       if (cell) {
         ws.getCell(row, 3).value = cell.subjectName
-        ws.getCell(row, 4).value = cell.isSubstitute
+        const mainName = cell.mainIsSubstitute
           ? `${cell.teacherName} (แทน ${cell.originalName || ''})`
-          : cell.teacherName + (cell.coTeacherName ? ` + ${cell.coTeacherName}` : '')
+          : cell.teacherName
+        const coName = !cell.coTeacherName ? '' : cell.coIsSubstitute
+          ? ` + ${cell.coTeacherName} (แทน ${cell.coOriginalName || ''})`
+          : ` + ${cell.coTeacherName}`
+        ws.getCell(row, 4).value = `${mainName}${coName}`
         ws.getCell(row, 5).value = cell.isSubstitute ? 'สอนแทน' : ''
         if (cell.isSubstitute) {
           ws.getCell(row, 4).font = { bold: true, color: { argb: 'FFC2410C' } }
@@ -245,8 +258,8 @@ export async function exportDailyScheduleExcel(opts) {
 
   // ── Sheet 2: รายการสอนแทน ──
   const ws2 = wb.addWorksheet('รายการสอนแทน', { views: [{ showGridLines: false }] })
-  ws2.columns = [{ width: 10 }, { width: 16 }, { width: 20 }, { width: 24 }, { width: 24 }]
-  const h2 = ['คาบ', 'ห้อง', 'วิชา', 'ครูเดิม', 'ครูสอนแทน']
+  ws2.columns = [{ width: 10 }, { width: 16 }, { width: 20 }, { width: 24 }, { width: 14 }, { width: 24 }]
+  const h2 = ['คาบ', 'ห้อง', 'วิชา', 'ครูเดิม', 'เหตุผล', 'ครูสอนแทน']
   h2.forEach((h, i) => {
     const cell = ws2.getCell(1, i + 1)
     cell.value = h
@@ -254,15 +267,17 @@ export async function exportDailyScheduleExcel(opts) {
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_SLATE } }
     cell.border = THIN_BORDER
   })
+  const reasonOf = (tid) => (absences || []).find((a) => a.teacherId === tid)?.reason || ''
   ;(assignments || []).forEach((a, idx) => {
     const r = idx + 2
     ws2.getCell(r, 1).value = `คาบ ${a.period}`
     ws2.getCell(r, 2).value = classMap.get(a.class_id) || a.class_id
     ws2.getCell(r, 3).value = subjectMap.get(a.subject_id) || a.subject_id
-    ws2.getCell(r, 4).value = teacherMap.get(a.original_teacher_id) || a.original_teacher_id
-    ws2.getCell(r, 5).value = teacherMap.get(a.substitute_teacher_id) || a.substitute_teacher_id
-    ws2.getCell(r, 5).font = { bold: true, color: { argb: 'FFC2410C' } }
-    for (let col = 1; col <= 5; col++) ws2.getCell(r, col).border = THIN_BORDER
+    ws2.getCell(r, 4).value = `${teacherMap.get(a.original_teacher_id) || a.original_teacher_id}${a.role === 'co' ? ' (ครูร่วม)' : ''}`
+    ws2.getCell(r, 5).value = reasonOf(a.original_teacher_id) || '—'
+    ws2.getCell(r, 6).value = teacherMap.get(a.substitute_teacher_id) || a.substitute_teacher_id
+    ws2.getCell(r, 6).font = { bold: true, color: { argb: 'FFC2410C' } }
+    for (let col = 1; col <= 6; col++) ws2.getCell(r, col).border = THIN_BORDER
   })
 
   const buffer = await wb.xlsx.writeBuffer()
@@ -280,7 +295,7 @@ export async function exportDailyScheduleExcel(opts) {
 // ── รายงานสถิติ ──────────────────────────────────────────────────────────
 
 /** สร้าง HTML รายงานสถิติครู */
-export function buildStatsReportHTML({ rows, fromDate, toDate, dayLabel }) {
+export function buildStatsReportHTML({ rows, fromDate, toDate, dayLabel, reasonRows = [] }) {
   const bodyRows = rows.map((r) => `<tr>
     <td class="num">${r.rank}</td>
     <td>${esc(r.teacherName)}</td>
@@ -291,6 +306,12 @@ export function buildStatsReportHTML({ rows, fromDate, toDate, dayLabel }) {
     <td class="num">${r.totalPeriods}</td>
     <td class="num">${r.sharePct.toFixed(1)}%</td>
   </tr>`).join('')
+  const reasonHTML = reasonRows.length ? `
+  <h2>สถิติเหตุผลที่ลา</h2>
+  <table>
+    <thead><tr><th>เหตุผล</th><th>จำนวนครั้ง</th></tr></thead>
+    <tbody>${reasonRows.map((r) => `<tr><td>${esc(r.reason)}</td><td class="num">${r.count}</td></tr>`).join('')}</tbody>
+  </table>` : ''
 
   return `<!DOCTYPE html>
 <html lang="th">
@@ -321,14 +342,15 @@ export function buildStatsReportHTML({ rows, fromDate, toDate, dayLabel }) {
     </thead>
     <tbody>${bodyRows}</tbody>
   </table>
+  ${reasonHTML}
 </body>
 </html>`
 }
 
 /** export PDF รายงานสถิติ */
-export function exportStatsPDF({ rows, fromDate, toDate }) {
+export function exportStatsPDF({ rows, fromDate, toDate, reasonRows }) {
   return new Promise((resolve, reject) => {
-    const html = buildStatsReportHTML({ rows, fromDate, toDate })
+    const html = buildStatsReportHTML({ rows, fromDate, toDate, reasonRows })
     const printWindow = window.open('', '_blank', 'width=1100,height=850')
     if (!printWindow) {
       reject(new Error('กรุณาอนุญาต popup เพื่อพิมพ์รายงาน'))
@@ -348,7 +370,7 @@ export function exportStatsPDF({ rows, fromDate, toDate }) {
 }
 
 /** export Excel รายงานสถิติ */
-export async function exportStatsExcel({ rows, fromDate, toDate }) {
+export async function exportStatsExcel({ rows, fromDate, toDate, reasonRows }) {
   const ExcelJS = await import('exceljs')
   const Workbook = ExcelJS.default?.Workbook || ExcelJS.Workbook
   const wb = new Workbook()
@@ -386,6 +408,29 @@ export async function exportStatsExcel({ rows, fromDate, toDate }) {
       if (i === 4 && r.subPeriods > 0) cell.font = { bold: true, color: { argb: 'FFC2410C' } }
     })
   })
+
+  // ── Sheet 2: สถิติเหตุผลที่ลา ──
+  if (reasonRows?.length) {
+    const ws3 = wb.addWorksheet('สถิติเหตุผลที่ลา', { views: [{ showGridLines: false }] })
+    ws3.columns = [{ width: 26 }, { width: 14 }]
+    ;[['เหตุผล', 'จำนวนครั้ง']].forEach(([h1, h2v]) => {
+      ws3.getCell(1, 1).value = h1
+      ws3.getCell(1, 2).value = h2v
+      ws3.getCell(1, 1).font = { bold: true, color: { argb: COLOR_NAVY } }
+      ws3.getCell(1, 2).font = { bold: true, color: { argb: COLOR_NAVY } }
+      ws3.getCell(1, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_SLATE } }
+      ws3.getCell(1, 2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_SLATE } }
+      ws3.getCell(1, 1).border = THIN_BORDER
+      ws3.getCell(1, 2).border = THIN_BORDER
+    })
+    reasonRows.forEach((r, idx) => {
+      ws3.getCell(idx + 2, 1).value = r.reason
+      ws3.getCell(idx + 2, 2).value = r.count
+      ws3.getCell(idx + 2, 1).border = THIN_BORDER
+      ws3.getCell(idx + 2, 2).border = THIN_BORDER
+      ws3.getCell(idx + 2, 2).alignment = { horizontal: 'center' }
+    })
+  }
 
   const buffer = await wb.xlsx.writeBuffer()
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })

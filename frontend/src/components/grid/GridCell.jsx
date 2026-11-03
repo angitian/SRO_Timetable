@@ -269,7 +269,7 @@ export default function GridCell({
       <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
         <span className="text-xs sm:text-sm font-semibold text-slate-600 truncate">
           {substitute ? (substitute.name || substitute.id) : (teacher?.name || slot.teacher_id)}
-          {!substitute && coTeacher && (
+          {coTeacher && (
             <span className="text-slate-500"> + {coTeacher.name || coTeacher.id}</span>
           )}
           {substitute && substituteOriginalName && (

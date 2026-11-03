@@ -243,7 +243,7 @@ async def list_my_schedules(
 ):
     """Protected: list all timetables owned by the caller (JWT or guest device)."""
     try:
-        records = await store.get_user_schedules(identity.user_id)
+        records = await store.get_user_schedules(identity.user_id, identity.email)
     except D1Error as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch schedules: {e}")
     return [TimetableRecord(**r) for r in records]
@@ -293,14 +293,23 @@ async def save_workspace(
     record_id = body.id or str(uuid.uuid4())
 
     if body.id:
-        # Update path: verify ownership first
-        existing = await store.get_timetable_by_id(body.id, identity.user_id)
+        # Update path: caller must be owner OR a manager (email scope)
+        existing = await store.get_timetable_by_id(body.id, identity.user_id, identity.email)
         if not existing:
             raise HTTPException(status_code=404, detail="Workspace not found or not yours")
-        # Preserve short_code/config/result from the existing record
+        # Preserve short_code/config/result/owner/managers from the existing record
         short_code = existing["short_code"]
         config_json = json.dumps(existing.get("config") or {}, ensure_ascii=False)
         result_json = json.dumps(existing.get("result") or {}, ensure_ascii=False)
+        # Only the owner may change manager_emails — managers editing the
+        # workspace keep the existing list untouched.
+        is_owner = existing.get("user_id") == identity.user_id
+        if is_owner:
+            manager_emails = body.manager_emails if body.manager_emails is not None else (existing.get("manager_emails") or [])
+        else:
+            manager_emails = existing.get("manager_emails") or []
+        # Preserve the original owner — a manager saving must NOT become owner
+        owner_id = existing.get("user_id")
     else:
         # Create path: allocate a fresh short_code (private, so it's just a placeholder)
         short_code = None
@@ -314,12 +323,14 @@ async def save_workspace(
         # For workspace-only saves, config/result are empty placeholders
         config_json = json.dumps({}, ensure_ascii=False)
         result_json = json.dumps({}, ensure_ascii=False)
+        manager_emails = body.manager_emails or []
+        owner_id = identity.user_id
 
     try:
         await store.save_timetable(
             id=record_id,
             short_code=short_code,
-            user_id=identity.user_id,
+            user_id=owner_id,
             title=body.title,
             academic_year=body.academic_year,
             term=body.term,
@@ -327,12 +338,13 @@ async def save_workspace(
             result_json=result_json,
             workspace_json=workspace_json,
             is_public=0,  # private workspace
+            manager_emails=manager_emails,
         )
     except D1Error as e:
         raise HTTPException(status_code=502, detail=f"Failed to save workspace: {e}")
 
     # Fetch back to get the updated_at timestamp
-    saved = await store.get_timetable_by_id(record_id, identity.user_id)
+    saved = await store.get_timetable_by_id(record_id, identity.user_id, identity.email)
     return WorkspaceSaveResult(
         id=record_id,
         title=body.title,
@@ -346,9 +358,9 @@ async def get_workspace(
     identity: UserIdentity = Depends(get_identity),
     store: Any = Depends(get_timetable_store),
 ):
-    """Fetch a private workspace by id, scoped to the caller."""
+    """Fetch a private workspace by id, scoped to the caller (owner or manager)."""
     try:
-        record = await store.get_timetable_by_id(record_id, identity.user_id)
+        record = await store.get_timetable_by_id(record_id, identity.user_id, identity.email)
     except D1Error as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch workspace: {e}")
     if not record:
@@ -370,6 +382,30 @@ async def delete_workspace(
     if not deleted:
         raise HTTPException(status_code=404, detail="Workspace not found or not yours")
     return {"ok": True, "id": record_id}
+
+
+@router.put("/workspace/{record_id}/managers")
+async def update_workspace_managers(
+    record_id: str,
+    body: dict,
+    identity: UserIdentity = Depends(get_identity),
+    store: Any = Depends(get_timetable_store),
+):
+    """Replace the manager_emails list on a workspace — OWNER only.
+    Managers may edit workspace content but cannot add/revoke managers.
+    """
+    if not identity.is_authenticated:
+        raise HTTPException(status_code=403, detail="Login required")
+    emails = body.get("manager_emails") or []
+    # normalize: strip whitespace, drop empties, dedupe
+    emails = list(dict.fromkeys(e.strip() for e in emails if isinstance(e, str) and e.strip()))
+    try:
+        updated = await store.update_manager_emails(record_id, identity.user_id, emails)
+    except D1Error as e:
+        raise HTTPException(status_code=502, detail=f"Failed to update managers: {e}")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Workspace not found or only the owner may manage members")
+    return {"ok": True, "id": record_id, "manager_emails": emails}
 
 
 @router.post("/merge-guest")

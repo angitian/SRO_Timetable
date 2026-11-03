@@ -1,5 +1,27 @@
-import { useRef } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import { Upload, Trash2, Save, RotateCcw } from 'lucide-react'
+
+
+// ── Debounced text field helper ───────────────────────────────────────────
+// พิมพ์แล้วอัปเดต settings หลังหยุดพิมพ์ ~300ms (กันการสร้างหน้า/QR ใหม่ทุก keystroke)
+function useDebouncedText(value, commit, delay = 300) {
+  const [local, setLocal] = useState(value ?? '')
+  const timer = useRef(null)
+  useEffect(() => {
+    setLocal(value ?? '')
+  }, [value])
+  const update = useCallback((v) => {
+    setLocal(v)
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => commit(v), delay)
+  }, [commit, delay])
+  const flush = useCallback(() => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null }
+    commit(local)
+  }, [commit, local])
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+  return [local, update, flush]
+}
 
 // ── Toggle Switch Component ──────────────────────────────────────────────
 function ToggleSwitch({ checked, onChange, label }) {
@@ -43,6 +65,19 @@ export default function PrintSettingsPanel({
   onResetTemplate,
 }) {
   const logoInputRef = useRef(null)
+  // ช่องข้อความ: debounce ก่อนส่งขึ้น settings (ลดงานหนักใน PrintStudio)
+  const [schoolName, setSchoolName, flushSchoolName] = useDebouncedText(
+    settings.schoolName, (v) => onSettingsChange({ schoolName: v }),
+  )
+  const [signatoryName, setSignatoryName, flushSignatoryName] = useDebouncedText(
+    settings.signatoryName, (v) => onSettingsChange({ signatoryName: v }),
+  )
+  const [signatoryTitle, setSignatoryTitle, flushSignatoryTitle] = useDebouncedText(
+    settings.signatoryTitle, (v) => onSettingsChange({ signatoryTitle: v }),
+  )
+  const [academicYearText, setAcademicYearText, flushAcademicYear] = useDebouncedText(
+    String(settings.academicYear ?? ''), (v) => onSettingsChange({ academicYear: parseInt(v, 10) || 2569 }),
+  )
 
   // ── Logo upload handler — converts image file to Base64 data URL ──────
   function handleLogoUpload(e) {
@@ -65,8 +100,9 @@ export default function PrintSettingsPanel({
           <label className="block text-xs text-gray-600 mb-1">ชื่อโรงเรียน</label>
           <input
             type="text"
-            value={settings.schoolName}
-            onChange={(e) => onSettingsChange({ schoolName: e.target.value })}
+            value={schoolName}
+            onChange={(e) => setSchoolName(e.target.value)}
+            onBlur={flushSchoolName}
             placeholder="เช่น โรงเรียนตัวอย่าง"
             className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg
               focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -138,8 +174,9 @@ export default function PrintSettingsPanel({
             <label className="block text-xs text-gray-600 mb-1">ผู้ลงนาม</label>
             <input
               type="text"
-              value={settings.signatoryName}
-              onChange={(e) => onSettingsChange({ signatoryName: e.target.value })}
+              value={signatoryName}
+              onChange={(e) => setSignatoryName(e.target.value)}
+              onBlur={flushSignatoryName}
               placeholder="เช่น นายสมชาย ใจดี"
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg
                 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -149,8 +186,9 @@ export default function PrintSettingsPanel({
             <label className="block text-xs text-gray-600 mb-1">ตำแหน่ง</label>
             <input
               type="text"
-              value={settings.signatoryTitle}
-              onChange={(e) => onSettingsChange({ signatoryTitle: e.target.value })}
+              value={signatoryTitle}
+              onChange={(e) => setSignatoryTitle(e.target.value)}
+              onBlur={flushSignatoryTitle}
               placeholder="เช่น ผู้อำนวยการโรงเรียน"
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg
                 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"

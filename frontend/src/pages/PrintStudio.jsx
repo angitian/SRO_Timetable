@@ -34,8 +34,13 @@ import { exportMultiExcel } from '../utils/exportExcel.js'
 import { exportMultiPNG } from '../utils/exportImage.js'
 import { normalizeClassTeachers, flattenClassTeachers, computeNeededPerTeacher, computeFixedSupervision } from '../utils/teacherLoad.js'
 import { computePlacedCounts } from '../utils/placementCounts.js'
-import { saveTimetableResult } from '../api/client.js'
+import { saveTimetableResult, shareSubstituteSchedule } from '../api/client.js'
 import PrintSettingsPanel from '../components/print/PrintSettingsPanel.jsx'
+import DateField from '../components/common/DateField.jsx'
+import { buildDailyPages, exportDailyMultiExcel } from '../features/substitute/printDaily.js'
+import {
+  todayISO, dateToDayOfWeek, normalizeDailySchedule, getDaySlots, formatDDMMYYYY,
+} from '../features/substitute/dailySchedule.js'
 
 // ── Constants ────────────────────────────────────────────────────────────
 const TEMPLATE_KEY = 'app_timetable_print_template'
@@ -75,16 +80,6 @@ function getFrontendOrigin() {
 
 function buildShortViewerURL(shortCode) {
   return `${getFrontendOrigin()}/view?code=${shortCode}`
-}
-
-// Deep-link variants: point a short link directly at one class or teacher so
-// QRs on printed pages always open the correct timetable (the viewer falls
-// back to the first item when these params are absent).
-function buildClassViewerShortURL(shortCode, classId) {
-  return `${getFrontendOrigin()}/view?code=${shortCode}&c=${encodeURIComponent(classId)}`
-}
-function buildTeacherViewerShortURL(shortCode, teacherId) {
-  return `${getFrontendOrigin()}/view?code=${shortCode}&v=teacher&t=${encodeURIComponent(teacherId)}`
 }
 
 /**
@@ -362,6 +357,17 @@ function buildHeaderHTML(settings, itemName) {
  * - margin-top:auto pins the footer to the bottom of the flex-column page.
  * - break-inside:avoid prevents the footer from splitting across pages.
  */
+// Cache QR SVG strings by URL — หน้าเดียวกัน/URL เดิมไม่ต้อง renderToString ซ้ำ
+const QR_SVG_CACHE = new Map()
+function buildQRSVGStringCached(url, size = 72) {
+  const key = `${size}:${url}`
+  if (QR_SVG_CACHE.has(key)) return QR_SVG_CACHE.get(key)
+  const svg = buildQRSVGString(url, size)
+  if (QR_SVG_CACHE.size > 300) QR_SVG_CACHE.clear()
+  QR_SVG_CACHE.set(key, svg)
+  return svg
+}
+
 function buildFooterHTML(settings, viewerUrl) {
   const { signatoryName, signatoryTitle, showFooter, showSignOff, showQRCode } = settings
   const now = new Date()
@@ -391,7 +397,7 @@ function buildFooterHTML(settings, viewerUrl) {
   // ── Right column: compact QR code ─────────────────────────────────────
   const rightCol = (showQRCode && viewerUrl)
     ? (() => {
-        const qrSvg = buildQRSVGString(viewerUrl, 72)
+        const qrSvg = buildQRSVGStringCached(viewerUrl, 72)
         return `<div style="flex:0 0 auto;text-align:center;">
         <div style="width:72px;height:72px;margin:0 auto;">${qrSvg}</div>
         <div style="font-size:10px;color:#64748b;margin-top:2px;white-space:nowrap;">สแกนดูตารางออนไลน์</div>
@@ -413,6 +419,8 @@ function buildFooterHTML(settings, viewerUrl) {
  * awkward box breaks, gap-based spacing instead of margins.
  */
 function buildWorkloadSummaryHTML(kind, item, ctx) {
+  // เอกสารสอนแทนรายวัน (sub-*) ไม่ต้องมีแถบสรุปภาระรายสัปดาห์
+  if (typeof kind === 'string' && kind.startsWith('sub-')) return ''
   const pillStyle = `display:inline-block;background:#f1f5f9;border-radius:9999px;padding:1px 8px;font-size:10px;color:#334155;white-space:nowrap;`
   const labelStyle = `font-weight:700;color:#374151;white-space:nowrap;`
 
@@ -501,11 +509,20 @@ function buildFullPageHTML({ gridHTML, item, kind, ctx, settings, viewerUrl }) {
 
 // ── Main Component ───────────────────────────────────────────────────────
 export default function PrintStudio() {
-  const { fixtureData, result, userPlacements, substitutes, activeSnapshotLabel, setStep } = useApp()
+  const { fixtureData, result, userPlacements, substitutes, activeSnapshotLabel, setStep, dailySchedules } = useApp()
 
   // ── Settings state (with localStorage hydration) ──────────────────────
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
-  const [previewTab, setPreviewTab] = useState('class') // 'class' | 'teacher' | 'facility'
+  const [previewTab, setPreviewTab] = useState('class') // 'class' | 'teacher' | 'facility' | 'substitute'
+  // ── เอกสารสอนแทนรายวัน ──
+  const [subDate, setSubDate] = useState(() => {
+    try { return sessionStorage.getItem('print_sub_date') || todayISO() } catch { return todayISO() }
+  })
+  const [subOnly, setSubOnly] = useState(false) // true = เฉพาะคาบสอนแทน
+  const [subDocs, setSubDocs] = useState({ summary: true, classes: true, teachers: true, absent: true })
+  // ลิงก์แชร์เอกสารสอนแทนรายวัน (/view?sub=CODE)
+  const [subShare, setSubShare] = useState(null) // { id, shortCode, url, date }
+  const [subShareStatus, setSubShareStatus] = useState('idle') // 'idle' | 'creating' | 'ready' | 'error'
   const [currentPage, setCurrentPage] = useState(0)
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState('')
@@ -897,6 +914,43 @@ export default function PrintStudio() {
   // ── Build export context (shared lookup maps) ─────────────────────────
   const ctx = useMemo(() => buildExportContext(exportData), [exportData])
 
+  // ── เอกสารสอนแทนรายวัน (จาก dailySchedules ของวันที่เลือก) ────────────
+  useEffect(() => {
+    try { sessionStorage.setItem('print_sub_date', subDate) } catch { /* ignore */ }
+    // เปลี่ยนวัน → ล้างลิงก์แชร์เดิม (ต้องสร้างใหม่สำหรับวันนั้น)
+    setSubShare(null)
+    setSubShareStatus('idle')
+  }, [subDate])
+
+  const subDailySchedule = useMemo(
+    () => normalizeDailySchedule(dailySchedules?.[subDate]) || null,
+    [dailySchedules, subDate],
+  )
+
+  const substitutePages = useMemo(() => {
+    if (!result || !subDailySchedule) return []
+    const daySlots = getDaySlots(
+      result.slots || [],
+      userPlacements,
+      ctx.lessonBlockMap,
+      dateToDayOfWeek(subDate),
+    )
+    return buildDailyPages({
+      dateStr: subDate,
+      dailySchedule: subDailySchedule,
+      daySlots,
+      classes,
+      teachers,
+      subjects,
+      lessonBlockMap: ctx.lessonBlockMap,
+      scheduleBlocks: schedule_blocks,
+      scheduleConfig: schedule_config,
+      onlySubstitute: subOnly,
+      docs: subDocs,
+      note: subDailySchedule.note || '',
+    })
+  }, [result, subDailySchedule, subDate, userPlacements, ctx, classes, teachers, subjects, schedule_blocks, schedule_config, subOnly, subDocs])
+
   // ── Build page arrays for each tab ────────────────────────────────────
   // viewerUrl prefers the DB short link (small QR), deep-linked to the exact
   // class/teacher; falls back to the embedded compressed payload when the
@@ -904,38 +958,106 @@ export default function PrintStudio() {
   const shortUrl = shortLink?.url || null
   const shortCode = shortLink?.shortCode || null
   const classPages = useMemo(() => {
-    return classes.map((cls) => {
-      const qrPayload = buildQRPayload('class', cls, ctx, gridConfig, fixed_slots, settings)
-      return {
-        label: cls.name,
-        kind: 'class',
-        id: cls.id,
-        item: cls,
-        qrPayload,
-        viewerUrl: shortUrl && shortCode
-          ? buildClassViewerShortURL(shortCode, cls.id)
-          : buildViewerURL(qrPayload),
-        gridHTML: buildClassGridHTML(cls, ctx),
-      }
-    })
-  }, [classes, ctx, gridConfig, fixed_slots, settings, shortUrl, shortCode])
+    return classes.map((cls) => ({
+      label: cls.name,
+      kind: 'class',
+      id: cls.id,
+      item: cls,
+      gridHTML: buildClassGridHTML(cls, ctx),
+    }))
+  }, [classes, ctx])
 
   const teacherPages = useMemo(() => {
-    return teachers.map((teacher) => {
-      const qrPayload = buildQRPayload('teacher', teacher, ctx, gridConfig, fixed_slots, settings)
-      return {
-        label: teacher.name,
-        kind: 'teacher',
-        id: teacher.id,
-        item: teacher,
-        qrPayload,
-        viewerUrl: shortUrl && shortCode
-          ? buildTeacherViewerShortURL(shortCode, teacher.id)
-          : buildViewerURL(qrPayload),
-        gridHTML: buildTeacherGridHTML(teacher, ctx),
+    return teachers.map((teacher) => ({
+      label: teacher.name,
+      kind: 'teacher',
+      id: teacher.id,
+      item: teacher,
+      gridHTML: buildTeacherGridHTML(teacher, ctx),
+    }))
+  }, [teachers, ctx])
+
+  // ── viewerUrl (QR) คำนวณแบบ lazy + cache — สร้างเมื่อต้องพิมพ์/บันทึกลิงก์เท่านั้น ──
+  // QR ใช้ "ลิงก์เดียวทุกหน้า" (/view?code=XXXX ไม่ฝัง c=/t=) — ผู้สแกนเลือกห้อง/ครูเองในหน้า viewer
+  const viewerUrlCacheRef = useRef(new Map())
+  const getViewerUrl = useCallback((page) => {
+    if (!page) return undefined
+    if (typeof page.kind === 'string' && page.kind.startsWith('sub-')) {
+      // QR ของเอกสารสอนแทน → ลิงก์แชร์ของวันนั้น (ลิงก์เดียวทุกหน้า)
+      return subShare?.url || undefined
+    }
+    if (page.kind === 'facility') return undefined
+    // มี short link → ทุกหน้าใช้ URL เดียวกัน
+    if (shortUrl && shortCode) return buildShortViewerURL(shortCode)
+    // ยังไม่มี short link (ออฟไลน์/กำลังสร้าง) → ใช้ลิงก์แนบข้อมูลเฉพาะหน้านั้นเป็น fallback
+    const key = `embed:${page.kind}:${page.id}:${settings.schoolName}|${settings.semester}|${settings.academicYear}`
+    const cache = viewerUrlCacheRef.current
+    if (cache.has(key)) return cache.get(key)
+    const payload = buildQRPayload(page.kind, page.item, ctx, gridConfig, fixed_slots, settings)
+    const url = buildViewerURL(payload)
+    cache.set(key, url)
+    return url
+  }, [shortUrl, shortCode, ctx, gridConfig, fixed_slots, settings, subShare])
+
+  // ── Share daily substitute documents (/view?sub=CODE) ──────────────────
+  const buildSubstitutePayload = useCallback(() => {
+    const ds = subDailySchedule || {}
+    const daySlots = getDaySlots(
+      result?.slots || [], userPlacements, ctx.lessonBlockMap, dateToDayOfWeek(subDate),
+    )
+    const periods = []
+    const seen = new Set()
+    for (const blk of schedule_blocks || []) {
+      for (const p of blk.periods || []) {
+        if (seen.has(p.period_no)) continue
+        seen.add(p.period_no)
+        periods.push({
+          period_no: p.period_no,
+          start_time: p.start_time || '',
+          end_time: p.end_time || '',
+          type: p.type || 'STUDY',
+        })
       }
-    })
-  }, [teachers, ctx, gridConfig, fixed_slots, settings, shortUrl, shortCode])
+    }
+    return {
+      v: 1,
+      date: subDate,
+      note: ds.note || '',
+      schoolName: settings.schoolName || '',
+      academicYear: parseInt(settings.academicYear, 10) || 2569,
+      term: settings.semester === 'summer' ? 3 : parseInt(settings.semester || '1', 10),
+      absences: ds.absences || [],
+      assignments: ds.assignments || [],
+      daySlots: daySlots.map((sl) => ({
+        class_id: sl.class_id,
+        period: sl.period,
+        subject_id: sl.subject_id,
+        teacher_id: sl.teacher_id,
+        co_teacher_id: sl.co_teacher_id || null,
+      })),
+      classes: (classes || []).map((c) => ({ id: c.id, name: c.name })),
+      teachers: (teachers || []).map((t) => ({ id: t.id, name: t.name })),
+      subjects: (subjects || []).map((sb) => ({ id: sb.id, name: sb.name })),
+      periods: periods.sort((a, b) => a.period_no - b.period_no),
+    }
+  }, [subDailySchedule, subDate, result, userPlacements, ctx, schedule_blocks, settings, classes, teachers, subjects])
+
+  async function handleCreateSubShare() {
+    if (!subDailySchedule) {
+      showToast('err', 'ไม่มีข้อมูลสอนแทนของวันที่เลือก')
+      return
+    }
+    setSubShareStatus('creating')
+    try {
+      const res = await shareSubstituteSchedule({ date: subDate, payload: buildSubstitutePayload() })
+      setSubShare({ id: res.id, shortCode: res.short_code, url: res.share_url, date: res.date })
+      setSubShareStatus('ready')
+      showToast('ok', 'สร้างลิงก์แชร์เอกสารสอนแทนแล้ว')
+    } catch (e) {
+      setSubShareStatus('error')
+      showToast('err', `สร้างลิงก์ไม่สำเร็จ: ${e.message}`)
+    }
+  }
 
   // ── Build facility pages (one per special room) ──────────────────────
   const specialRooms = fixtureData?.special_rooms || []
@@ -987,8 +1109,8 @@ export default function PrintStudio() {
     return statuses
   }, [teachers, lesson_blocks, placedCounts, fixed_slots])
 
-  // ── Build link index for "รายการลิงก์" export scope ──────────────────
-  const linkIndex = useMemo(() => {
+  // ── Build link index for "รายการลิงก์" export scope — สร้างเมื่อ export เท่านั้น ──
+  const buildLinkIndex = useCallback(() => {
     const rows = []
     for (const p of classPages) {
       const status = classStatuses[p.id]
@@ -996,8 +1118,7 @@ export default function PrintStudio() {
         kind: 'class',
         kindLabel: 'ห้องเรียน',
         name: p.label,
-        url: p.viewerUrl,
-        qrPayload: p.qrPayload,
+        url: getViewerUrl(p),
         isComplete: status?.isComplete,
         remaining: status?.remaining || 0,
       })
@@ -1008,16 +1129,21 @@ export default function PrintStudio() {
         kind: 'teacher',
         kindLabel: 'ครู',
         name: p.label,
-        url: p.viewerUrl,
-        qrPayload: p.qrPayload,
+        url: getViewerUrl(p),
         assigned: status?.assigned || 0,
         max: status?.max || 0,
       })
     }
     return rows
-  }, [classPages, teacherPages, classStatuses, teacherStatuses])
+  }, [classPages, teacherPages, classStatuses, teacherStatuses, getViewerUrl])
 
-  const activePages = previewTab === 'class' ? classPages : previewTab === 'teacher' ? teacherPages : facilityPages
+  const activePages = previewTab === 'class'
+    ? classPages
+    : previewTab === 'teacher'
+      ? teacherPages
+      : previewTab === 'facility'
+        ? facilityPages
+        : substitutePages
   const pageCount = activePages.length
   const safeCurrentPage = Math.min(currentPage, Math.max(0, pageCount - 1))
   const currentPageData = activePages[safeCurrentPage]
@@ -1043,12 +1169,14 @@ export default function PrintStudio() {
       kind: currentPageData.kind,
       ctx,
       settings,
-      viewerUrl: currentPageData.viewerUrl,
+      viewerUrl: getViewerUrl(currentPageData),
     })
-  }, [currentPageData, ctx, settings])
+  }, [currentPageData, ctx, settings, getViewerUrl])
 
   // ── Build all pages HTML for print (all tabs) ────────────────────────
+  // ⚡ สร้างเฉพาะเมื่อเลือกขอบเขต "ทั้งหมด" — กันการสร้าง full HTML + QR ทุกหน้าทุกครั้งที่ render
   const allPrintPages = useMemo(() => {
+    if (exportScope !== 'all') return []
     const pages = []
     for (const p of classPages) {
       pages.push({
@@ -1060,7 +1188,7 @@ export default function PrintStudio() {
           kind: p.kind,
           ctx,
           settings,
-          viewerUrl: p.viewerUrl,
+          viewerUrl: getViewerUrl(p),
         }),
       })
     }
@@ -1074,7 +1202,7 @@ export default function PrintStudio() {
           kind: p.kind,
           ctx,
           settings,
-          viewerUrl: p.viewerUrl,
+          viewerUrl: getViewerUrl(p),
         }),
       })
     }
@@ -1091,11 +1219,26 @@ export default function PrintStudio() {
         }),
       })
     }
+    for (const p of substitutePages) {
+      pages.push({
+        label: p.label,
+        kind: p.kind,
+        html: buildFullPageHTML({
+          gridHTML: p.gridHTML,
+          item: p.item,
+          kind: p.kind,
+          ctx,
+          settings,
+        }),
+      })
+    }
     return pages
-  }, [classPages, teacherPages, facilityPages, ctx, settings])
+  }, [classPages, teacherPages, facilityPages, substitutePages, ctx, settings, getViewerUrl, exportScope])
 
   // ── Build pages for current tab only (used by 'tab' scope) ───────────
+  // ⚡ สร้างเฉพาะเมื่อเลือกขอบเขต "แท็บนี้"
   const tabPrintPages = useMemo(() => {
+    if (exportScope !== 'tab') return []
     const pages = []
     if (previewTab === 'class') {
       for (const p of classPages) {
@@ -1108,7 +1251,7 @@ export default function PrintStudio() {
             kind: p.kind,
             ctx,
             settings,
-            viewerUrl: p.viewerUrl,
+            viewerUrl: getViewerUrl(p),
           }),
         })
       }
@@ -1123,11 +1266,11 @@ export default function PrintStudio() {
             kind: p.kind,
             ctx,
             settings,
-            viewerUrl: p.viewerUrl,
+            viewerUrl: getViewerUrl(p),
           }),
         })
       }
-    } else {
+    } else if (previewTab === 'facility') {
       // facility tab
       for (const p of facilityPages) {
         pages.push({
@@ -1142,9 +1285,24 @@ export default function PrintStudio() {
           }),
         })
       }
+    } else {
+      // substitute tab (เอกสารสอนแทนรายวัน)
+      for (const p of substitutePages) {
+        pages.push({
+          label: p.label,
+          kind: p.kind,
+          html: buildFullPageHTML({
+            gridHTML: p.gridHTML,
+            item: p.item,
+            kind: p.kind,
+            ctx,
+            settings,
+          }),
+        })
+      }
     }
     return pages
-  }, [previewTab, classPages, teacherPages, facilityPages, ctx, settings])
+  }, [previewTab, classPages, teacherPages, facilityPages, substitutePages, ctx, settings, getViewerUrl, exportScope])
 
   // ── Compute the pages to export based on scope ────────────────────────
   const scopedPrintPages = useMemo(() => {
@@ -1298,6 +1456,31 @@ export default function PrintStudio() {
     setExporting(true)
     setExportProgress('กำลังสร้างไฟล์ Excel...')
     try {
+      // แท็บสอนแทน → ไฟล์ Excel เอกสารสอนแทนรายวัน (4 ชีต)
+      if (previewTab === 'substitute') {
+        if (!subDailySchedule) {
+          showToast('err', 'ไม่มีข้อมูลสอนแทนของวันที่เลือก')
+          setExporting(false)
+          setExportProgress('')
+          return
+        }
+        await exportDailyMultiExcel({
+          dateStr: subDate,
+          dailySchedule: subDailySchedule,
+          daySlots: getDaySlots(result?.slots || [], userPlacements, ctx.lessonBlockMap, dateToDayOfWeek(subDate)),
+          classes,
+          teachers,
+          subjects,
+          lessonBlockMap: ctx.lessonBlockMap,
+          scheduleBlocks: schedule_blocks,
+          scheduleConfig: schedule_config,
+          schoolName: settings.schoolName || '',
+        })
+        showToast('ok', 'ส่งออก Excel สอนแทนสำเร็จ')
+        setExporting(false)
+        setExportProgress('')
+        return
+      }
       // Map exportScope to Excel's scope format. The combined matrix sheets
       // (ตารางรวม) follow the tab: ครู tab → combined teachers sheet, ห้องเรียน
       // tab → combined classes sheet, ทั้งหมด → both.
@@ -1323,6 +1506,7 @@ export default function PrintStudio() {
 
   // ── Link Index PDF export handler ─────────────────────────────────────
   function handleExportLinkPDF() {
+    const linkIndex = buildLinkIndex()
     if (linkIndex.length === 0) {
       showToast('err', 'ไม่มีรายการลิงก์ที่จะส่งออก')
       return
@@ -1389,6 +1573,7 @@ export default function PrintStudio() {
 
   // ── Link Index Excel export handler ───────────────────────────────────
   async function handleExportLinkExcel() {
+    const linkIndex = buildLinkIndex()
     if (linkIndex.length === 0) {
       showToast('err', 'ไม่มีรายการลิงก์ที่จะส่งออก')
       return
@@ -1626,7 +1811,7 @@ export default function PrintStudio() {
                   {[
                     { id: 'current', label: 'หน้านี้' },
                     { id: 'tab', label: `แท็บนี้ (${activePages.length})` },
-                    { id: 'all', label: `ทั้งหมด (${classPages.length + teacherPages.length + facilityPages.length})` },
+                    { id: 'all', label: `ทั้งหมด (${classPages.length + teacherPages.length + facilityPages.length + substitutePages.length})` },
                   ].map((opt) => (
                     <button
                       key={opt.id}
@@ -1739,6 +1924,61 @@ export default function PrintStudio() {
                   </div>
                 )}
               </div>
+              {/* เอกสารสอนแทน (รายวัน) — export + share link */}
+              {previewTab === 'substitute' && (
+                <div className="space-y-2 pt-2 border-t border-gray-200">
+                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide">เอกสารสอนแทน (รายวัน)</h3>
+                  <div className="text-[11px] text-gray-500">
+                    วันที่ {formatDDMMYYYY(subDate)} · {substitutePages.length} หน้า
+                    {subOnly ? ' · เฉพาะคาบสอนแทน' : ' · ทั้งตาราง'}
+                  </div>
+                  <button
+                    onClick={handleCreateSubShare}
+                    disabled={subShareStatus === 'creating' || !subDailySchedule}
+                    className="flex items-center justify-center gap-2 w-full py-2.5
+                      bg-orange-600 text-white rounded-lg font-bold text-sm shadow-sm
+                      hover:bg-orange-700 transition-colors
+                      disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {subShareStatus === 'creating' ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Link2 className="w-4 h-4" />
+                    )}
+                    สร้างลิงก์แชร์สอนแทน
+                  </button>
+                  {subShareStatus === 'error' && (
+                    <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                      สร้างลิงก์ไม่สำเร็จ — ลองใหม่อีกครั้ง (QR บนเอกสารสอนแทนจะยังไม่แสดง)
+                    </div>
+                  )}
+                  {subShare && (
+                    <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-lg px-2.5 py-1.5">
+                      <a
+                        href={subShare.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 text-xs text-orange-700 hover:text-orange-900 truncate font-medium"
+                        title={subShare.url}
+                      >
+                        {subShare.url}
+                      </a>
+                      <button
+                        onClick={() => handleCopyLink(subShare.url)}
+                        className="text-orange-600 hover:text-orange-800 shrink-0"
+                        title="คัดลอกลิงก์"
+                        aria-label="คัดลอกลิงก์สอนแทน"
+                      >
+                        <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  )}
+                  <div className="text-[11px] text-gray-400">
+                    QR บนเอกสารสอนแทนทุกหน้าจะใช้ลิงก์นี้ (เปิดแล้วเลือกดูได้ทั้ง 4 เอกสาร)
+                  </div>
+                </div>
+              )}
+
           </div>
 
         </div>
@@ -1749,7 +1989,61 @@ export default function PrintStudio() {
         ════════════════════════════════════════════════════════════════ */}
         <div className="print-studio-preview-area flex-1 flex bg-slate-100 rounded-xl overflow-hidden">
           {/* A4 Preview Canvas (centered, full area) */}
-          <div className="flex-1 overflow-y-auto p-6 flex items-start justify-center">
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex flex-col items-center gap-3">
+            {previewTab === 'substitute' && (
+              <div className="w-full max-w-[1100px] bg-white border border-gray-200 rounded-xl p-3 shadow-sm space-y-2.5">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-gray-600">วันที่สอนแทน</span>
+                    <DateField value={subDate} onChange={setSubDate} title="เลือกวันที่ของเอกสารสอนแทน" />
+                  </div>
+                  <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                    {[
+                      { id: false, label: 'ทั้งตาราง' },
+                      { id: true, label: 'เฉพาะคาบสอนแทน' },
+                    ].map((opt) => (
+                      <button
+                        key={String(opt.id)}
+                        onClick={() => setSubOnly(opt.id)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors
+                          ${subOnly === opt.id ? 'bg-white text-gray-900 shadow-sm font-bold' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 ml-auto">
+                    {[
+                      ['summary', 'สรุป'],
+                      ['classes', 'รายห้อง'],
+                      ['teachers', 'รายครูที่สอนแทน'],
+                      ['absent', 'ครูที่ลา'],
+                    ].map(([key, label]) => (
+                      <label key={key} className="inline-flex items-center gap-1 text-xs text-gray-600 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!subDocs[key]}
+                          onChange={(e) => setSubDocs({ ...subDocs, [key]: e.target.checked })}
+                          className="rounded border-gray-300"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                {!subDailySchedule && (
+                  <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                    ไม่มีข้อมูลสอนแทนของวันที่เลือก — ไปจัดที่หน้า "ระบบสอนแทนรายวัน" (Step 7) ก่อน
+                  </div>
+                )}
+                {subDailySchedule && substitutePages.length === 0 && (
+                  <div className="text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1.5">
+                    วันที่นี้ยังไม่มีการสอนแทน / หรือเลือกเอกสารที่ต้องการแล้วแต่ไม่มีข้อมูลตรงเงื่อนไข
+                  </div>
+                )}
+              </div>
+            )}
             {currentPageData ? (
               <div
                 ref={previewRef}
@@ -1773,6 +2067,7 @@ export default function PrintStudio() {
                 <p className="text-sm">ไม่มีข้อมูลสำหรับแท็บนี้</p>
               </div>
             )}
+            </div>
           </div>
 
           {/* Right: vertical navigation rail with tab selector (mirrors Step 5) */}
@@ -1792,6 +2087,7 @@ export default function PrintStudio() {
                 { id: 'class', icon: '📋', label: `ห้องเรียน (${classPages.length})` },
                 { id: 'teacher', icon: '👤', label: `ครูผู้สอน (${teacherPages.length})` },
                 { id: 'facility', icon: '🔬', label: `ห้องพิเศษ (${facilityPages.length})` },
+                { id: 'substitute', icon: '📅', label: `สอนแทน (${substitutePages.length})` },
               ].map((t) => (
                 <button
                   key={t.id}
@@ -1866,12 +2162,25 @@ export default function PrintStudio() {
                 >
                   <span aria-hidden="true">🔬</span> ห้องพิเศษ ({facilityPages.length})
                 </button>
+                <button
+                  onClick={() => setPreviewTab('substitute')}
+                  aria-label={`สอนแทน (${substitutePages.length})`}
+                  className={`px-2 py-1.5 rounded-md text-xs font-medium transition-colors text-center
+                    ${previewTab === 'substitute'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-400 font-bold'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 border border-transparent'}`}
+                >
+                  <span aria-hidden="true">📅</span> สอนแทน ({substitutePages.length})
+                </button>
               </div>
 
               {/* Column header */}
               <div className="flex items-center justify-between text-[11px] font-semibold text-gray-400 px-2 py-1 uppercase border-b border-gray-200">
                 <span>
-                  {previewTab === 'class' ? 'ห้องเรียน' : previewTab === 'teacher' ? 'ครูผู้สอน' : 'ห้องพิเศษ'}
+                  {previewTab === 'class' ? 'ห้องเรียน'
+                    : previewTab === 'teacher' ? 'ครูผู้สอน'
+                      : previewTab === 'facility' ? 'ห้องพิเศษ'
+                        : 'สอนแทน'}
                   <span className="ml-1 text-gray-300 normal-case">
                     {safeCurrentPage + 1}/{pageCount}
                   </span>
