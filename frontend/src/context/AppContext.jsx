@@ -8,12 +8,19 @@ import {
   fetchMySchedules,
   saveWorkspaceToCloud,
   updateWorkspaceManagers,
+  updateWorkspaceAccess,
+  fetchTeam,
+  addTeamMember,
+  updateTeamMemberRoles,
+  removeTeamMember,
   fetchCloudWorkspace,
   deleteCloudWorkspace,
   mergeGuestWorkspaces,
   getUserId,
+  saveTraineeWorkspace,
 } from '../api/client.js'
 import { cacheTimetable, getCachedTimetable, getCachedMeta, clearCache } from '../utils/cache.js'
+import { readTraineeCache, writeTraineeCache } from '../utils/traineeAttendance.js'
 import { checkResultAgainstLocks } from '../utils/teacherLoad.js'
 import { resolveSolverParams } from '../utils/scoreCalculator.js'
 import {
@@ -87,6 +94,7 @@ const initialState = {
   dailySchedules: {},
   // ── Snapshot versioning ──
   snapshots: [], // metadata list for dropdown
+  snapshotsLoaded: false,
   activeSnapshotId: null, // currently loaded snapshot id
   activeSnapshotLabel: null, // display label
   isSnapshotDirty: false, // unsaved changes since last snapshot save
@@ -94,16 +102,43 @@ const initialState = {
   // ── Auth (Google OAuth, optional) ──
   user: null, // { id, email, name, picture } or null when logged out
   authToken: null, // JWT string or null
+  authError: null, // Thai message when a login attempt fails (null = no error)
+  authPending: false, // true while redirecting to the Google consent screen
   // ── Cloud workspaces ──
   cloudWorkspaces: [], // list of cloud-saved workspaces (metadata)
   activeCloudWorkspaceId: null, // currently loaded cloud workspace id
   cloudSyncing: false, // true while saving/loading from cloud
+  cloudListLoaded: false, // true after the first cloud list attempt
+  // ── Active workspace (the timetable all steps operate on) ──
+  activeWorkspace: null, // { kind, id, title, updatedAt, myWorkspaceRole, myTraineeRole, ... }
+  activeTraineeWorkspace: null, // { timetableId, title, linkedTimetableTitle, myTraineeRole }
   // ── Workspace sharing (ผู้จัดการ 2+ คน) ──
   managerEmails: [], // Google emails with manager access to the active workspace
   workspaceOwnerId: null, // user_id of the cloud record owner (null for local snapshots)
+  workspaceAccessMode: 'team', // 'team' = shared with the owner's team, 'private' = listed emails only
+  // ── Team (ผู้ใช้หลายคนใช้ระบบร่วมกัน) ──
+  teamInfo: null, // { owner_id, owner_email, owner_name, members, memberships }
+  teamLoading: false,
 }
 
+const WORKSPACE_MUTATION_ACTIONS = new Set([
+  'SET_FIXTURE_DATA', 'SET_FIXTURE_DATA_DIRECT', 'SET_RESULT', 'UPDATE_FIXTURE_DATA',
+  'PLACE_LESSON_BLOCK', 'REMOVE_PLACEMENT', 'CLEAR_PLACEMENTS', 'CLEAR_RESULT',
+  'SET_SUBSTITUTE', 'REMOVE_SUBSTITUTE', 'CLEAR_SUBSTITUTES',
+  'SET_DAILY_SCHEDULE', 'REMOVE_DAILY_SCHEDULE',
+  'CLEAR_ALL_SLOTS', 'CLEAR_BY_TEACHER', 'PIN_BY_TEACHER', 'UNPIN_BY_TEACHER',
+  'PIN_BY_CLASS', 'UNPIN_BY_CLASS', 'PIN_ALL_SOLVER_SLOTS', 'CLEAR_BY_CLASS',
+  'CLEAR_SOLVER_ONLY', 'MOVE_SLOT', 'DELETE_SLOT', 'LOCK_SLOT', 'UNLOCK_SLOT',
+  'ADD_SPECIAL_ROOM', 'UPDATE_SPECIAL_ROOM', 'DELETE_SPECIAL_ROOM',
+  'SET_LESSON_BLOCK_ROOM', 'CHANGE_SLOT_ROOM', 'SPLIT_LESSON_BLOCKS_FOR_LAB',
+])
+
 function reducer(state, action) {
+  // A workspace viewer can read everything but must not mutate the timetable.
+  // This is the single client-side choke point; the API enforces it as well.
+  if (state.activeWorkspace?.myWorkspaceRole === 'viewer' && WORKSPACE_MUTATION_ACTIONS.has(action.type)) {
+    return state
+  }
   switch (action.type) {
     case 'SET_FIXTURE':
       return { ...state, selectedFixture: action.payload }
@@ -455,7 +490,7 @@ function reducer(state, action) {
       return { ...state, cacheHint: action.payload }
     // ── Snapshot versioning ──────────────────────────────────────────
     case 'SET_SNAPSHOTS':
-      return { ...state, snapshots: action.payload }
+      return { ...state, snapshots: action.payload, snapshotsLoaded: true }
     case 'LOAD_SNAPSHOT':
       return {
         ...state,
@@ -476,6 +511,7 @@ function reducer(state, action) {
         // owner id is unknown locally → treat as unrestricted when list is empty.
         managerEmails: action.payload.managerEmails || [],
         workspaceOwnerId: null,
+        workspaceAccessMode: action.payload.accessMode || 'team',
         isSnapshotDirty: false,
         isDirty: false,
         lastSnapshotSaveAt: action.payload.updatedAt || Date.now(),
@@ -484,7 +520,18 @@ function reducer(state, action) {
         resultStale: false,
         cacheHint: null,
         cacheKey: `timetable_${action.payload.fixtureName || 'custom'}`,
-        activeStep: 5,
+        activeWorkspace: {
+          kind: 'local',
+          id: action.payload.id,
+          title: action.payload.label || 'ตารางของฉัน',
+          updatedAt: action.payload.updatedAt || Date.now(),
+          ownerId: null,
+          accessMode: 'team',
+          myWorkspaceRole: 'owner',
+          myTraineeRole: 'owner',
+        },
+        activeTraineeWorkspace: null,
+        activeStep: action.payload._stayOnLanding ? 0 : 5,
       }
     case 'SET_ACTIVE_SNAPSHOT':
       return {
@@ -505,25 +552,58 @@ function reducer(state, action) {
         : [action.payload, ...state.snapshots]
       return { ...state, snapshots: next }
     }
-    case 'REMOVE_SNAPSHOT_FROM_LIST':
+    case 'REMOVE_SNAPSHOT_FROM_LIST': {
+      const removingActive = state.activeWorkspace?.kind === 'local' && state.activeWorkspace.id === action.payload
       return {
         ...state,
         snapshots: state.snapshots.filter((s) => s.id !== action.payload),
         activeSnapshotId: state.activeSnapshotId === action.payload ? null : state.activeSnapshotId,
         activeSnapshotLabel: state.activeSnapshotId === action.payload ? null : state.activeSnapshotLabel,
+        ...(removingActive ? { activeWorkspace: null, activeTraineeWorkspace: null, fixtureData: null, result: null } : {}),
       }
+    }
     // ── Auth ─────────────────────────────────────────────────────────
     case 'SET_USER':
       return { ...state, user: action.payload, authToken: action.payload ? state.authToken : null }
     case 'SET_AUTH_TOKEN':
       return { ...state, authToken: action.payload }
+    case 'SET_AUTH_ERROR':
+      return { ...state, authError: action.payload }
+    case 'SET_AUTH_PENDING':
+      return { ...state, authPending: action.payload }
     case 'LOGOUT':
-      return { ...state, user: null, authToken: null, cloudWorkspaces: [], activeCloudWorkspaceId: null }
+      return {
+        ...state,
+        user: null,
+        authToken: null,
+        authError: null,
+        cloudWorkspaces: [],
+        cloudListLoaded: false,
+        activeCloudWorkspaceId: null,
+        activeWorkspace: state.activeWorkspace?.kind === 'cloud' ? null : state.activeWorkspace,
+        activeTraineeWorkspace: state.activeWorkspace?.kind === 'cloud' ? null : state.activeTraineeWorkspace,
+        teamInfo: null,
+      }
     // ── Cloud workspaces ─────────────────────────────────────────────
     case 'SET_CLOUD_WORKSPACES':
-      return { ...state, cloudWorkspaces: action.payload }
+      return { ...state, cloudWorkspaces: action.payload, cloudListLoaded: true }
+    case 'SET_CLOUD_LIST_LOADED':
+      return { ...state, cloudListLoaded: action.payload }
+    case 'SET_ACTIVE_CLOUD_WORKSPACE_ID':
+      return { ...state, activeCloudWorkspaceId: action.payload }
     case 'SET_CLOUD_SYNCING':
       return { ...state, cloudSyncing: action.payload }
+    case 'SET_ACTIVE_WORKSPACE':
+      return { ...state, activeWorkspace: action.payload, activeTraineeWorkspace: null }
+    case 'SET_ACTIVE_TRAINEE_WORKSPACE':
+      return { ...state, activeTraineeWorkspace: action.payload }
+    case 'CLEAR_ACTIVE_TRAINEE_WORKSPACE':
+      return { ...state, activeTraineeWorkspace: null }
+    // ── Team ─────────────────────────────────────────────────────────
+    case 'SET_TEAM_INFO':
+      return { ...state, teamInfo: action.payload }
+    case 'SET_TEAM_LOADING':
+      return { ...state, teamLoading: action.payload }
     case 'LOAD_CLOUD_WORKSPACE': {
       const ws = action.payload
       return {
@@ -539,6 +619,7 @@ function reducer(state, action) {
         activeCloudWorkspaceId: action.payload._cloudId || null,
         managerEmails: action.payload._managerEmails || ws.managerEmails || [],
         workspaceOwnerId: action.payload._ownerId || null,
+        workspaceAccessMode: action.payload._accessMode || 'team',
         // Reset local snapshot tracking — cloud workspace is separate
         activeSnapshotId: null,
         activeSnapshotLabel: null,
@@ -553,14 +634,35 @@ function reducer(state, action) {
         // result-cache effect keeps "ทำงานต่อ" in sync without clobbering a
         // solved local cache when loading a data-only workspace.
         ...(ws.result ? { cacheKey: `timetable_${state.selectedFixture || 'custom'}` } : {}),
-        // Jump to step 5 if we have a result, else step 1
-        activeStep: ws.result ? 5 : 1,
+        activeWorkspace: {
+          kind: 'cloud',
+          id: action.payload._cloudId || ws.id || null,
+          title: action.payload._title || ws.title || 'ตารางของฉัน',
+          updatedAt: action.payload._updatedAt || Date.now(),
+          ownerId: action.payload._ownerId || null,
+          accessMode: action.payload._accessMode || 'team',
+          myWorkspaceRole: action.payload._myWorkspaceRole || 'viewer',
+          myTraineeRole: action.payload._myTraineeRole || 'none',
+        },
+        activeTraineeWorkspace: null,
+        // Stay on landing when opened from the workspace list; otherwise keep
+        // the existing quick-open behaviour.
+        activeStep: action.payload._stayOnLanding ? 0 : (ws.result ? 5 : 1),
       }
     }
     case 'CLEAR_CLOUD_WORKSPACE':
-      return { ...state, activeCloudWorkspaceId: null, managerEmails: [], workspaceOwnerId: null }
+      return {
+        ...state,
+        activeCloudWorkspaceId: null,
+        managerEmails: [],
+        workspaceOwnerId: null,
+        workspaceAccessMode: 'team',
+        ...(state.activeWorkspace?.kind === 'cloud' ? { activeWorkspace: null } : {}),
+      }
     case 'SET_MANAGER_EMAILS':
       return { ...state, managerEmails: action.payload || [] }
+    case 'SET_WORKSPACE_ACCESS_MODE':
+      return { ...state, workspaceAccessMode: action.payload || 'team' }
     // ── Slot-level editing ───────────────────────────────────────────
     case 'MOVE_SLOT': {
       // payload: { lessonBlockId, day, period, newDay, newPeriod } — moves
@@ -1142,8 +1244,9 @@ export function AppProvider({ children }) {
   }, [flushPendingSave])
 
   const setStep = useCallback((step) => {
+    if (step >= 1 && step <= 8 && !state.activeWorkspace) return
     dispatch({ type: 'SET_STEP', payload: step })
-  }, [])
+  }, [state.activeWorkspace])
 
   const setGridFilter = useCallback((filter) => {
     dispatch({ type: 'SET_GRID_FILTER', payload: filter })
@@ -1363,13 +1466,16 @@ export function AppProvider({ children }) {
     return result
   }, [state.selectedFixture, state.fixtureData, state.result, state.userPlacements, state.substitutes, state.dailySchedules, state.solverPreset, state.solverCustomTime, state.solverCustomMode, state.snapshots.length, state.activeSnapshotId, state.lastSnapshotSaveAt])
 
-  const doLoadSnapshot = useCallback((id) => {
+  const doLoadSnapshot = useCallback((id, opts = {}) => {
     // Flush pending edits to the current workspace before switching —
     // the debounced auto-save would otherwise drop the last <2s of work.
     if (state.activeSnapshotId !== id) flushPendingSave()
     const snap = loadSnapshot(id)
     if (!snap) return { ok: false, error: 'ไม่พบ snapshot' }
-    dispatch({ type: 'LOAD_SNAPSHOT', payload: snap })
+    dispatch({ type: 'LOAD_SNAPSHOT', payload: { ...snap, _stayOnLanding: !!opts.stayOnLanding } })
+    try {
+      localStorage.setItem('sro_last_workspace', JSON.stringify({ kind: 'local', id }))
+    } catch { /* best effort */ }
     return { ok: true }
   }, [state.activeSnapshotId, flushPendingSave])
 
@@ -1481,8 +1587,27 @@ export function AppProvider({ children }) {
     dispatch({ type: 'ADD_SNAPSHOT_TO_LIST', payload: listSnapshots().find((s) => s.id === snap.id) })
     // Reset working state (also clears IndexedDB cache + placement keys),
     // then bind the fresh workspace so every later edit auto-saves to it.
+    // Detach from any cloud workspace first — otherwise "สร้างตารางใหม่"
+    // after opening a shared workspace would save over the owner's record.
+    dispatch({ type: 'CLEAR_CLOUD_WORKSPACE' })
     setFixtureDataDirect(emptyFixture)
     dispatch({ type: 'SET_ACTIVE_SNAPSHOT', payload: { id: snap.id, label: snap.label } })
+    dispatch({
+      type: 'SET_ACTIVE_WORKSPACE',
+      payload: {
+        kind: 'local',
+        id: snap.id,
+        title: snap.label,
+        updatedAt: snap.updatedAt || Date.now(),
+        ownerId: null,
+        accessMode: 'team',
+        myWorkspaceRole: 'owner',
+        myTraineeRole: 'owner',
+      },
+    })
+    try {
+      localStorage.setItem('sro_last_workspace', JSON.stringify({ kind: 'local', id: snap.id }))
+    } catch { /* best effort */ }
     dispatch({ type: 'SET_STEP', payload: 1 })
     return { ok: true, savedLabel }
   }, [state.fixtureData, state.result, state.activeSnapshotId, state.activeSnapshotLabel, state.snapshots.length, doSaveSnapshot, setFixtureDataDirect])
@@ -1677,11 +1802,23 @@ export function AppProvider({ children }) {
 
   // ── Auth actions (Google OAuth, optional) ───────────────────────────
   const doLogin = useCallback(async () => {
+    dispatch({ type: 'SET_AUTH_ERROR', payload: null })
+    dispatch({ type: 'SET_AUTH_PENDING', payload: true })
     try {
-      await loginWithGoogle()
+      await loginWithGoogle() // navigates away on success
+      return { ok: true }
     } catch (e) {
-      console.error('[AppContext] login failed:', e.message)
+      const message = e?.message || 'เข้าสู่ระบบไม่สำเร็จ'
+      console.error('[AppContext] login failed:', message)
+      dispatch({ type: 'SET_AUTH_ERROR', payload: message })
+      return { ok: false, error: message }
+    } finally {
+      dispatch({ type: 'SET_AUTH_PENDING', payload: false })
     }
+  }, [])
+
+  const doClearAuthError = useCallback(() => {
+    dispatch({ type: 'SET_AUTH_ERROR', payload: null })
   }, [])
 
   const doLogout = useCallback(() => {
@@ -1720,11 +1857,19 @@ export function AppProvider({ children }) {
           term: r.term,
           updated_at: r.updated_at,
           created_at: r.created_at,
+          user_id: r.user_id || null,
+          manager_emails: r.manager_emails || [],
+          access_mode: r.access_mode || 'team',
+          owner_email: r.owner_email || null,
+          owner_name: r.owner_name || null,
+          my_workspace_role: r.my_workspace_role || null,
+          my_trainee_role: r.my_trainee_role || 'none',
         }))
       dispatch({ type: 'SET_CLOUD_WORKSPACES', payload: workspaces })
       return workspaces
     } catch (e) {
       console.error('[AppContext] listCloudWorkspaces failed:', e.message)
+      dispatch({ type: 'SET_CLOUD_LIST_LOADED', payload: true })
       return []
     }
   }, [])
@@ -1732,6 +1877,7 @@ export function AppProvider({ children }) {
   const doSaveToCloud = useCallback(async (label) => {
     dispatch({ type: 'SET_CLOUD_SYNCING', payload: true })
     try {
+      const activeCloudTitle = state.cloudWorkspaces.find((w) => w.id === state.activeCloudWorkspaceId)?.title
       const workspace = {
         fixtureData: state.fixtureData,
         result: state.result,
@@ -1743,25 +1889,63 @@ export function AppProvider({ children }) {
         solverCustomMode: state.solverCustomMode,
         optimizationMode: state.optimizationMode,
         managerEmails: state.managerEmails,
+        accessMode: state.workspaceAccessMode,
       }
       const result = await saveWorkspaceToCloud({
         id: state.activeCloudWorkspaceId || null,
-        title: label || state.activeSnapshotLabel || 'ตารางของฉัน',
+        title: label || state.activeSnapshotLabel || activeCloudTitle || 'ตารางของฉัน',
         academicYear: 2569,
         term: 1,
         workspace,
         managerEmails: state.managerEmails,
+        accessMode: state.workspaceAccessMode,
       })
+      // If this was a local workspace with trainee data, carry that module
+      // into the newly-created cloud record (best effort; an existing cloud
+      // module wins and the user can resolve it in the module UI).
+      if (state.activeWorkspace?.kind === 'local') {
+        const cached = readTraineeCache(state.activeWorkspace.id)
+        if (cached?.data?.trainees?.length) {
+          try {
+            const savedModule = await saveTraineeWorkspace(result.id, cached.data, 0)
+            writeTraineeCache(result.id, {
+              data: cached.data,
+              version: savedModule.version || 1,
+              dirty: false,
+              updatedAt: Date.now(),
+            })
+          } catch (e) {
+            console.warn('[AppContext] trainee module migration skipped:', e.message)
+          }
+        }
+      }
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
+      dispatch({ type: 'SET_ACTIVE_CLOUD_WORKSPACE_ID', payload: result.id })
+      dispatch({
+        type: 'SET_ACTIVE_WORKSPACE',
+        payload: {
+          kind: 'cloud',
+          id: result.id,
+          title: result.title,
+          updatedAt: Date.now(),
+          ownerId: state.workspaceOwnerId || state.user?.id || null,
+          accessMode: state.workspaceAccessMode || 'team',
+          myWorkspaceRole: state.activeWorkspace?.myWorkspaceRole || 'editor',
+          myTraineeRole: state.activeWorkspace?.myTraineeRole || 'none',
+        },
+      })
+      try {
+        localStorage.setItem('sro_last_workspace', JSON.stringify({ kind: 'cloud', id: result.id }))
+      } catch { /* best effort */ }
       await doListCloudWorkspaces()
       return { ok: true, id: result.id, title: result.title }
     } catch (e) {
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
       return { ok: false, error: e.message }
     }
-  }, [state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotLabel, doListCloudWorkspaces])
+  }, [state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotLabel, state.managerEmails, state.workspaceAccessMode, state.cloudWorkspaces, state.user, state.activeWorkspace, state.workspaceOwnerId, doListCloudWorkspaces])
 
-  const doLoadFromCloud = useCallback(async (id) => {
+  const doLoadFromCloud = useCallback(async (id, opts = {}) => {
     flushPendingSave()
     dispatch({ type: 'SET_CLOUD_SYNCING', payload: true })
     try {
@@ -1772,11 +1956,20 @@ export function AppProvider({ children }) {
         payload: {
           ...ws,
           _cloudId: id,
+          _title: record.title,
+          _updatedAt: record.updated_at ? new Date(record.updated_at).getTime() : Date.now(),
           _managerEmails: record.manager_emails || [],
           _ownerId: record.user_id || null,
+          _accessMode: record.access_mode || 'team',
+          _myWorkspaceRole: record.my_workspace_role || 'viewer',
+          _myTraineeRole: record.my_trainee_role || 'none',
+          _stayOnLanding: !!opts.stayOnLanding,
         },
       })
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
+      try {
+        localStorage.setItem('sro_last_workspace', JSON.stringify({ kind: 'cloud', id }))
+      } catch { /* best effort */ }
       return { ok: true }
     } catch (e) {
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
@@ -1787,12 +1980,141 @@ export function AppProvider({ children }) {
   const doDeleteFromCloud = useCallback(async (id) => {
     try {
       await deleteCloudWorkspace(id)
+      if (state.activeWorkspace?.kind === 'cloud' && state.activeWorkspace.id === id) {
+        dispatch({ type: 'CLEAR_CLOUD_WORKSPACE' })
+        dispatch({ type: 'SET_ACTIVE_WORKSPACE', payload: null })
+      }
       await doListCloudWorkspaces()
       return { ok: true }
     } catch (e) {
       return { ok: false, error: e.message }
     }
-  }, [doListCloudWorkspaces])
+  }, [doListCloudWorkspaces, state.activeWorkspace])
+
+  // ── Team actions (owner adds an email once → all their workspaces shared) ──
+  const doLoadTeam = useCallback(async () => {
+    if (!getAuthToken()) {
+      dispatch({ type: 'SET_TEAM_INFO', payload: null })
+      return null
+    }
+    dispatch({ type: 'SET_TEAM_LOADING', payload: true })
+    try {
+      const info = await fetchTeam()
+      dispatch({ type: 'SET_TEAM_INFO', payload: info })
+      return info
+    } catch (e) {
+      console.warn('[AppContext] loadTeam failed:', e.message)
+      return null
+    } finally {
+      dispatch({ type: 'SET_TEAM_LOADING', payload: false })
+    }
+  }, [])
+
+  const doInviteTeamMember = useCallback(async (email, defaultWorkspaceRole = 'editor', defaultTraineeRole = 'none') => {
+    try {
+      const res = await addTeamMember(email, defaultWorkspaceRole, defaultTraineeRole)
+      const info = await doLoadTeam()
+      await doListCloudWorkspaces()
+      return { ok: true, added: res.added, teamInfo: info }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }, [doLoadTeam, doListCloudWorkspaces])
+
+  const doUpdateTeamMemberRoles = useCallback(async (email, defaultWorkspaceRole, defaultTraineeRole) => {
+    try {
+      await updateTeamMemberRoles(email, defaultWorkspaceRole, defaultTraineeRole)
+      const info = await doLoadTeam()
+      await doListCloudWorkspaces()
+      return { ok: true, teamInfo: info }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }, [doLoadTeam, doListCloudWorkspaces])
+
+  const doRevokeTeamMember = useCallback(async (email) => {
+    try {
+      await removeTeamMember(email)
+      await doLoadTeam()
+      await doListCloudWorkspaces()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }, [doLoadTeam, doListCloudWorkspaces])
+
+  // Load team info whenever the signed-in user changes (login / logout)
+  useEffect(() => {
+    doLoadTeam()
+  }, [state.user, doLoadTeam])
+
+  // Preload cloud workspaces so the landing page can auto-open the latest one.
+  useEffect(() => {
+    if (state.user) {
+      // Wait for this user's list before auto-opening; the guest pass may have
+      // already marked the list as loaded with an empty array.
+      dispatch({ type: 'SET_CLOUD_LIST_LOADED', payload: false })
+      doListCloudWorkspaces().catch(() => {
+        dispatch({ type: 'SET_CLOUD_LIST_LOADED', payload: true })
+      })
+    } else {
+      dispatch({ type: 'SET_CLOUD_LIST_LOADED', payload: true })
+    }
+  }, [state.user, doListCloudWorkspaces])
+
+  // Auto-open the last-used workspace once, falling back to the newest
+  // accessible local/cloud workspace. The user still lands on step 0 so they
+  // can choose which job to run against that workspace.
+  const autoOpenAttemptedRef = useRef(false)
+  useEffect(() => {
+    autoOpenAttemptedRef.current = false
+  }, [state.user?.id])
+  useEffect(() => {
+    if (autoOpenAttemptedRef.current) return
+    if (state.activeWorkspace) {
+      autoOpenAttemptedRef.current = true
+      return
+    }
+    if (!state.snapshotsLoaded) return
+    if (state.user && !state.cloudListLoaded) return
+
+    const localItems = state.snapshots.map((s) => ({
+      kind: 'local',
+      id: s.id,
+      updatedAt: s.updatedAt || 0,
+    }))
+    const cloudItems = (state.user ? state.cloudWorkspaces : []).map((w) => ({
+      kind: 'cloud',
+      id: w.id,
+      updatedAt: w.updated_at ? new Date(w.updated_at).getTime() : 0,
+    }))
+    const candidates = [...localItems, ...cloudItems].sort((a, b) => b.updatedAt - a.updatedAt)
+    if (candidates.length === 0) {
+      return
+    }
+
+    let preferred = null
+    try {
+      const raw = localStorage.getItem('sro_last_workspace')
+      if (raw) {
+        const saved = JSON.parse(raw)
+        preferred = candidates.find((c) => c.kind === saved.kind && c.id === saved.id) || null
+      }
+    } catch { /* ignore malformed preference */ }
+    const target = preferred || candidates[0]
+    autoOpenAttemptedRef.current = true
+    if (target.kind === 'local') doLoadSnapshot(target.id, { stayOnLanding: true })
+    else doLoadFromCloud(target.id, { stayOnLanding: true }).catch(() => {})
+  }, [
+    state.activeWorkspace,
+    state.snapshots,
+    state.snapshotsLoaded,
+    state.cloudWorkspaces,
+    state.cloudListLoaded,
+    state.user,
+    doLoadSnapshot,
+    doLoadFromCloud,
+  ])
 
   // ── Workspace sharing: owner-only manager updates ──
   const doUpdateManagerEmails = useCallback(async (emails, wsId) => {
@@ -1812,19 +2134,75 @@ export function AppProvider({ children }) {
     }
   }, [state.activeCloudWorkspaceId, doListCloudWorkspaces])
 
-  // สิทธิ์จัดการ: เจ้าของหรือผู้จัดการเท่านั้น (list ว่าง = ไม่จำกัด = พฤติกรรมเดิม)
+  // Owner-only: switch between team-wide and private sharing
+  const doUpdateWorkspaceAccess = useCallback(async (mode, wsId) => {
+    const targetId = wsId || state.activeCloudWorkspaceId
+    if (!targetId) {
+      return { ok: false, error: 'ต้องบันทึกบนคลาวด์ก่อนจึงจะเปลี่ยนการแชร์ได้' }
+    }
+    try {
+      await updateWorkspaceAccess(targetId, mode)
+      if (targetId === state.activeCloudWorkspaceId) {
+        dispatch({ type: 'SET_WORKSPACE_ACCESS_MODE', payload: mode })
+      }
+      await doListCloudWorkspaces()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  }, [state.activeCloudWorkspaceId, doListCloudWorkspaces])
+
+  // สิทธิ์จัดการ: เจ้าของ / สมาชิกทีมของเจ้าของ / อีเมลใน manager_emails
+  // (local snapshot ที่ไม่มี owner = ไม่จำกัด; guest ที่ไม่มีรายชื่อผู้จัดการ = เจ้าของเครื่อง)
   const isWorkspaceOwner = !!(state.user && state.workspaceOwnerId && state.user.id === state.workspaceOwnerId)
-  const canManage = state.managerEmails.length === 0
+  const isTeamMemberOfWorkspace = !!(
+    state.workspaceOwnerId
+    && (state.teamInfo?.memberships || []).some((m) => m.owner_id === state.workspaceOwnerId)
+  )
+  const normalizedUserEmail = (state.user?.email || '').trim().toLowerCase()
+  const isWorkspaceManager = !!(
+    normalizedUserEmail
+    && state.managerEmails.some((e) => String(e).trim().toLowerCase() === normalizedUserEmail)
+  )
+  const legacyCanManage = !state.workspaceOwnerId
     || isWorkspaceOwner
-    || (!!state.user && state.managerEmails.includes(state.user.email))
+    || isTeamMemberOfWorkspace
+    || isWorkspaceManager
+    || (!state.user && state.managerEmails.length === 0)
+  const myWorkspaceRole = state.activeWorkspace?.myWorkspaceRole || (legacyCanManage ? 'editor' : 'viewer')
+  const myTraineeRole = state.activeTraineeWorkspace?.myTraineeRole
+    || state.activeWorkspace?.myTraineeRole
+    || 'none'
+  const canEditWorkspace = myWorkspaceRole === 'owner' || myWorkspaceRole === 'editor'
+  const canViewWorkspace = ['owner', 'editor', 'viewer'].includes(myWorkspaceRole)
+  const canShareWorkspace = myWorkspaceRole === 'owner'
+  const canEditTrainees = ['owner', 'editor'].includes(myTraineeRole)
+  const canShareTrainees = myTraineeRole === 'owner'
+  const canManage = canEditWorkspace
 
   return (
     <AppContext.Provider
       value={{
         ...state,
         canManage,
+        canEditWorkspace,
+        canViewWorkspace,
+        canShareWorkspace,
+        canEditTrainees,
+        canShareTrainees,
+        myWorkspaceRole,
+        myTraineeRole,
         isWorkspaceOwner,
+        isTeamMemberOfWorkspace,
         updateManagerEmails: doUpdateManagerEmails,
+        updateWorkspaceAccess: doUpdateWorkspaceAccess,
+        // Team (ผู้ใช้หลายคนใช้ระบบร่วมกัน)
+        loadTeam: doLoadTeam,
+        inviteTeamMember: doInviteTeamMember,
+        updateTeamMemberRoles: doUpdateTeamMemberRoles,
+        revokeTeamMember: doRevokeTeamMember,
+        setActiveTraineeWorkspace: (payload) => dispatch({ type: 'SET_ACTIVE_TRAINEE_WORKSPACE', payload }),
+        clearActiveTraineeWorkspace: () => dispatch({ type: 'CLEAR_ACTIVE_TRAINEE_WORKSPACE' }),
         selectFixture,
         runSolver,
         resumeFromCache,
@@ -1883,6 +2261,7 @@ export function AppProvider({ children }) {
         login: doLogin,
         logout: doLogout,
         refreshMe: doRefreshMe,
+        clearAuthError: doClearAuthError,
         // Cloud workspaces
         listCloudWorkspaces: doListCloudWorkspaces,
         saveToCloud: doSaveToCloud,

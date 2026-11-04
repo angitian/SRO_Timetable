@@ -9,6 +9,7 @@ import TimetableView from './pages/TimetableView.jsx'
 import PrintStudio from './pages/PrintStudio.jsx'
 import SubstituteCenterPage from './features/substitute/SubstituteCenterPage.jsx'
 import TeacherDashboardPage from './features/dashboard/TeacherDashboardPage.jsx'
+import TraineeAttendancePage from './pages/TraineeAttendancePage.jsx'
 import PublicViewerPage from './pages/PublicViewerPage.jsx'
 import SubstituteViewerPage from './pages/SubstituteViewerPage.jsx'
 import AuthCallback from './pages/AuthCallback.jsx'
@@ -39,6 +40,7 @@ function AppContent() {
       {activeStep === 6 && <PrintStudio />}
       {activeStep === 7 && <SubstituteCenterPage />}
       {activeStep === 8 && <TeacherDashboardPage />}
+      {activeStep === 9 && <TraineeAttendancePage />}
     </Layout>
   )
 }

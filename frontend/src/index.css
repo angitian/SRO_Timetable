@@ -34,3 +34,27 @@
 .animate-fadeSlide {
   animation: fadeSlide 0.25s ease-out;
 }
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+  .trainee-print {
+    padding: 0 !important;
+  }
+  .trainee-print table {
+    min-width: 0 !important;
+    font-size: 9px !important;
+  }
+  .trainee-print th,
+  .trainee-print td {
+    padding: 4px !important;
+  }
+  .trainee-print input,
+  .trainee-print select {
+    border: none !important;
+    background: transparent !important;
+    appearance: none;
+  }
+}

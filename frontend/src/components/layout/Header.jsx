@@ -2,6 +2,7 @@ import { Rocket, Loader2, Calendar, Check, Layers, Users, ClipboardCheck, Upload
 import { useState, useRef, useEffect } from 'react'
 import { useApp } from '../../context/AppContext.jsx'
 import UserManualModal from '../manual/UserManualModal.jsx'
+import TeamDialog from '../modals/TeamDialog.jsx'
 
 const STEPS = [
   { id: 1, label: 'นำเข้าข้อมูล', icon: Upload },
@@ -14,8 +15,9 @@ const STEPS = [
 
 /** User menu — login button or user avatar with logout dropdown. */
 function UserMenu() {
-  const { user, login, logout } = useApp()
+  const { user, login, logout, authPending } = useApp()
   const [open, setOpen] = useState(false)
+  const [showTeam, setShowTeam] = useState(false)
   const ref = useRef(null)
 
   useEffect(() => {
@@ -30,12 +32,14 @@ function UserMenu() {
     return (
       <button
         onClick={login}
+        disabled={authPending}
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
-          text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+          text-white bg-blue-600 hover:bg-blue-700 transition-colors
+          disabled:opacity-60 disabled:cursor-wait"
         title="เข้าสู่ระบบด้วย Google (ทางเลือก — ใช้บันทึกขึ้นคลาวด์)"
       >
-        <LogIn className="w-4 h-4" />
-        <span className="hidden sm:inline">เข้าสู่ระบบ</span>
+        {authPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
+        <span className="hidden sm:inline">{authPending ? 'กำลังเชื่อมต่อ...' : 'เข้าสู่ระบบ'}</span>
       </button>
     )
   }
@@ -64,6 +68,13 @@ function UserMenu() {
             <div className="text-xs text-gray-500 truncate">{user.email}</div>
           </div>
           <button
+            onClick={() => { setOpen(false); setShowTeam(true) }}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <Users className="w-4 h-4 text-gray-400" />
+            ผู้ใช้ในทีม
+          </button>
+          <button
             onClick={() => { setOpen(false); logout() }}
             className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
           >
@@ -72,12 +83,13 @@ function UserMenu() {
           </button>
         </div>
       )}
+      {showTeam && <TeamDialog onClose={() => setShowTeam(false)} />}
     </div>
   )
 }
 
 export default function Header() {
-  const { activeStep, setStep, isGenerating, result, isDirty, isSnapshotDirty, activeSnapshotId } = useApp()
+  const { activeStep, setStep, isGenerating, result, isDirty, isSnapshotDirty, activeSnapshotId, activeWorkspace } = useApp()
   const [showManual, setShowManual] = useState(false)
   const [showExitConfirm, setShowExitConfirm] = useState(false)
 
@@ -156,7 +168,7 @@ export default function Header() {
               const Icon = step.icon
               const isActive = activeStep === step.id
               const isPast = activeStep > step.id
-              const isDisabled = (step.id === 5 || step.id === 6) && !result
+              const isDisabled = !activeWorkspace || ((step.id === 5 || step.id === 6) && !result)
               const canClick = !isDisabled
 
               return (

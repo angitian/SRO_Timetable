@@ -147,6 +147,11 @@ def deduplicate_entity(
 import re as _re
 
 
+def normalize_email(email: str | None) -> str:
+    """Lowercase + trim an email so team/manager matching is case-insensitive."""
+    return (email or "").strip().lower()
+
+
 def safe_extract_int(text: str, default: int = 0) -> int:
     """Extract the first integer from a string using regex.
 

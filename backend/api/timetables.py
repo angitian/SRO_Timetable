@@ -36,11 +36,14 @@ from models import (
     TimetableRecord,
     TimetableSaveResult,
     TimetableRequest,
+    WorkspaceAccessRequest,
+    WorkspaceMembersRequest,
     WorkspaceSaveRequest,
     WorkspaceSaveResult,
 )
 from solver import TimetableSolver
 from timetable_store import get_timetable_store
+from utils import normalize_email
 
 router = APIRouter(prefix="/api/v1/timetables", tags=["timetables"])
 
@@ -297,6 +300,8 @@ async def save_workspace(
         existing = await store.get_timetable_by_id(body.id, identity.user_id, identity.email)
         if not existing:
             raise HTTPException(status_code=404, detail="Workspace not found or not yours")
+        if existing.get("my_workspace_role") not in ("owner", "editor"):
+            raise HTTPException(status_code=403, detail="คุณมีสิทธิ์อ่าน workspace นี้เท่านั้น")
         # Preserve short_code/config/result/owner/managers from the existing record
         short_code = existing["short_code"]
         config_json = json.dumps(existing.get("config") or {}, ensure_ascii=False)
@@ -306,8 +311,11 @@ async def save_workspace(
         is_owner = existing.get("user_id") == identity.user_id
         if is_owner:
             manager_emails = body.manager_emails if body.manager_emails is not None else (existing.get("manager_emails") or [])
+            access_mode = body.access_mode or existing.get("access_mode") or "team"
         else:
             manager_emails = existing.get("manager_emails") or []
+            access_mode = existing.get("access_mode") or "team"
+        manager_emails = [normalize_email(e) for e in manager_emails if normalize_email(e)]
         # Preserve the original owner — a manager saving must NOT become owner
         owner_id = existing.get("user_id")
     else:
@@ -324,6 +332,8 @@ async def save_workspace(
         config_json = json.dumps({}, ensure_ascii=False)
         result_json = json.dumps({}, ensure_ascii=False)
         manager_emails = body.manager_emails or []
+        manager_emails = [normalize_email(e) for e in manager_emails if normalize_email(e)]
+        access_mode = body.access_mode or "team"
         owner_id = identity.user_id
 
     try:
@@ -339,6 +349,7 @@ async def save_workspace(
             workspace_json=workspace_json,
             is_public=0,  # private workspace
             manager_emails=manager_emails,
+            access_mode=access_mode,
         )
     except D1Error as e:
         raise HTTPException(status_code=502, detail=f"Failed to save workspace: {e}")
@@ -384,6 +395,66 @@ async def delete_workspace(
     return {"ok": True, "id": record_id}
 
 
+@router.get("/workspace/{record_id}/members")
+async def get_workspace_members(
+    record_id: str,
+    identity: UserIdentity = Depends(get_identity),
+    store: Any = Depends(get_timetable_store),
+):
+    """List explicit workspace members and the caller's effective roles."""
+    record = await store.get_timetable_by_id(record_id, identity.user_id, identity.email)
+    if not record:
+        raise HTTPException(status_code=404, detail="Workspace not found or not yours")
+    if record.get("my_workspace_role") not in ("owner", "editor", "viewer"):
+        raise HTTPException(status_code=403, detail="No access to this workspace")
+    members = await store.get_workspace_members(record_id)
+    return {
+        "ok": True,
+        "id": record_id,
+        "access_mode": record.get("access_mode") or "team",
+        "members": members,
+        "my_workspace_role": record.get("my_workspace_role"),
+        "my_trainee_role": record.get("my_trainee_role") or "none",
+    }
+
+
+@router.put("/workspace/{record_id}/members")
+async def set_workspace_members(
+    record_id: str,
+    body: WorkspaceMembersRequest,
+    identity: UserIdentity = Depends(get_identity),
+    store: Any = Depends(get_timetable_store),
+):
+    """Replace explicit workspace members + trainee overrides — OWNER only."""
+    if not identity.is_authenticated:
+        raise HTTPException(status_code=403, detail="Login required")
+    record = await store.get_timetable_by_id(record_id, identity.user_id, identity.email)
+    if not record:
+        raise HTTPException(status_code=404, detail="Workspace not found or not yours")
+    if record.get("my_workspace_role") != "owner":
+        raise HTTPException(status_code=403, detail="เฉพาะเจ้าของ workspace เท่านั้นที่จัดการสมาชิกได้")
+    members = [
+        {
+            "email": m.email,
+            "workspace_role": m.workspace_role,
+            "trainee_role": m.trainee_role,
+        }
+        for m in body.members
+        if m.email and m.email != (identity.email or "").strip().lower()
+    ]
+    try:
+        ok = await store.set_workspace_members(record_id, identity.user_id, members)
+    except D1Error as e:
+        raise HTTPException(status_code=502, detail=f"Failed to update workspace members: {e}")
+    if not ok:
+        raise HTTPException(status_code=404, detail="Workspace not found or not yours")
+    return {
+        "ok": True,
+        "id": record_id,
+        "members": await store.get_workspace_members(record_id),
+    }
+
+
 @router.put("/workspace/{record_id}/managers")
 async def update_workspace_managers(
     record_id: str,
@@ -397,8 +468,8 @@ async def update_workspace_managers(
     if not identity.is_authenticated:
         raise HTTPException(status_code=403, detail="Login required")
     emails = body.get("manager_emails") or []
-    # normalize: strip whitespace, drop empties, dedupe
-    emails = list(dict.fromkeys(e.strip() for e in emails if isinstance(e, str) and e.strip()))
+    # normalize: strip whitespace, lowercase, drop empties, dedupe
+    emails = list(dict.fromkeys(normalize_email(e) for e in emails if isinstance(e, str) and normalize_email(e)))
     try:
         updated = await store.update_manager_emails(record_id, identity.user_id, emails)
     except D1Error as e:
@@ -406,6 +477,29 @@ async def update_workspace_managers(
     if not updated:
         raise HTTPException(status_code=404, detail="Workspace not found or only the owner may manage members")
     return {"ok": True, "id": record_id, "manager_emails": emails}
+
+
+@router.put("/workspace/{record_id}/access")
+async def update_workspace_access(
+    record_id: str,
+    body: WorkspaceAccessRequest,
+    identity: UserIdentity = Depends(get_identity),
+    store: Any = Depends(get_timetable_store),
+):
+    """Set the sharing scope of a workspace — OWNER only.
+
+    'team'    → everyone in the owner's team can open/edit it (default)
+    'private' → only the owner and the emails in manager_emails can open it
+    """
+    if not identity.is_authenticated:
+        raise HTTPException(status_code=403, detail="Login required")
+    try:
+        updated = await store.update_workspace_access(record_id, identity.user_id, body.mode)
+    except D1Error as e:
+        raise HTTPException(status_code=502, detail=f"Failed to update access mode: {e}")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Workspace not found or only the owner may change sharing")
+    return {"ok": True, "id": record_id, "access_mode": body.mode}
 
 
 @router.post("/merge-guest")

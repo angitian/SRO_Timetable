@@ -629,9 +629,14 @@ class TimetableRecord(BaseModel):
     result: Optional[dict] = None
     workspace: Optional[dict] = None
     manager_emails: list[str] = Field(default_factory=list, description="Google emails with manager access to this workspace")
+    access_mode: str = Field(default="team", description="'team' = shared with the owner's team, 'private' = only owner + manager_emails")
+    owner_email: Optional[str] = Field(default=None, description="Email of the workspace owner (joined from users)")
+    owner_name: Optional[str] = Field(default=None, description="Display name of the workspace owner (joined from users)")
     is_public: bool = True
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    my_workspace_role: Optional[str] = Field(default=None, description="Effective role for the caller: owner/editor/viewer")
+    my_trainee_role: Optional[str] = Field(default=None, description="Effective trainee-module role for the caller: none/viewer/editor")
 
 
 class TimetableSaveResult(BaseModel):
@@ -671,12 +676,223 @@ class WorkspaceSaveRequest(BaseModel):
     term: int = Field(ge=1, le=3)
     workspace: dict = Field(description="Full workspace payload (fixtureData, result, userPlacements, ...)")
     manager_emails: Optional[list[str]] = Field(default=None, description="Emails of additional managers (owner only may change)")
+    access_mode: Optional[str] = Field(default=None, description="'team' | 'private' (owner only may change; default keeps the existing mode)")
+
+    @field_validator("access_mode")
+    @classmethod
+    def _validate_access_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip().lower()
+        if v not in ("team", "private"):
+            raise ValueError("access_mode must be 'team' or 'private'")
+        return v
+
+
+class WorkspaceAccessRequest(BaseModel):
+    """Request body for PUT /api/v1/timetables/workspace/{id}/access (owner only)."""
+    mode: str = Field(description="'team' = shared with the owner's team, 'private' = only owner + manager_emails")
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in ("team", "private"):
+            raise ValueError("mode must be 'team' or 'private'")
+        return v
+
+
+class AddTeamMemberRequest(BaseModel):
+    """Request body for POST /api/v1/team/members."""
+    email: str = Field(min_length=3, max_length=254, description="Google email of the member to invite")
+    default_workspace_role: str = Field(default="editor", description="'editor' | 'viewer'")
+    default_trainee_role: str = Field(default="none", description="'none' | 'viewer' | 'editor'")
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if "@" not in v or v.startswith("@") or v.endswith("@"):
+            raise ValueError("invalid email address")
+        return v
+
+    @field_validator("default_workspace_role")
+    @classmethod
+    def _validate_workspace_role(cls, v: str) -> str:
+        v = (v or "editor").strip().lower()
+        if v not in ("editor", "viewer"):
+            raise ValueError("default_workspace_role must be 'editor' or 'viewer'")
+        return v
+
+    @field_validator("default_trainee_role")
+    @classmethod
+    def _validate_trainee_role(cls, v: str) -> str:
+        v = (v or "none").strip().lower()
+        if v not in ("none", "viewer", "editor"):
+            raise ValueError("default_trainee_role must be 'none', 'viewer' or 'editor'")
+        return v
+
+
+class UpdateTeamMemberRolesRequest(BaseModel):
+    default_workspace_role: str = Field(default="editor")
+    default_trainee_role: str = Field(default="none")
+
+    @field_validator("default_workspace_role")
+    @classmethod
+    def _validate_workspace_role(cls, v: str) -> str:
+        v = (v or "editor").strip().lower()
+        if v not in ("editor", "viewer"):
+            raise ValueError("default_workspace_role must be 'editor' or 'viewer'")
+        return v
+
+    @field_validator("default_trainee_role")
+    @classmethod
+    def _validate_trainee_role(cls, v: str) -> str:
+        v = (v or "none").strip().lower()
+        if v not in ("none", "viewer", "editor"):
+            raise ValueError("default_trainee_role must be 'none', 'viewer' or 'editor'")
+        return v
+
+
+class TeamMember(BaseModel):
+    """A member of the caller's team. `status` is 'pending' until they log in."""
+    email: str
+    name: Optional[str] = None
+    picture: Optional[str] = None
+    status: str = Field(default="pending", description="'active' = has a users row, 'pending' = not logged in yet")
+    added_at: Optional[str] = None
+    default_workspace_role: str = "editor"
+    default_trainee_role: str = "none"
+
+
+class TeamMembership(BaseModel):
+    """A team the caller belongs to (read-only summary)."""
+    owner_id: str
+    owner_email: str = ""
+    owner_name: str = ""
+
+
+class TeamInfo(BaseModel):
+    """Response for GET /api/v1/team."""
+    owner_id: str
+    owner_email: str = ""
+    owner_name: str = ""
+    members: list[TeamMember] = Field(default_factory=list)
+    memberships: list[TeamMembership] = Field(default_factory=list)
 
 
 class WorkspaceSaveResult(BaseModel):
     """Response for POST /save-workspace."""
     id: str
     title: str
+    updated_at: Optional[str] = None
+
+
+# ── Role / trainee module models ───────────────────────────────────────────
+
+class WorkspaceMember(BaseModel):
+    email: str
+    workspace_role: str = Field(default="editor", description="'editor' | 'viewer'")
+    trainee_role: str = Field(default="none", description="'none' | 'viewer' | 'editor'")
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if "@" not in v:
+            raise ValueError("invalid email address")
+        return v
+
+    @field_validator("workspace_role")
+    @classmethod
+    def _validate_workspace_role(cls, v: str) -> str:
+        v = (v or "editor").strip().lower()
+        if v not in ("editor", "viewer"):
+            raise ValueError("workspace_role must be 'editor' or 'viewer'")
+        return v
+
+    @field_validator("trainee_role")
+    @classmethod
+    def _validate_trainee_role(cls, v: str) -> str:
+        v = (v or "none").strip().lower()
+        if v not in ("none", "viewer", "editor"):
+            raise ValueError("trainee_role must be 'none', 'viewer' or 'editor'")
+        return v
+
+
+class WorkspaceMembersRequest(BaseModel):
+    members: list[WorkspaceMember] = Field(default_factory=list)
+
+
+class TraineeMember(BaseModel):
+    email: str
+    role: str = Field(default="viewer", description="'viewer' | 'editor'")
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if "@" not in v:
+            raise ValueError("invalid email address")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def _validate_role(cls, v: str) -> str:
+        v = (v or "viewer").strip().lower()
+        if v not in ("viewer", "editor"):
+            raise ValueError("role must be 'viewer' or 'editor'")
+        return v
+
+
+class TraineeMembersRequest(BaseModel):
+    members: list[TraineeMember] = Field(default_factory=list)
+    access_mode: Optional[str] = Field(default=None, description="'private' | 'team'")
+
+    @field_validator("access_mode")
+    @classmethod
+    def _validate_access_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip().lower()
+        if v not in ("private", "team"):
+            raise ValueError("access_mode must be 'private' or 'team'")
+        return v
+
+
+class TraineeWorkspaceSaveRequest(BaseModel):
+    data: dict = Field(default_factory=dict)
+    base_version: int = Field(default=0, ge=0)
+
+
+class TraineeWorkspaceResponse(BaseModel):
+    timetable_id: str
+    title: str = ""
+    timetable_title: str = ""
+    academic_year: Optional[int] = None
+    term: Optional[int] = None
+    owner_user_id: Optional[str] = None
+    access_mode: str = "private"
+    data: dict = Field(default_factory=dict)
+    version: int = 0
+    trainee_count: int = 0
+    attendance_count: int = 0
+    updated_at: Optional[str] = None
+    my_trainee_role: str = "none"
+    can_edit_trainees: bool = False
+    is_owner: bool = False
+
+
+class TraineeWorkspaceSummary(BaseModel):
+    timetable_id: str
+    title: str = ""
+    timetable_title: str = ""
+    academic_year: Optional[int] = None
+    term: Optional[int] = None
+    owner_user_id: Optional[str] = None
+    my_trainee_role: str = "none"
+    trainee_count: int = 0
+    attendance_count: int = 0
     updated_at: Optional[str] = None
 
 

@@ -110,14 +110,37 @@ Auto-Deploy ทั้งคู่ trigger เมื่อ push ไป branch `ma
 ## 5. ทดสอบ local ก่อน push
 
 ```powershell
-# รัน backend
+# terminal 1 — backend (port 8000)
+powershell -ExecutionPolicy Bypass -File scripts/dev-backend.ps1
+
+# terminal 2 — frontend (http://localhost:5173)
+powershell -ExecutionPolicy Bypass -File scripts/dev-frontend.ps1
+```
+
+หรือรันตรง ๆ (ต้องรันจาก `backend/` เพื่อให้อ่าน `.env` ได้):
+
+```powershell
 cd backend
 uvicorn main:app --reload --port 8000
 
-# รัน frontend (อีก terminal) — ไม่ต้องตั้ง env var เพราะมี fallback
+# อีก terminal
 cd frontend
 npm run dev
 ```
+
+> **สำคัญสำหรับ Google login บน local**
+> 1. ต้องเปิดแอปที่ **`http://localhost:5173`** (ไม่ใช่ `127.0.0.1`) — Google
+>    ลงทะเบียน redirect URI ไว้เฉพาะ `http://localhost:8000/...` และ localStorage
+>    (ที่เก็บ JWT) แยกตาม origin ถ้าสลับ host จะดูเหมือน login ไม่ติด
+> 2. backend ต้องรันที่ port **8000** ให้ตรงกับ redirect URI ที่ลงทะเบียนไว้
+>    ถ้า `.env` ยังเป็น port อื่น ให้ใช้ `scripts/dev-backend.ps1` (script override
+>    env var ทับ `.env` ให้) หรือแก้ `BACKEND_BASE_URL` ใน `backend/.env` เอง
+> 3. เช็ค config ก่อนทดสอบทุกครั้ง:
+>    ```bash
+>    python scripts/check_oauth_config.py
+>    ```
+>    ถ้าขึ้น `MISMATCH` แปลว่า URI ที่ backend สร้างยังไม่ถูกเพิ่มใน Google Cloud
+>    Console (หรือ port ไม่ตรง) — login จะพังด้วย `Error 400: redirect_uri_mismatch`
 
 ถ้าต้องการทดสอบค่า `VITE_API_URL` จริง:
 ```powershell
@@ -187,10 +210,15 @@ PrintStudio "บันทึก & แชร์"
 | GET | `/api/v1/timetables/t/{short_code}` | ดูตารางสอนจาก short code (public, Lead Magnet) |
 | GET | `/api/v1/timetables/my-schedules` | รายการตารางของผู้ใช้ (Bearer JWT หรือ `X-User-Id`) |
 | POST | `/api/v1/timetables/claim` | ผูก short code กับ user (Bearer JWT หรือ `X-User-Id`) |
-| POST | `/api/v1/timetables/save-workspace` | บันทึก workspace ขึ้นคลาวด์ (ไม่ re-solve, private) |
-| GET | `/api/v1/timetables/workspace/{id}` | โหลด workspace จากคลาวด์ (เจ้าของเท่านั้น) |
+| POST | `/api/v1/timetables/save-workspace` | บันทึก workspace ขึ้นคลาวด์ (ไม่ re-solve, private) — รับ `access_mode` (`team`/`private`) |
+| GET | `/api/v1/timetables/workspace/{id}` | โหลด workspace จากคลาวด์ (เจ้าของ / สมาชิกทีม / manager_emails) |
 | DELETE | `/api/v1/timetables/workspace/{id}` | ลบ workspace (เจ้าของเท่านั้น) |
+| PUT | `/api/v1/timetables/workspace/{id}/managers` | ตั้งรายชื่อผู้จัดการรายตาราง (เจ้าของเท่านั้น) |
+| PUT | `/api/v1/timetables/workspace/{id}/access` | เปลี่ยนการแชร์เป็น `team` หรือ `private` (เจ้าของเท่านั้น) |
 | POST | `/api/v1/timetables/merge-guest` | ย้ายของ guest device ไปผูกกับบัญชีที่ login |
+| GET | `/api/v1/team` | ดูทีมของฉัน + ทีมที่ฉันถูกเพิ่ม (ต้องมี Bearer JWT) |
+| POST | `/api/v1/team/members` | เพิ่มอีเมลเข้าทีม (เจ้าของเท่านั้น, idempotent) |
+| DELETE | `/api/v1/team/members/{email}` | ถอดอีเมลออกจากทีม (เจ้าของเท่านั้น) |
 | GET | `/api/v1/auth/google/url` | สร้าง Google OAuth consent URL |
 | GET | `/api/v1/auth/google/callback` | Google redirect callback (แลก code → JWT → redirect frontend) |
 | GET | `/api/v1/auth/me` | ดึง profile ผู้ใช้ (ต้องมี Bearer JWT) |
@@ -213,12 +241,19 @@ PrintStudio "บันทึก & แชร์"
 
 1. **Google Cloud Console** → APIs & Services → Credentials
 2. **Create Credentials** → OAuth client ID → Web application
-3. **Authorized redirect URIs**:
+3. **Authorized redirect URIs** (ต้องตรงทุกตัวอักษร — scheme, host, port):
    ```
    http://localhost:8000/api/v1/auth/google/callback          (dev)
    https://<your-render-app>.onrender.com/api/v1/auth/google/callback  (prod)
    ```
+   - `http://127.0.0.1:8000/...` **ใช้ไม่ได้** ถ้าไม่ได้เพิ่มแยก (Google ถือว่า host ต่างกัน)
+   - ถ้า backend รันคนละ port ให้เพิ่ม URI ของ port นั้นแยก หรือเปลี่ยน `BACKEND_BASE_URL`
+     ให้ตรงกับ URI ที่มีอยู่แล้ว
 4. Copy Client ID + Client Secret
+5. ตรวจสอบว่าฝั่ง local ตั้งค่าตรง:
+   ```bash
+   python scripts/check_oauth_config.py   # ต้องขึ้น PASS
+   ```
 
 ### การตั้งค่า Render env vars (เพิ่มเติม)
 
@@ -236,6 +271,31 @@ PrintStudio "บันทึก & แชร์"
 python _run_migration.py ../scripts/002_upgrade.sql
 ```
 
+### การรัน migration 005 (ทีมผู้ใช้ + access_mode)
+
+ต้องรัน **ก่อน** deploy backend เวอร์ชันที่มีระบบทีม:
+
+```bash
+cd backend
+python _run_migration.py ../scripts/005_team_members.sql
+```
+
+สร้างตาราง `team_members (owner_user_id, member_email, added_at)` และเพิ่มคอลัมน์
+`timetables.access_mode` (default `'team'`) — รันซ้ำได้ (runner ข้าม duplicate column ให้)
+
+### ทีมผู้ใช้ (ใช้งานระบบร่วมกันหลายคน)
+
+1. เจ้าของ login ด้วย Google → เมนูผู้ใช้ → **ผู้ใช้ในทีม** (หรือปุ่มบนหน้าแรก)
+2. ใส่อีเมล Google ของครูที่ต้องการ → กดเพิ่ม (สถานะ "รอเข้าสู่ระบบ" จนกว่าเขาจะ login)
+3. สมาชิก login ด้วยอีเมลนั้น → เห็น workspace **ทุกตารางของเจ้าของ** ในหน้าแรกทันที และแก้ไขได้เท่าเจ้าของ
+4. ถ้าต้องการแชร์เฉพาะบางตาราง: หน้าแรก → ไอคอนแชร์ของตารางนั้น → เลือก
+   **"เฉพาะรายชื่อ"** แล้วระบุอีเมล (โหมด `private`)
+5. ถอดสมาชิกออกจากทีม → สิทธิ์ระดับทีมถูกเพิกถอนทันที (แต่รายชื่อที่เคยใส่ใน `manager_emails` ของแต่ละตารางยังอยู่)
+
+สิทธิ์ที่ทำได้เฉพาะเจ้าของ: เพิ่ม/ถอดสมาชิกทีม, เปลี่ยนโหมดแชร์, แก้ `manager_emails`, ลบ workspace
+
+> อีเมลถูก normalize เป็นตัวพิมพ์เล็กทั้งระบบ (JWT / team_members / manager_emails) — ใช้ได้แม้ผู้ใช้พิมพ์ตัวพิมพ์ใหญ่
+
 ### Flow การใช้งาน
 
 1. **Guest**: สร้างตาราง → บันทึก local snapshot (auto-save) → ใช้ได้ปกติ
@@ -245,3 +305,21 @@ python _run_migration.py ../scripts/002_upgrade.sql
 5. **merge-guest**: หลัง login ระบบย้ายของที่ save ด้วย device id เข้าบัญชีอัตโนมัติ
 
 > **หมายเหตุ**: login เป็น **ทางเลือก** — guest ยังใช้ทุกฟีเจอร์เดิมได้ (short code, snapshot, export JSON)
+
+### การรัน migration 006 + 007 (สิทธิ์ role + โมดูลนักศึกษาฝึกสอน)
+
+ต้องรัน **ก่อน** deploy backend เวอร์ชันที่มี Workspace role และโมดูล นศ.:
+
+```bash
+cd backend
+python _run_migration.py ../scripts/006_workspace_roles.sql
+python _run_migration.py ../scripts/007_trainee_workspaces.sql
+```
+
+- `006` เพิ่มตาราง `workspace_members` (role ต่อ workspace), คอลัมน์ default role ของ `team_members`
+  และ migrate `manager_emails` เดิมเป็น editor
+- `007` เพิ่มตาราง `trainee_workspaces` และ `trainee_members`
+- ทั้งสองไฟล์รันซ้ำได้ (runner ข้าม duplicate column/table ให้)
+
+หลัง migrate แล้ว หน้าแรกจะมี card **นักศึกษาฝึกสอน** และปุ่มแชร์ workspace จะเปิด dialog
+เลือก role `แก้ไขได้/อ่านอย่างเดียว` + สิทธิ์โมดูล นศ. `ไม่เห็น/อ่าน/แก้ไข` ต่อคนได้

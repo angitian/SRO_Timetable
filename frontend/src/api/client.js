@@ -243,9 +243,19 @@ export async function claimTimetable(shortCode) {
  * The backend handles the callback and redirects back to /auth/callback.
  */
 export async function loginWithGoogle() {
-  const res = await fetch(`${BASE_URL}/api/v1/auth/google/url`)
-  if (res.status === 503) throw new Error('Google login ยังไม่ได้เปิดใช้งาน')
-  if (!res.ok) throw new Error('ไม่สามารถเริ่มการเข้าสู่ระบบได้')
+  let res
+  try {
+    res = await fetch(`${BASE_URL}/api/v1/auth/google/url`)
+  } catch {
+    throw new Error(`เชื่อมต่อ backend ไม่ได้ (${BASE_URL}) — ตรวจสอบว่า backend รันอยู่`)
+  }
+  if (res.status === 503) {
+    throw new Error('Google login ยังไม่ได้เปิดใช้งาน — backend ยังไม่ตั้ง GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / JWT_SECRET')
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`ไม่สามารถเริ่มการเข้าสู่ระบบได้ (HTTP ${res.status})${detail ? `: ${detail.slice(0, 200)}` : ''}`)
+  }
   const { url } = await res.json()
   window.location.href = url
 }
@@ -276,7 +286,7 @@ export async function fetchMe() {
  * @param {{ id?: string, title: string, academicYear: number, term: number, workspace: object }} payload
  * @returns {Promise<{ id: string, title: string, updated_at: string }>}
  */
-export async function saveWorkspaceToCloud({ id, title, academicYear, term, workspace, managerEmails }) {
+export async function saveWorkspaceToCloud({ id, title, academicYear, term, workspace, managerEmails, accessMode }) {
   const res = await fetch(`${BASE_URL}/api/v1/timetables/save-workspace`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -287,6 +297,7 @@ export async function saveWorkspaceToCloud({ id, title, academicYear, term, work
       term,
       workspace,
       manager_emails: managerEmails ?? null,
+      access_mode: accessMode ?? null,
     }),
   })
   if (res.status === 401) throw new Error('กรุณาเข้าสู่ระบบเพื่อบันทึกขึ้นคลาวด์')
@@ -351,6 +362,96 @@ export async function updateWorkspaceManagers(id, emails) {
 }
 
 /**
+ * Set the sharing scope of a workspace — owner only.
+ * 'team' = everyone in the owner's team; 'private' = owner + manager_emails only.
+ * @param {string} id
+ * @param {'team'|'private'} mode
+ */
+export async function updateWorkspaceAccess(id, mode) {
+  const res = await fetch(`${BASE_URL}/api/v1/timetables/workspace/${id}/access`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ mode }),
+  })
+  if (res.status === 401) throw new Error('กรุณาเข้าสู่ระบบก่อน')
+  if (res.status === 404) throw new Error('ไม่พบตาราง หรือคุณไม่ใช่เจ้าของ')
+  if (!res.ok) {
+    const err = await res.text().catch(() => `HTTP ${res.status}`)
+    throw new Error(err)
+  }
+  return res.json()
+}
+
+// ── Team sharing (owner adds an email once → all their workspaces shared) ────
+
+async function _readError(res, fallback) {
+  try {
+    const body = await res.json()
+    return body?.detail || fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * Fetch the caller's own team + the teams they belong to (requires JWT).
+ * @returns {Promise<{ owner_id: string, owner_email: string, owner_name: string,
+ *   members: {email:string,name:string|null,picture:string|null,status:string,added_at:string}[],
+ *   memberships: {owner_id:string,owner_email:string,owner_name:string}[] }>}
+ */
+export async function fetchTeam() {
+  const res = await fetch(`${BASE_URL}/api/v1/team`, { headers: authHeaders() })
+  if (res.status === 401 || res.status === 403) throw new Error('กรุณาเข้าสู่ระบบก่อนจัดการทีม')
+  if (!res.ok) throw new Error('โหลดข้อมูลทีมไม่สำเร็จ')
+  return res.json()
+}
+
+/**
+ * Add an email to the caller's team.
+ * @param {string} email
+ */
+export async function addTeamMember(email, defaultWorkspaceRole = 'editor', defaultTraineeRole = 'none') {
+  const res = await fetch(`${BASE_URL}/api/v1/team/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      email,
+      default_workspace_role: defaultWorkspaceRole,
+      default_trainee_role: defaultTraineeRole,
+    }),
+  })
+  if (!res.ok) throw new Error(await _readError(res, `เพิ่มผู้ใช้ไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+/** Update a team member's default workspace/trainee roles (team owner only). */
+export async function updateTeamMemberRoles(email, defaultWorkspaceRole, defaultTraineeRole) {
+  const res = await fetch(`${BASE_URL}/api/v1/team/members/${encodeURIComponent(email)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      default_workspace_role: defaultWorkspaceRole,
+      default_trainee_role: defaultTraineeRole,
+    }),
+  })
+  if (!res.ok) throw new Error(await _readError(res, `แก้สิทธิ์ผู้ใช้ไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+/**
+ * Remove an email from the caller's team.
+ * @param {string} email
+ */
+export async function removeTeamMember(email) {
+  const res = await fetch(`${BASE_URL}/api/v1/team/members/${encodeURIComponent(email)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(await _readError(res, `ถอดผู้ใช้ไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+/**
  * Fetch a private workspace by id (must be owned by the caller).
  * @param {string} id
  * @returns {Promise<object>} TimetableRecord with workspace field
@@ -375,6 +476,82 @@ export async function deleteCloudWorkspace(id) {
     headers: authHeaders(),
   })
   if (!res.ok) throw new Error('ลบไม่สำเร็จ')
+  return res.json()
+}
+
+// ── Workspace roles ────────────────────────────────────────────────────────
+
+export async function fetchWorkspaceMembers(id) {
+  const res = await fetch(`${BASE_URL}/api/v1/timetables/workspace/${id}/members`, {
+    headers: authHeaders(),
+  })
+  if (res.status === 404) throw new Error('ไม่พบ workspace หรือไม่มีสิทธิ์เข้าถึง')
+  if (!res.ok) throw new Error(await _readError(res, `โหลดสมาชิกไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+export async function saveWorkspaceMembers(id, members) {
+  const res = await fetch(`${BASE_URL}/api/v1/timetables/workspace/${id}/members`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ members }),
+  })
+  if (!res.ok) throw new Error(await _readError(res, `บันทึกสมาชิกไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+// ── Trainee attendance module ─────────────────────────────────────────────
+
+export async function listMyTraineeWorkspaces() {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/mine`, { headers: authHeaders() })
+  if (res.status === 401 || res.status === 403) throw new Error('กรุณาเข้าสู่ระบบเพื่อใช้โมดูลนักศึกษา')
+  if (!res.ok) throw new Error(await _readError(res, `โหลดรายการโมดูลไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+export async function fetchTraineeWorkspace(timetableId) {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/${encodeURIComponent(timetableId)}`, {
+    headers: authHeaders(),
+  })
+  if (res.status === 404) throw new Error('ไม่พบโมดูลนักศึกษา หรือไม่มีสิทธิ์เข้าถึง')
+  if (res.status === 403) throw new Error(await _readError(res, 'ต้องเข้าสู่ระบบหรือมีสิทธิ์จึงจะใช้โมดูลนี้'))
+  if (!res.ok) throw new Error(await _readError(res, `โหลดข้อมูลไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+export async function saveTraineeWorkspace(timetableId, data, baseVersion) {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/${encodeURIComponent(timetableId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ data, base_version: baseVersion }),
+  })
+  if (res.status === 409) {
+    let payload = null
+    try { payload = await res.json() } catch { /* ignore */ }
+    const err = new Error(payload?.detail?.message || 'ข้อมูลถูกแก้ไขโดยผู้ใช้อื่น')
+    err.status = 409
+    err.current = payload?.detail?.current || null
+    throw err
+  }
+  if (!res.ok) throw new Error(await _readError(res, `บันทึกไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+export async function fetchTraineeMembers(timetableId) {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/${encodeURIComponent(timetableId)}/members`, {
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(await _readError(res, `โหลดสิทธิ์ไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+export async function saveTraineeMembers(timetableId, members, accessMode = null) {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/${encodeURIComponent(timetableId)}/members`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ members, access_mode: accessMode }),
+  })
+  if (!res.ok) throw new Error(await _readError(res, `บันทึกสิทธิ์ไม่สำเร็จ (HTTP ${res.status})`))
   return res.json()
 }
 

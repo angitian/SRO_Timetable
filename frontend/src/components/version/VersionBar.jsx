@@ -38,6 +38,7 @@ export default function VersionBar() {
     login,
     cloudSyncing,
     activeCloudWorkspaceId,
+    cloudWorkspaces,
     saveToCloud,
   } = useApp()
 
@@ -126,7 +127,8 @@ export default function VersionBar() {
       }
       return
     }
-    const label = activeSnapshotLabel || generateLabel(snapshots.length)
+    const activeCloudTitle = (cloudWorkspaces || []).find((w) => w.id === activeCloudWorkspaceId)?.title
+    const label = activeSnapshotLabel || activeCloudTitle || generateLabel(snapshots.length)
     const result = await saveToCloud(label)
     if (result.ok) {
       showToast('ok', activeCloudWorkspaceId

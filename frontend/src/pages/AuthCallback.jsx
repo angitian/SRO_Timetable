@@ -14,6 +14,18 @@ import { setAuthToken, fetchMe, getUserId, mergeGuestWorkspaces } from '../api/c
  * Note: this app uses window.location for routing (no react-router), so we
  * redirect via window.location.href.
  */
+/**
+ * Thai messages for the `error` codes the backend can send back.
+ * See backend/api/auth.py → google_callback().
+ */
+const AUTH_ERROR_MESSAGES = {
+  access_denied: 'คุณยกเลิกการเข้าสู่ระบบ',
+  invalid_state: 'เซสชันการเข้าสู่ระบบหมดอายุหรือถูกใช้ไปแล้ว — กรุณากดเข้าสู่ระบบใหม่',
+  missing_code: 'Google ไม่ได้ส่งรหัสยืนยันกลับมา — กรุณาลองใหม่อีกครั้ง',
+  token_exchange_failed: 'แลก token กับ Google ไม่สำเร็จ — ตรวจสอบ GOOGLE_CLIENT_ID/SECRET และ redirect URI',
+  userinfo_failed: 'ดึงข้อมูลบัญชี Google ไม่สำเร็จ — กรุณาลองใหม่อีกครั้ง',
+}
+
 export default function AuthCallback() {
   const [status, setStatus] = useState('loading') // 'loading' | 'ok' | 'err'
   const [errorMsg, setErrorMsg] = useState('')
@@ -26,7 +38,7 @@ export default function AuthCallback() {
 
     if (error) {
       setStatus('err')
-      setErrorMsg(error === 'access_denied' ? 'คุณยกเลิกการเข้าสู่ระบบ' : `เกิดข้อผิดพลาด: ${error}`)
+      setErrorMsg(AUTH_ERROR_MESSAGES[error] || `เกิดข้อผิดพลาด: ${error}`)
       window.history.replaceState({}, '', '/auth/callback')
       return
     }
@@ -44,7 +56,7 @@ export default function AuthCallback() {
       .then(async (user) => {
         if (!user) {
           setStatus('err')
-          setErrorMsg('Token ไม่ถูกต้องหรือหมดอายุ')
+          setErrorMsg('Token ไม่ถูกต้องหรือหมดอายุ (หรือ backend ตอบผิดพลาด)')
           return
         }
 

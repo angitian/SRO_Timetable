@@ -14,8 +14,10 @@ endpoints return 503 so the frontend can hide the login button.
 from __future__ import annotations
 
 import secrets
+import sys
 import time
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -26,8 +28,6 @@ from config import settings
 from d1_service import D1Error
 from models import User
 from timetable_store import get_timetable_store
-
-from typing import Any
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -64,49 +64,84 @@ _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
+def redirect_uri() -> str:
+    """The exact callback URI Google must redirect to.
+
+    Must match an "Authorized redirect URI" in the Google Cloud Console
+    character-for-character — including scheme, host and port. A mismatch shows
+    up as `Error 400: redirect_uri_mismatch` on the Google consent page.
+    """
+    return f"{settings.BACKEND_BASE_URL.rstrip('/')}/api/v1/auth/google/callback"
+
+
+def _frontend_callback_url(**params: str) -> str:
+    """Build the frontend /auth/callback URL used to hand control back to the app."""
+    base = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/auth/callback"
+    return f"{base}?{urlencode(params)}" if params else base
+
+
+@router.get("/status")
+async def auth_status() -> dict[str, Any]:
+    """Non-secret auth config snapshot — useful for local-dev diagnostics.
+
+    Deliberately not gated by `_require_google_configured()`: the whole point is
+    to be able to tell *why* login is unavailable.
+    """
+    return {
+        "configured": settings.google_configured,
+        "redirect_uri": redirect_uri(),
+        "backend_base_url": settings.BACKEND_BASE_URL.rstrip("/"),
+        "frontend_base_url": settings.FRONTEND_BASE_URL.rstrip("/"),
+    }
+
+
 @router.get("/google/url")
 async def google_login_url() -> dict[str, str]:
     """Return the Google OAuth consent URL the frontend should redirect to."""
     _require_google_configured()
     state = secrets.token_urlsafe(16)
     _push_state(state)
-    redirect_uri = f"{settings.BACKEND_BASE_URL.rstrip('/')}/api/v1/auth/google/callback"
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
-        "redirect_uri": redirect_uri,
+        "redirect_uri": redirect_uri(),
         "response_type": "code",
         "scope": "openid email profile",
         "state": state,
         "prompt": "select_account",
     }
-    from urllib.parse import urlencode
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     return {"url": url, "state": state}
 
 
 @router.get("/google/callback")
 async def google_callback(
-    code: str = Query(...),
-    state: str = Query(...),
+    code: str | None = Query(None),
+    state: str | None = Query(None),
     error: str | None = Query(None),
+    error_description: str | None = Query(None),
     store: Any = Depends(get_timetable_store),
 ):
-    """Handle the Google redirect: exchange code → userinfo → JWT → frontend redirect."""
+    """Handle the Google redirect: exchange code → userinfo → JWT → frontend redirect.
+
+    Every failure path redirects back to the frontend with `?error=<code>` so the
+    user sees a proper Thai error screen instead of a raw JSON API error.
+    """
     _require_google_configured()
 
-    # Google sends `error` if the user cancels
+    # Google sends `error` (no `code`) if the user cancels or consent is refused
     if error:
-        frontend = settings.FRONTEND_BASE_URL.rstrip("/")
-        return RedirectResponse(
-            url=f"{frontend}/auth/callback?error={error}",
-            status_code=302,
-        )
+        if error_description:
+            print(f"[auth] Google returned {error}: {error_description}", file=sys.stderr)
+        return RedirectResponse(url=_frontend_callback_url(error=error), status_code=302)
 
     # Validate CSRF state
-    if not _pop_state(state):
-        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    if not state or not _pop_state(state):
+        return RedirectResponse(url=_frontend_callback_url(error="invalid_state"), status_code=302)
 
-    redirect_uri = f"{settings.BACKEND_BASE_URL.rstrip('/')}/api/v1/auth/google/callback"
+    if not code:
+        return RedirectResponse(url=_frontend_callback_url(error="missing_code"), status_code=302)
+
+    callback_url = redirect_uri()
 
     # Exchange code for tokens
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -117,21 +152,30 @@ async def google_callback(
                     "code": code,
                     "client_id": settings.GOOGLE_CLIENT_ID,
                     "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                    "redirect_uri": redirect_uri,
+                    "redirect_uri": callback_url,
                     "grant_type": "authorization_code",
                 },
                 headers={"Accept": "application/json"},
             )
         except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Google token exchange failed: {e}")
+            print(f"[auth] token exchange failed: {e}", file=sys.stderr)
+            return RedirectResponse(
+                url=_frontend_callback_url(error="token_exchange_failed"), status_code=302
+            )
 
     if token_resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Google token exchange failed: {token_resp.text}")
+        print(f"[auth] token exchange failed: {token_resp.text}", file=sys.stderr)
+        return RedirectResponse(
+            url=_frontend_callback_url(error="token_exchange_failed"), status_code=302
+        )
 
     token_data = token_resp.json()
     access_token = token_data.get("access_token")
     if not access_token:
-        raise HTTPException(status_code=502, detail="Google did not return an access token")
+        print("[auth] Google did not return an access token", file=sys.stderr)
+        return RedirectResponse(
+            url=_frontend_callback_url(error="token_exchange_failed"), status_code=302
+        )
 
     # Fetch user profile
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -141,15 +185,24 @@ async def google_callback(
                 headers={"Authorization": f"Bearer {access_token}"},
             )
         except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Google userinfo fetch failed: {e}")
+            print(f"[auth] userinfo fetch failed: {e}", file=sys.stderr)
+            return RedirectResponse(
+                url=_frontend_callback_url(error="userinfo_failed"), status_code=302
+            )
 
     if ui_resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Google userinfo failed: {ui_resp.text}")
+        print(f"[auth] userinfo failed: {ui_resp.text}", file=sys.stderr)
+        return RedirectResponse(
+            url=_frontend_callback_url(error="userinfo_failed"), status_code=302
+        )
 
     userinfo = ui_resp.json()
     sub = userinfo.get("sub")
     if not sub:
-        raise HTTPException(status_code=502, detail="Google userinfo missing sub")
+        print("[auth] Google userinfo missing sub", file=sys.stderr)
+        return RedirectResponse(
+            url=_frontend_callback_url(error="userinfo_failed"), status_code=302
+        )
 
     email = userinfo.get("email") or ""
     name = userinfo.get("name") or email or "User"
@@ -161,16 +214,14 @@ async def google_callback(
     except D1Error as e:
         # Non-fatal: we still issue a JWT so the user can work; profile just won't persist.
         # Log to stderr for visibility.
-        import sys
         print(f"[auth] upsert_user failed: {e}", file=sys.stderr)
 
     # Issue JWT
     jwt_token = create_token(sub=sub, email=email, name=name)
 
     # Redirect to frontend with token in query string
-    frontend = settings.FRONTEND_BASE_URL.rstrip("/")
     return RedirectResponse(
-        url=f"{frontend}/auth/callback?token={jwt_token}",
+        url=_frontend_callback_url(token=jwt_token),
         status_code=302,
     )
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import io
 import functools
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
@@ -14,7 +15,9 @@ from solver import TimetableSolver
 import schedule_store
 from excel_parser import parse_excel, import_with_mapping, import_multi_sheet, generate_minimum_template, import_minimum_template, generate_full_template
 from api.timetables import router as timetables_router
-from api.auth import router as auth_router
+from api.auth import router as auth_router, redirect_uri
+from api.team import router as team_router
+from api.trainees import router as trainees_router
 from api.devtools import router as devtools_router, require_local_dev
 from api.substitutes import router as substitutes_router
 from config import settings as app_settings
@@ -56,8 +59,22 @@ app.add_middleware(
 
 app.include_router(timetables_router)
 app.include_router(auth_router)
+app.include_router(team_router)
+app.include_router(trainees_router)
 app.include_router(devtools_router)
 app.include_router(substitutes_router)
+
+# Surface the OAuth redirect URI at startup: it must be registered verbatim in
+# Google Cloud Console, and a mismatch only shows up later as
+# "Error 400: redirect_uri_mismatch" on the Google consent page.
+if app_settings.google_configured:
+    print(f"[auth] Google login enabled - redirect URI: {redirect_uri()}", file=sys.stderr)
+else:
+    print(
+        "[auth] Google login disabled - set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET "
+        "and JWT_SECRET in backend/.env",
+        file=sys.stderr,
+    )
 
 # Dev-only DB inspector page (static file, no build step). Local-only + flag-gated.
 _DEV_DB_PAGE = Path(__file__).parent / "devtools" / "db.html"
