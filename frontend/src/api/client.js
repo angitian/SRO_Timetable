@@ -555,6 +555,44 @@ export async function saveTraineeMembers(timetableId, members, accessMode = null
   return res.json()
 }
 
+// ── Trainee public summary share (/view?tr=CODE) ───────────────────────────
+
+export async function fetchTraineeShare(timetableId) {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/${encodeURIComponent(timetableId)}/share`, {
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(await _readError(res, `โหลดลิงก์แชร์ไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+export async function shareTraineeSummary(timetableId, payload) {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/${encodeURIComponent(timetableId)}/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ payload }),
+  })
+  if (res.status === 404) throw new Error('ยังไม่มีข้อมูลโมดูลบนคลาวด์ — บันทึกข้อมูลก่อนแชร์')
+  if (res.status === 403) throw new Error('ต้องเข้าสู่ระบบและมีสิทธิ์แก้ไขโมดูล')
+  if (!res.ok) throw new Error(await _readError(res, `สร้างลิงก์แชร์ไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+export async function deleteTraineeShare(timetableId) {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/${encodeURIComponent(timetableId)}/share`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) throw new Error(await _readError(res, `ยกเลิกลิงก์ไม่สำเร็จ (HTTP ${res.status})`))
+  return res.json()
+}
+
+export async function fetchPublicTraineeShare(code) {
+  const res = await fetch(`${BASE_URL}/api/v1/trainees/share/${encodeURIComponent(code)}`)
+  if (res.status === 404) throw new Error('ไม่พบลิงก์แชร์ผลสรุป หรือลิงก์ถูกยกเลิกแล้ว')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 /**
  * Merge guest-created records (saved with device id) into the logged-in user.
  * @param {string} deviceId

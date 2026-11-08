@@ -24,6 +24,7 @@ const MODES = [
   { value: 'day', label: 'รายวัน' },
   { value: 'week', label: 'รายสัปดาห์' },
   { value: 'month', label: 'รายเดือน' },
+  { value: 'semester', label: 'รายภาคเรียน' },
 ]
 
 function SummaryCard({ label, value, tone }) {
@@ -113,7 +114,7 @@ export default function TraineeAttendancePage() {
     [data.trainees],
   )
   const traineeIds = useMemo(() => trainees.map((t) => t.id), [trainees])
-  const range = useMemo(() => getRange(dateKey, mode), [dateKey, mode])
+  const range = useMemo(() => getRange(dateKey, mode, reference), [dateKey, mode, reference])
   const stats = useMemo(
     () => (mode === 'day'
       ? summarizeDay(data.attendance, dateKey, traineeIds)
@@ -401,7 +402,7 @@ export default function TraineeAttendancePage() {
         <div className="flex flex-wrap items-center gap-3 mb-2">
           <div className="min-w-[220px]">
             <h2 className="text-lg font-bold text-slate-900">ตารางการปฏิบัติงานนักศึกษา</h2>
-            <p className="text-xs text-slate-500">{rangeLabel(dateKey, mode)} · {trainees.length} คน</p>
+            <p className="text-xs text-slate-500">{rangeLabel(dateKey, mode, reference)} · {trainees.length} คน</p>
           </div>
           <div className="flex flex-wrap items-center gap-1.5 ml-auto">
             <SummaryCard label="รายการที่บันทึก" value={stats.total} tone="slate" />
@@ -590,6 +591,13 @@ export default function TraineeAttendancePage() {
           reference={reference}
           initialType={printInitialType}
           initialDateKey={dateKey}
+          timetableId={timetableId}
+          cloudEnabled={cloudEnabled}
+          canEdit={canEdit}
+          title={title}
+          timetableTitle={activeTraineeWorkspace?.linkedTimetableTitle || activeWorkspace?.title || ''}
+          onToast={(msg) => setNotice(msg)}
+          onEnsureSaved={workspace.ensureSaved}
         />
       )}
 

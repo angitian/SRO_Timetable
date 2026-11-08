@@ -30,6 +30,7 @@ SUBSTITUTE_SHARES_FILE = DATA_DIR / "substitute_shares.json"
 WORKSPACE_MEMBERS_FILE = DATA_DIR / "workspace_members.json"
 TRAINEE_WORKSPACES_FILE = DATA_DIR / "trainee_workspaces.json"
 TRAINEE_MEMBERS_FILE = DATA_DIR / "trainee_members.json"
+TRAINEE_SHARES_FILE = DATA_DIR / "trainee_shares.json"
 
 # Module-level lock so concurrent async writers don't clobber each other.
 _write_lock = asyncio.Lock()
@@ -126,6 +127,23 @@ def _row_to_substitute_share(row: dict) -> dict:
         "date": row.get("date"),
         "payload": payload,
         "user_id": row.get("user_id"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _row_to_trainee_share(row: dict) -> dict:
+    """Normalize a stored trainee-share row (payload parsed)."""
+    payload = row.get("payload_json")
+    if isinstance(payload, str):
+        payload = _safe_loads(payload)
+    return {
+        "id": row.get("id"),
+        "short_code": row.get("short_code"),
+        "timetable_id": row.get("timetable_id"),
+        "payload": payload,
+        "owner_user_id": row.get("owner_user_id"),
+        "created_by": row.get("created_by"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -796,6 +814,100 @@ class LocalTimetableStore:
         kept_members = [m for m in members if m.get("timetable_id") != timetable_id]
         if len(kept_members) != len(members):
             await self._save_trainee_members(kept_members)
+        shares = await self._load_trainee_shares()
+        kept_shares = [s for s in shares if s.get("timetable_id") != timetable_id]
+        if len(kept_shares) != len(shares):
+            await self._save_trainee_shares(kept_shares)
+
+    # ── Trainee summary share links (public /view?tr=CODE) ─────────────────
+
+    @property
+    def _trainee_shares_path(self) -> Path:
+        return (
+            TRAINEE_SHARES_FILE
+            if self._path == TIMETABLES_FILE
+            else self._path.with_name("trainee_shares.json")
+        )
+
+    async def _load_trainee_shares(self) -> list[dict]:
+        def _load() -> list[dict]:
+            p = self._trainee_shares_path
+            if not p.exists():
+                return []
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                return []
+        return await asyncio.to_thread(_load)
+
+    async def _save_trainee_shares(self, rows: list[dict]) -> None:
+        async with _write_lock:
+            def _save() -> None:
+                p = self._trainee_shares_path
+                p.parent.mkdir(parents=True, exist_ok=True)
+                tmp = p.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+                tmp.replace(p)
+            await asyncio.to_thread(_save)
+
+    async def trainee_share_short_code_exists(self, short_code: str) -> bool:
+        rows = await self._load_trainee_shares()
+        return any(r.get("short_code") == short_code for r in rows)
+
+    async def get_trainee_share(self, timetable_id: str) -> dict | None:
+        rows = await self._load_trainee_shares()
+        for row in rows:
+            if row.get("timetable_id") == timetable_id:
+                return _row_to_trainee_share(row)
+        return None
+
+    async def save_trainee_share(
+        self,
+        *,
+        id: str,
+        short_code: str,
+        timetable_id: str,
+        payload_json: str,
+        owner_user_id: str | None,
+        created_by: str | None,
+    ) -> None:
+        rows = await self._load_trainee_shares()
+        now = _now_iso()
+        record = {
+            "id": id,
+            "short_code": short_code,
+            "timetable_id": timetable_id,
+            "payload_json": _safe_loads(payload_json),
+            "owner_user_id": owner_user_id,
+            "created_by": created_by,
+            "created_at": now,
+            "updated_at": now,
+        }
+        for i, row in enumerate(rows):
+            if row.get("timetable_id") == timetable_id:
+                record["id"] = row.get("id") or id
+                record["short_code"] = row.get("short_code") or short_code
+                record["created_at"] = row.get("created_at", now)
+                rows[i] = record
+                break
+        else:
+            rows.append(record)
+        await self._save_trainee_shares(rows)
+
+    async def get_trainee_share_by_short_code(self, short_code: str) -> dict | None:
+        rows = await self._load_trainee_shares()
+        for row in rows:
+            if row.get("short_code") == short_code:
+                return _row_to_trainee_share(row)
+        return None
+
+    async def delete_trainee_share(self, timetable_id: str) -> bool:
+        rows = await self._load_trainee_shares()
+        kept = [r for r in rows if r.get("timetable_id") != timetable_id]
+        if len(kept) == len(rows):
+            return False
+        await self._save_trainee_shares(kept)
+        return True
 
     # ── Substitute share links (daily substitute documents) ────────────────
 

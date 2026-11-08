@@ -896,6 +896,20 @@ class TraineeWorkspaceSummary(BaseModel):
     updated_at: Optional[str] = None
 
 
+class TraineeShareRequest(BaseModel):
+    """Raw summary payload for the public trainee viewer (/view?tr=CODE)."""
+
+    payload: dict = Field(default_factory=dict)
+
+
+class TraineeShareResult(BaseModel):
+    id: str
+    short_code: str
+    share_url: str
+    timetable_id: str
+    updated_at: Optional[str] = None
+
+
 class MergeGuestRequest(BaseModel):
     """Request body for POST /api/v1/timetables/merge-guest."""
     device_id: str = Field(min_length=1, description="Guest device id to merge into the authenticated user")

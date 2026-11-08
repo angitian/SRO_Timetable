@@ -102,3 +102,38 @@ test('report range and CSV resolve by type', () => {
   assert.ok(csv.startsWith('\uFEFF'))
   assert.ok(csv.includes('หนึ่ง <script>'))
 })
+
+test('week, month and semester report types resolve their own ranges', () => {
+  assert.deepEqual(
+    resolveReportRange('week', { dateKey: '2026-11-04' }),
+    { start: '2026-11-02', end: '2026-11-08', mode: 'week' },
+  )
+  assert.deepEqual(
+    resolveReportRange('month', { dateKey: '2026-11-04' }),
+    { start: '2026-11-01', end: '2026-11-30', mode: 'month' },
+  )
+  assert.deepEqual(
+    resolveReportRange('semester', { dateKey: '2026-11-04' }, { academicYear: 2569, term: 2 }),
+    { start: '2026-11-01', end: '2027-03-31', mode: 'semester' },
+  )
+})
+
+test('weekly report includes the period subtitle and CSV export works', () => {
+  const html = buildReportHTML({
+    type: 'week',
+    trainees,
+    attendance,
+    settings: { dateKey: '2026-11-02' },
+  })
+  assert.match(html, /สรุปการลงเวลาปฏิบัติงาน/)
+  assert.match(html, /สรุปรายสัปดาห์/)
+
+  const csv = buildReportCSV({
+    type: 'month',
+    trainees,
+    attendance,
+    settings: { dateKey: '2026-11-02' },
+  })
+  assert.ok(csv.startsWith('\uFEFF'))
+  assert.ok(csv.includes('หนึ่ง <script>'))
+})

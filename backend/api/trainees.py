@@ -7,22 +7,31 @@ not see the module.
 
 Endpoints (prefix /api/v1/trainees):
   GET    /mine                  accessible trainee modules for the caller
+  GET    /share/{short_code}    public: shared summary payload (no login)
   GET    /{timetable_id}        module data + effective role
   PUT    /{timetable_id}        save module data (optimistic version)
   GET    /{timetable_id}/members
   PUT    /{timetable_id}/members (owner only)
+  GET    /{timetable_id}/share  owner/editor: existing public summary link
+  POST   /{timetable_id}/share  owner/editor: create/update the link
+  DELETE /{timetable_id}/share  owner/editor: revoke the link
 """
 from __future__ import annotations
 
 import json
+import secrets
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth import UserIdentity, get_identity
+from config import settings
 from d1_service import D1Error
 from models import (
     TraineeMembersRequest,
+    TraineeShareRequest,
+    TraineeShareResult,
     TraineeWorkspaceResponse,
     TraineeWorkspaceSaveRequest,
     TraineeWorkspaceSummary,
@@ -37,11 +46,37 @@ from timetable_store import get_timetable_store
 router = APIRouter(prefix="/api/v1/trainees", tags=["trainees"])
 
 MAX_TRAINEE_DATA_BYTES = 2 * 1024 * 1024
+MAX_SHARE_PAYLOAD_BYTES = 2 * 1024 * 1024
+
+_SHORT_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_SHORT_CODE_LENGTH = 6
+_SHORT_CODE_MAX_ATTEMPTS = 10
+
+
+def _generate_short_code() -> str:
+    return "".join(secrets.choice(_SHORT_CODE_ALPHABET) for _ in range(_SHORT_CODE_LENGTH))
+
+
+def _build_share_url(short_code: str) -> str:
+    base = settings.FRONTEND_BASE_URL.rstrip("/")
+    return f"{base}/view?tr={short_code}"
 
 
 def _require_login(identity: UserIdentity) -> None:
     if not identity.is_authenticated:
         raise HTTPException(status_code=403, detail="Login required for trainee module")
+
+
+async def _require_trainee_editor(store: Any, timetable_id: str, identity: UserIdentity) -> tuple[dict, str]:
+    """Load the module and require owner/editor rights for share management."""
+    _require_login(identity)
+    row = await store.get_trainee_workspace(timetable_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Trainee module not found")
+    role = await _trainee_role(store, row, identity)
+    if role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="ต้องมีสิทธิ์แก้ไขโมดูลเพื่อจัดการลิงก์แชร์")
+    return row, role
 
 
 def _count_records(data: dict) -> tuple[int, int]:
@@ -114,6 +149,27 @@ async def list_my_trainee_workspaces(
         )
         for r in rows
     ]
+
+
+@router.get("/share/{short_code}")
+async def get_public_trainee_share(
+    short_code: str,
+    store: Any = Depends(get_timetable_store),
+):
+    """Public: fetch a shared trainee summary by short code (no login)."""
+    try:
+        record = await store.get_trainee_share_by_short_code(short_code.strip().upper())
+    except D1Error as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch trainee share: {e}")
+    if not record:
+        raise HTTPException(status_code=404, detail="ไม่พบลิงก์แชร์ผลสรุป หรือลิงก์ถูกยกเลิกแล้ว")
+    return {
+        "id": record["id"],
+        "timetable_id": record["timetable_id"],
+        "payload": record["payload"],
+        "created_at": record.get("created_at"),
+        "updated_at": record.get("updated_at"),
+    }
 
 
 @router.get("/{timetable_id}", response_model=TraineeWorkspaceResponse)
@@ -287,3 +343,104 @@ async def set_trainee_members(
         "access_mode": (saved or {}).get("access_mode") or "private",
         "members": await store.get_trainee_members(timetable_id),
     }
+
+
+# ── Public summary share links (/view?tr=CODE) ─────────────────────────────
+
+
+@router.get("/{timetable_id}/share")
+async def get_trainee_share(
+    timetable_id: str,
+    identity: UserIdentity = Depends(get_identity),
+    store: Any = Depends(get_timetable_store),
+):
+    """Owner/editor: return the existing share link for this module (if any)."""
+    await _require_trainee_editor(store, timetable_id, identity)
+    try:
+        record = await store.get_trainee_share(timetable_id)
+    except D1Error as e:
+        raise HTTPException(status_code=502, detail=f"Failed to load trainee share: {e}")
+    if not record:
+        return {"ok": True, "timetable_id": timetable_id, "share": None}
+    return {
+        "ok": True,
+        "timetable_id": timetable_id,
+        "share": {
+            "id": record["id"],
+            "short_code": record["short_code"],
+            "share_url": _build_share_url(record["short_code"]),
+            "updated_at": record.get("updated_at"),
+        },
+    }
+
+
+@router.post("/{timetable_id}/share", response_model=TraineeShareResult)
+async def share_trainee_summary(
+    timetable_id: str,
+    body: TraineeShareRequest,
+    identity: UserIdentity = Depends(get_identity),
+    store: Any = Depends(get_timetable_store),
+):
+    """Owner/editor: create or update the public summary link (one per module)."""
+    row, _ = await _require_trainee_editor(store, timetable_id, identity)
+    payload_json = json.dumps(body.payload, ensure_ascii=False)
+    if len(payload_json.encode("utf-8")) > MAX_SHARE_PAYLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="ข้อมูลผลสรุปใหญ่เกิน 2 MB")
+
+    owner_user_id = row.get("owner_user_id") or identity.user_id
+    try:
+        existing = await store.get_trainee_share(timetable_id)
+        if existing:
+            await store.save_trainee_share(
+                id=existing["id"],
+                short_code=existing["short_code"],
+                timetable_id=timetable_id,
+                payload_json=payload_json,
+                owner_user_id=owner_user_id,
+                created_by=identity.user_id,
+            )
+        else:
+            short_code = None
+            for _ in range(_SHORT_CODE_MAX_ATTEMPTS):
+                candidate = _generate_short_code()
+                if not await store.trainee_share_short_code_exists(candidate):
+                    short_code = candidate
+                    break
+            if short_code is None:
+                raise HTTPException(status_code=409, detail="Could not allocate a short code")
+            await store.save_trainee_share(
+                id=str(uuid.uuid4()),
+                short_code=short_code,
+                timetable_id=timetable_id,
+                payload_json=payload_json,
+                owner_user_id=owner_user_id,
+                created_by=identity.user_id,
+            )
+        saved = await store.get_trainee_share(timetable_id)
+    except D1Error as e:
+        raise HTTPException(status_code=502, detail=f"Failed to share trainee summary: {e}")
+
+    if not saved:
+        raise HTTPException(status_code=500, detail="บันทึกลิงก์แล้วแต่ไม่พบข้อมูล")
+    return TraineeShareResult(
+        id=saved["id"],
+        short_code=saved["short_code"],
+        share_url=_build_share_url(saved["short_code"]),
+        timetable_id=timetable_id,
+        updated_at=saved.get("updated_at"),
+    )
+
+
+@router.delete("/{timetable_id}/share")
+async def revoke_trainee_share(
+    timetable_id: str,
+    identity: UserIdentity = Depends(get_identity),
+    store: Any = Depends(get_timetable_store),
+):
+    """Owner/editor: revoke the public summary link."""
+    await _require_trainee_editor(store, timetable_id, identity)
+    try:
+        deleted = await store.delete_trainee_share(timetable_id)
+    except D1Error as e:
+        raise HTTPException(status_code=502, detail=f"Failed to revoke trainee share: {e}")
+    return {"ok": True, "timetable_id": timetable_id, "deleted": deleted}

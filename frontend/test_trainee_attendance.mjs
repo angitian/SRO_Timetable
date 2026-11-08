@@ -4,7 +4,7 @@ import {
   buildDashboardCSV, buildDashboardStats, buildReference, buildSummaryCSV,
   bulkPresent, countAttendanceRecords, dashboardRange, dashboardRangeLabel,
   getRange, historyForTrainee, mentorDisplayLine, mergeTraineeRows,
-  normalizeTraineeProfile, removeDailyRecord, removeTraineeRecords,
+  normalizeTraineeProfile, rangeLabel, removeDailyRecord, removeTraineeRecords,
   setDailyRecord, statsForTrainee, traineeTeachingLines,
   summarizeDay, summarizeRange, todayISO, validateTraineeProfile,
 } from './src/utils/traineeAttendance.js'
@@ -37,6 +37,12 @@ test('month range covers calendar month', () => {
   const range = getRange('2026-11-04', 'month')
   assert.equal(range.start, '2026-11-01')
   assert.equal(range.end, '2026-11-30')
+})
+
+test('semester range uses the reference term and academic year', () => {
+  const range = getRange('2026-11-04', 'semester', { academicYear: 2569, term: 2 })
+  assert.deepEqual(range, { start: '2026-11-01', end: '2027-03-31', mode: 'semester' })
+  assert.match(rangeLabel('2026-11-04', 'semester', { academicYear: 2569, term: 2 }), /ภาคเรียนที่ 2\/2569/)
 })
 
 test('day summary only counts recorded statuses', () => {

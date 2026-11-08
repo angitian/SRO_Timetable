@@ -32,6 +32,7 @@ export default function useTraineeWorkspace(timetableId, {
   const dirtyRef = useRef(false)
   const canEditRef = useRef(canEditNow)
   const saveTimerRef = useRef(null)
+  const savePromiseRef = useRef(null)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -79,7 +80,7 @@ export default function useTraineeWorkspace(timetableId, {
 
   const saveNow = useCallback(async (overrideData = null) => {
     if (!timetableId) return { ok: false }
-    const payload = overrideData || dataRef.current
+    let payload = overrideData || dataRef.current
     if (!cloudEnabled) {
       persistCache(payload, versionRef.current, false)
       dirtyRef.current = false
@@ -87,6 +88,11 @@ export default function useTraineeWorkspace(timetableId, {
       return { ok: true, local: true }
     }
     if (!canEditRef.current) return { ok: false, error: 'read-only' }
+    // Serialize saves: never send two PUTs with the same base_version (409).
+    if (savePromiseRef.current) {
+      try { await savePromiseRef.current } catch { /* next attempt re-reads state */ }
+      if (!overrideData) payload = dataRef.current
+    }
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
@@ -95,39 +101,64 @@ export default function useTraineeWorkspace(timetableId, {
       setSyncState('saving')
       setError('')
     }
-    try {
-      const saved = await saveTraineeWorkspace(timetableId, payload, versionRef.current)
-      if (!mountedRef.current) return { ok: true }
-      setVersion(saved.version || 0)
-      versionRef.current = saved.version || 0
-      setRole(saved.my_trainee_role || role)
-      setCanEditNow(!!saved.can_edit_trainees)
-      canEditRef.current = !!saved.can_edit_trainees
-      dirtyRef.current = false
-      setSyncState('saved')
-      setConflict(null)
-      persistCache(payload, saved.version || 0, false)
-      return { ok: true, saved }
-    } catch (e) {
-      if (!mountedRef.current) return { ok: false }
-      if (e.status === 409) {
-        setConflict(e.current || null)
-        setSyncState('conflict')
-        setError(e.message || 'ข้อมูลถูกแก้ไขโดยผู้ใช้อื่น')
-      } else {
-        setError(e.message || 'บันทึกไม่สำเร็จ')
-        setSyncState(navigator.onLine ? 'error' : 'offline')
-        persistCache(payload, versionRef.current, true)
+    const run = (async () => {
+      try {
+        const saved = await saveTraineeWorkspace(timetableId, payload, versionRef.current)
+        if (!mountedRef.current) return { ok: true }
+        setVersion(saved.version || 0)
+        versionRef.current = saved.version || 0
+        setRole(saved.my_trainee_role || role)
+        setCanEditNow(!!saved.can_edit_trainees)
+        canEditRef.current = !!saved.can_edit_trainees
+        dirtyRef.current = false
+        setSyncState('saved')
+        setConflict(null)
+        persistCache(payload, saved.version || 0, false)
+        return { ok: true, saved }
+      } catch (e) {
+        if (!mountedRef.current) return { ok: false }
+        if (e.status === 409) {
+          setConflict(e.current || null)
+          setSyncState('conflict')
+          setError(e.message || 'ข้อมูลถูกแก้ไขโดยผู้ใช้อื่น')
+        } else {
+          setError(e.message || 'บันทึกไม่สำเร็จ')
+          setSyncState(navigator.onLine ? 'error' : 'offline')
+          persistCache(payload, versionRef.current, true)
+        }
+        return { ok: false, error: e.message, conflict: e.status === 409 }
       }
-      return { ok: false, error: e.message, conflict: e.status === 409 }
+    })()
+    savePromiseRef.current = run
+    try {
+      return await run
+    } finally {
+      if (savePromiseRef.current === run) savePromiseRef.current = null
     }
   }, [cloudEnabled, persistCache, role, timetableId])
+
+  // Flush pending edits (and create the module row if it doesn't exist yet)
+  // before actions that need server-side data, e.g. creating a share link.
+  const ensureSaved = useCallback(async () => {
+    if (!timetableId) return { ok: false, error: 'no-workspace' }
+    if (!cloudEnabled) return { ok: true, local: true }
+    if (!canEditRef.current) return { ok: false, error: 'read-only' }
+    if (savePromiseRef.current) {
+      const result = await savePromiseRef.current
+      if (!result?.ok) return result
+    }
+    if (versionRef.current === 0 || dirtyRef.current) return saveNow()
+    return { ok: true }
+  }, [cloudEnabled, saveNow, timetableId])
 
   const scheduleSave = useCallback((nextData) => {
     if (!cloudEnabled || !canEditRef.current) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
+    saveTimerRef.current = setTimeout(async () => {
       saveTimerRef.current = null
+      if (savePromiseRef.current) {
+        try { await savePromiseRef.current } catch { /* next save retries */ }
+      }
       saveNow(nextData)
     }, 900)
   }, [cloudEnabled, saveNow])
@@ -263,6 +294,7 @@ export default function useTraineeWorkspace(timetableId, {
     conflict,
     mutate,
     saveNow,
+    ensureSaved,
     useServerCopy,
     overwriteServer,
     setError,

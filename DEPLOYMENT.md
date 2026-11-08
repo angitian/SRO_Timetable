@@ -323,3 +323,16 @@ python _run_migration.py ../scripts/007_trainee_workspaces.sql
 
 หลัง migrate แล้ว หน้าแรกจะมี card **นักศึกษาฝึกสอน** และปุ่มแชร์ workspace จะเปิด dialog
 เลือก role `แก้ไขได้/อ่านอย่างเดียว` + สิทธิ์โมดูล นศ. `ไม่เห็น/อ่าน/แก้ไข` ต่อคนได้
+
+### การรัน migration 008 (ลิงก์แชร์ผลสรุปนักศึกษา)
+
+ต้องรัน **ก่อน** deploy backend เวอร์ชันที่มีปุ่ม "แชร์ผลสรุป" ใน Print Studio ของโมดูล นศ.:
+
+```bash
+cd backend
+python _run_migration.py ../scripts/008_trainee_shares.sql
+```
+
+- `008` เพิ่มตาราง `trainee_shares` (1 ลิงก์ต่อโมดูล, short code 6 ตัว)
+- รันซ้ำได้ (`CREATE TABLE/INDEX IF NOT EXISTS`)
+- ถ้ายังไม่รัน: การกดสร้างลิงก์จะได้ error 502 จาก backend

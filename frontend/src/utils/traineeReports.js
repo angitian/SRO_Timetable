@@ -17,10 +17,18 @@ import {
 
 export const REPORT_TYPES = [
   { value: 'daily', label: 'รายงานรายวัน', orientation: 'landscape' },
-  { value: 'range', label: 'สรุปรายเดือน/ภาคเรียน', orientation: 'landscape' },
+  { value: 'week', label: 'สรุปรายสัปดาห์', orientation: 'landscape' },
+  { value: 'month', label: 'สรุปรายเดือน', orientation: 'landscape' },
+  { value: 'semester', label: 'สรุปรายภาคเรียน', orientation: 'landscape' },
   { value: 'student', label: 'รายงานรายคน', orientation: 'portrait' },
   { value: 'dashboard', label: 'สรุป Dashboard', orientation: 'portrait' },
 ]
+
+const RANGE_TYPE_LABELS = {
+  week: 'สรุปรายสัปดาห์',
+  month: 'สรุปรายเดือน',
+  semester: 'สรุปรายภาคเรียน',
+}
 
 export function defaultOrientation(type) {
   return REPORT_TYPES.find((r) => r.value === type)?.orientation || 'landscape'
@@ -51,6 +59,8 @@ function sortTrainees(trainees, sortBy = 'name') {
 export function resolveReportRange(type, settings = {}, reference = {}) {
   const dateKey = settings.dateKey
   if (type === 'daily') return { start: dateKey, end: dateKey, mode: 'day' }
+  if (type === 'week' || type === 'month') return dashboardRange(dateKey, type, reference)
+  if (type === 'semester') return dashboardRange(dateKey, 'semester', reference)
   const rangeMode = settings.rangeMode || (type === 'dashboard' ? 'semester' : 'month')
   return dashboardRange(dateKey, rangeMode, reference)
 }
@@ -183,11 +193,12 @@ export function buildDailyReportHTML({ trainees = [], attendance = {}, reference
   return documentShell({ title: 'รายงานรายวัน', orientation: settings.orientation || 'landscape', body })
 }
 
-export function buildRangeSummaryHTML({ trainees = [], attendance = {}, reference = {}, settings = {} }) {
-  const range = resolveReportRange('range', settings, reference)
+export function buildRangeSummaryHTML({ trainees = [], attendance = {}, reference = {}, settings = {}, type = 'range' }) {
+  const range = resolveReportRange(type, settings, reference)
   const active = sortTrainees(trainees, settings.sortBy)
   const ids = active.map((t) => t.id)
   const total = summarizeRange(attendance, range, ids)
+  const periodLabel = RANGE_TYPE_LABELS[type === 'range' ? settings.rangeMode : type] || ''
   const rows = active.map((t, index) => {
     const stats = statsForTrainee(attendance, t.id, range)
     return `<tr>
@@ -200,7 +211,7 @@ export function buildRangeSummaryHTML({ trainees = [], attendance = {}, referenc
       <td class="num">${pct(stats.present + stats.late, stats.total)}%</td>
     </tr>`
   }).join('')
-  const body = `${reportHeader({ title: 'สรุปการลงเวลาปฏิบัติงาน', settings, range, type: 'range' })}
+  const body = `${reportHeader({ title: 'สรุปการลงเวลาปฏิบัติงาน', subtitle: periodLabel, settings, range, type: 'range' })}
     ${summaryCards(total)}
     <table>
       <thead><tr><th class="center">ลำดับ</th><th>ชื่อ–นามสกุล / รหัส</th><th>วิชาเอก</th><th>สถาบัน</th><th>ครูพี่เลี้ยง</th><th class="center">ปกติ</th><th class="center">สาย</th><th class="center">ลา</th><th class="center">ขาด</th><th class="center">รวม</th><th class="center">มา%</th></tr></thead>
@@ -280,7 +291,9 @@ export function buildDashboardReportHTML({ trainees = [], attendance = {}, refer
 }
 
 export function buildReportHTML({ type = 'daily', trainees = [], attendance = {}, reference = {}, settings = {} }) {
-  if (type === 'range') return buildRangeSummaryHTML({ trainees, attendance, reference, settings })
+  if (type === 'range' || type === 'week' || type === 'month' || type === 'semester') {
+    return buildRangeSummaryHTML({ trainees, attendance, reference, settings, type })
+  }
   if (type === 'student') return buildStudentReportHTML({ trainees, attendance, reference, settings })
   if (type === 'dashboard') return buildDashboardReportHTML({ trainees, attendance, reference, settings })
   return buildDailyReportHTML({ trainees, attendance, reference, settings })

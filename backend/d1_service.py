@@ -775,12 +775,92 @@ class D1Client:
         return int(meta.get("changes", 0)) > 0
 
     async def delete_trainee_workspace(self, timetable_id: str) -> None:
-        for table in ("trainee_members", "trainee_workspaces"):
+        for table in ("trainee_shares", "trainee_members", "trainee_workspaces"):
             try:
                 await self.execute_query(f"DELETE FROM {table} WHERE timetable_id = ?", [timetable_id])
             except D1Error as e:
                 if "no such table" not in str(e).lower():
                     raise
+
+    # ── Trainee summary share links (public /view?tr=CODE) ─────────────────
+
+    async def trainee_share_short_code_exists(self, short_code: str) -> bool:
+        result = await self.execute_query(
+            "SELECT 1 AS hit FROM trainee_shares WHERE short_code = ? LIMIT 1",
+            [short_code],
+        )
+        return bool(result.get("results"))
+
+    async def get_trainee_share(self, timetable_id: str) -> dict | None:
+        result = await self.execute_query(
+            "SELECT * FROM trainee_shares WHERE timetable_id = ? LIMIT 1",
+            [timetable_id],
+        )
+        rows = result.get("results") or []
+        return self._row_to_trainee_share(rows[0]) if rows else None
+
+    async def save_trainee_share(
+        self,
+        *,
+        id: str,
+        short_code: str,
+        timetable_id: str,
+        payload_json: str,
+        owner_user_id: str | None,
+        created_by: str | None,
+    ) -> None:
+        await self.execute_query(
+            """
+            INSERT INTO trainee_shares
+                (id, short_code, timetable_id, payload_json, owner_user_id, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            ON CONFLICT(timetable_id) DO UPDATE SET
+                payload_json  = excluded.payload_json,
+                owner_user_id = excluded.owner_user_id,
+                created_by    = excluded.created_by,
+                updated_at    = datetime('now')
+            """,
+            [id, short_code, timetable_id, payload_json, owner_user_id, created_by],
+        )
+
+    async def get_trainee_share_by_short_code(self, short_code: str) -> dict | None:
+        result = await self.execute_query(
+            "SELECT * FROM trainee_shares WHERE short_code = ? LIMIT 1",
+            [short_code],
+        )
+        rows = result.get("results") or []
+        return self._row_to_trainee_share(rows[0]) if rows else None
+
+    async def delete_trainee_share(self, timetable_id: str) -> bool:
+        result = await self.execute_query(
+            "DELETE FROM trainee_shares WHERE timetable_id = ?",
+            [timetable_id],
+        )
+        meta = result.get("meta") or {}
+        return int(meta.get("changes", 0)) > 0
+
+    @staticmethod
+    def _row_to_trainee_share(row: dict) -> dict:
+        def _loads(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, (dict, list)):
+                return value
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return None
+
+        return {
+            "id": row.get("id"),
+            "short_code": row.get("short_code"),
+            "timetable_id": row.get("timetable_id"),
+            "payload": _loads(row.get("payload_json")),
+            "owner_user_id": row.get("owner_user_id"),
+            "created_by": row.get("created_by"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
 
     # ── Substitute share links (daily substitute documents) ────────────────
 

@@ -12,6 +12,7 @@ import TeacherDashboardPage from './features/dashboard/TeacherDashboardPage.jsx'
 import TraineeAttendancePage from './pages/TraineeAttendancePage.jsx'
 import PublicViewerPage from './pages/PublicViewerPage.jsx'
 import SubstituteViewerPage from './pages/SubstituteViewerPage.jsx'
+import TraineeViewerPage from './pages/TraineeViewerPage.jsx'
 import AuthCallback from './pages/AuthCallback.jsx'
 
 function AppContent() {
@@ -24,9 +25,14 @@ function AppContent() {
 
   // Public viewer route: /view?d=<base64> — standalone, no AppContext needed
   // /view?sub=<code> = shared daily substitute documents
+  // /view?tr=<code> = shared trainee summary reports
   if (window.location.pathname === '/view') {
-    const subCode = new URLSearchParams(window.location.search).get('sub')
-    return subCode ? <SubstituteViewerPage code={subCode} /> : <PublicViewerPage />
+    const params = new URLSearchParams(window.location.search)
+    const subCode = params.get('sub')
+    const traineeCode = params.get('tr')
+    if (subCode) return <SubstituteViewerPage code={subCode} />
+    if (traineeCode) return <TraineeViewerPage code={traineeCode} />
+    return <PublicViewerPage />
   }
 
   return (

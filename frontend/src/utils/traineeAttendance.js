@@ -74,8 +74,9 @@ export function formatDateTimeDMY(date = new Date()) {
   return `${formatDateDMY(todayISO(date))} ${hh}:${mm}`
 }
 
-export function getRange(dateKey, mode = 'day') {
+export function getRange(dateKey, mode = 'day', reference = {}) {
   const base = parseDateKey(dateKey)
+  if (mode === 'semester') return semesterRange(reference, base)
   if (mode === 'week') {
     const day = base.getDay() // 0=Sun
     const mondayOffset = (day + 6) % 7
@@ -105,7 +106,8 @@ export function dateKeysInRange(range) {
   return out
 }
 
-export function rangeLabel(dateKey, mode = 'day') {
+export function rangeLabel(dateKey, mode = 'day', reference = {}) {
+  if (mode === 'semester') return dashboardRangeLabel(dateKey, 'semester', reference)
   const range = getRange(dateKey, mode)
   if (mode === 'week' || mode === 'month') return `${formatThaiDate(range.start)} – ${formatThaiDate(range.end)}`
   return formatThaiDate(dateKey)
