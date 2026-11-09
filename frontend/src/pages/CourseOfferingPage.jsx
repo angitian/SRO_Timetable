@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Plus, Edit2, Trash2, X, Layers, Users, AlertTriangle } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../utils/periodLabels.js'
 
 export default function CourseOfferingPage() {
   const { fixtureData, setView } = useApp()
@@ -12,6 +13,20 @@ export default function CourseOfferingPage() {
   const teachers = fixtureData?.teachers || []
   const subjects = fixtureData?.subjects || []
   const classes = fixtureData?.classes || []
+  const scheduleBlocks = fixtureData?.schedule_blocks || []
+  const schedulePeriods = scheduleBlocks.flatMap((block) => [
+    ...(block.periods || []),
+    ...Object.values(block.periods_by_day || {}).flat(),
+  ])
+  const periodList = schedulePeriods.length
+    ? [...new Set(schedulePeriods.map((period) => period.period_no))].sort((a, b) => a - b)
+    : Array.from({ length: fixtureData?.schedule_config?.periods_per_day || 8 }, (_, i) => i + 1)
+  const periodLabelMap = createPeriodLabelMap(periodList, {
+    lunchPeriods: schedulePeriods.length
+      ? schedulePeriods.filter((period) => period.type === 'LUNCH').map((period) => period.period_no)
+      : fixtureData?.schedule_config?.lunch_periods || [4],
+    breakPeriods: schedulePeriods.filter((period) => period.type === 'BREAK').map((period) => period.period_no),
+  })
 
   const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t])), [teachers])
   const subjectMap = useMemo(() => new Map(subjects.map((s) => [s.id, s])), [subjects])
@@ -199,7 +214,7 @@ export default function CourseOfferingPage() {
                   </td>
                   <td className="px-3 py-2 text-sm text-center">
                     {lb.is_fixed && <span className="badge bg-gray-100 text-gray-600">
-                      วัน{lb.fixed_day} คาบ{lb.fixed_period}
+                      วัน{lb.fixed_day} คาบ{getPeriodDisplayLabel(lb.fixed_period, periodLabelMap)}
                     </span>}
                   </td>
                   <td className="px-3 py-2 text-right">

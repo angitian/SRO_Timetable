@@ -11,6 +11,7 @@ import {
   getDaySlots, computeFreeTeachers, formatTimeRange, buildDailyGrid, makeAssignmentId,
   normalizeDailySchedule, getDayHalves, filterSlotsByRange, computeDaySummary, isPeriodInRange,
   getDayPeriodList, getSlotDisplayDetails, substitutePerson, substitutePersonKey, substituteDisplayName,
+  isAssignablePeriod,
 } from './dailySchedule.js'
 import TeacherSearchSelect from './TeacherSearchSelect.jsx'
 import {
@@ -28,6 +29,7 @@ import {
 } from '../../utils/traineeTimetable.js'
 import { flattenClassTeachers } from '../../utils/teacherLoad.js'
 import { mentorNamesForTrainee } from '../../utils/traineeAttendance.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../../utils/periodLabels.js'
 import DayLoadStrip, { DayLoadLegend } from './DayLoadStrip.jsx'
 
 function toISODate(d) {
@@ -260,6 +262,7 @@ function SubstituteCenterInner() {
   }
 
   const assignSubstitute = (slot, substituteTeacherId) => {
+    if (!isAssignablePeriod(dayPeriods, slot.period)) return
     const teacher = teachers.find((t) => t.id === substituteTeacherId)
     upsertAssignment(slot, {
       substitute_teacher_id: substituteTeacherId,
@@ -271,6 +274,7 @@ function SubstituteCenterInner() {
   }
 
   const assignTraineeSubstitute = (slot, trainee) => {
+    if (!isAssignablePeriod(dayPeriods, slot.period)) return
     upsertAssignment(slot, {
       substitute_teacher_id: null,
       substitute_trainee_id: trainee.id,
@@ -356,6 +360,7 @@ function SubstituteCenterInner() {
     () => getDayPeriodList(schedule_blocks, schedule_config),
     [schedule_blocks, schedule_config],
   )
+  const periodLabelMap = createPeriodLabelMap(dayPeriods)
   const absenceMap = useMemo(
     () => new Map(absences.map((a) => [a.teacherId, a])),
     [absences],
@@ -575,6 +580,7 @@ function SubstituteCenterInner() {
       dateStr,
       dayLabel: formatThaiDate(dateStr),
       grid,
+      dayPeriods,
       assignments,
       absences,
       teachers,
@@ -589,6 +595,7 @@ function SubstituteCenterInner() {
       dateStr,
       dayLabel: formatThaiDate(dateStr),
       grid,
+      dayPeriods,
       assignments,
       absences,
       teachers,
@@ -749,6 +756,7 @@ function SubstituteCenterInner() {
           dateStr={dateStr}
           dayOfWeek={dayOfWeek}
           grid={grid}
+          dayPeriods={dayPeriods}
           assignments={assignments}
           absences={absences}
           summary={summary}
@@ -809,6 +817,7 @@ function SubstituteCenterInner() {
         <ConfirmAssignmentsDialog
           pending={pendingChange}
           teacherMap={teacherMap}
+          periodLabelMap={periodLabelMap}
           onCancel={() => { setPendingChange(null); setEditAbsenceIdx(null) }}
           onResolve={resolvePendingChange}
         />
@@ -959,6 +968,7 @@ export function DailyTab({
   readOnly, staleCount = 0, onClearStale, onOpenPrintStudio,
 }) {
   const [personTab, setPersonTab] = useState('teacher')
+  const periodLabelMap = createPeriodLabelMap(dayPeriods)
   const selectedAbsence = selectedAbsenceIdx != null ? absences[selectedAbsenceIdx] : null
   const teacherDaySlots = useMemo(
     () => (selectedAbsence ? slotsForTeacher(selectedAbsence.teacherId, selectedAbsence.periodRange) : []),
@@ -1140,7 +1150,7 @@ export function DailyTab({
                           : assign ? 'border-emerald-200 bg-emerald-50/50 hover:border-emerald-300'
                           : 'border-gray-200 bg-white hover:border-orange-300'}`}
                     >
-                      <span className="shrink-0 w-14 text-center font-bold text-gray-700 bg-gray-100 rounded-md py-1 text-xs">คาบ {s.period}</span>
+                      <span className="shrink-0 w-14 text-center font-bold text-gray-700 bg-gray-100 rounded-md py-1 text-xs">คาบ {getPeriodDisplayLabel(s.period, periodLabelMap)}</span>
                       <span className="font-medium text-gray-800 shrink-0">{subjectMap.get(s.subject_id)?.name || s.subject_id}</span>
                       <span className="text-gray-400 text-xs">·</span>
                       <span className="text-gray-500 text-xs truncate">{classMap.get(s.class_id)?.name || s.class_id}</span>
@@ -1169,7 +1179,7 @@ export function DailyTab({
             <Users className="w-4 h-4 text-blue-600" />
             <h3 className="font-bold text-gray-800 text-sm">
               2. คนที่ว่างคาบนี้
-              {selectedSlot && <span className="ml-1 text-xs text-gray-400">(คาบ {selectedSlot.period}{selectedSlot.role === 'co' ? ' · ครูร่วม' : ''})</span>}
+              {selectedSlot && <span className="ml-1 text-xs text-gray-400">(คาบ {getPeriodDisplayLabel(selectedSlot.period, periodLabelMap)}{selectedSlot.role === 'co' ? ' · ครูร่วม' : ''})</span>}
             </h3>
           </div>
 
@@ -1213,7 +1223,7 @@ export function DailyTab({
             ) : (
               <div className="space-y-1.5 max-h-[560px] overflow-y-auto pr-1">
                 <div className="text-xs text-gray-400 mb-1">
-                  {freeTeacherRows.length} คนว่าง · เรียงตามภาระรวมน้อยสุดก่อน · คาบ {selectedSlot.period} · {classMap.get(selectedSlot.classId)?.name}
+                  {freeTeacherRows.length} คนว่าง · เรียงตามภาระรวมน้อยสุดก่อน · คาบ {getPeriodDisplayLabel(selectedSlot.period, periodLabelMap)} · {classMap.get(selectedSlot.classId)?.name}
                   {' · '}{subjectMap.get(selectedSlot.subjectId)?.name}
                 </div>
                 {freeTeacherRows.some((r) => r.isCoTeacher) && (
@@ -1407,7 +1417,7 @@ export function DailyTab({
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
                 {assignments.map((a) => (
                   <div key={a.id} className="flex items-center gap-1.5 bg-orange-50/60 border border-orange-200 rounded-lg px-2.5 py-1.5 text-xs">
-                    <span className="font-bold text-gray-700 shrink-0">คาบ {a.period}</span>
+                    <span className="font-bold text-gray-700 shrink-0">คาบ {getPeriodDisplayLabel(a.period, periodLabelMap)}</span>
                     <span className="text-gray-500 shrink-0">{classMap.get(a.class_id)?.name || a.class_id}</span>
                     <span className="text-gray-400 shrink-0">·</span>
                     <span className="text-gray-500 truncate">{teacherMap.get(a.original_teacher_id)?.name || a.original_teacher_id}</span>
@@ -1499,10 +1509,11 @@ export function DailyTab({
 
 /* ═══════════════════════════ โหมดผลลัพธ์: ตารางสอนแทน + ภาระงาน ═══════════════════════════ */
 function ResultView({
-  dateStr, dayOfWeek, grid, assignments, absences, summary,
+  dateStr, dayOfWeek, grid, dayPeriods = [], assignments, absences, summary,
   teacherMap, subjectMap, classMap, note, handleNoteChange,
   onBack, onExportPDF, onExportExcel, onShowStats, readOnly, onOpenPrintStudio,
 }) {
+  const periodLabelMap = createPeriodLabelMap(dayPeriods)
   const periodTimeLabel = (periodNo) => {
     for (const row of grid.rows) {
       const cell = row.cells[periodNo]
@@ -1641,7 +1652,7 @@ function ResultView({
                 </th>
                 {grid.periodNos.map((p) => (
                   <th key={p} className="bg-gray-50 border-b border-r border-gray-200 px-2 py-1.5 text-center text-gray-500 font-semibold min-w-[110px]">
-                    <div>คาบ {p}</div>
+                    <div>คาบ {getPeriodDisplayLabel(p, periodLabelMap)}</div>
                     <div className="text-[10px] text-gray-400 font-normal">{periodTimeLabel(p)}</div>
                   </th>
                 ))}
@@ -2012,7 +2023,7 @@ function StatsTab({ teachers, dailySchedules, resultSlots, userPlacements, lesso
 }
 
 /* ═══════════════════════════ Dialog: ยืนยันการสอนแทนค้าง ═══════════════════════════ */
-function ConfirmAssignmentsDialog({ pending, teacherMap, onCancel, onResolve }) {
+function ConfirmAssignmentsDialog({ pending, teacherMap, periodLabelMap, onCancel, onResolve }) {
   const teacherName = teacherMap.get(pending.entry?.teacherId)?.name || pending.entry?.teacherId || ''
   const count = pending.affected.length
   return (
@@ -2032,7 +2043,7 @@ function ConfirmAssignmentsDialog({ pending, teacherMap, onCancel, onResolve }) 
         <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 max-h-36 overflow-y-auto space-y-1">
           {pending.affected.map((a) => (
             <div key={a.id}>
-              คาบ {a.period} · {teacherMap.get(a.original_teacher_id)?.name || a.original_teacher_id}
+              คาบ {getPeriodDisplayLabel(a.period, periodLabelMap)} · {teacherMap.get(a.original_teacher_id)?.name || a.original_teacher_id}
               {' → '}
               <b className="text-orange-700">{substituteDisplayName(a, teacherMap)}</b>
             </div>

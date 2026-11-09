@@ -55,6 +55,7 @@ export function deriveTeacherPeriodSet(teacher, lessonBlocks, scheduleBlocks, sc
       const allPeriodNos = dayPeriods.map((p) => p.period_no)
       const studySet = new Set(dayPeriods.filter((p) => p.type === 'STUDY').map((p) => p.period_no))
       const lunchSet = new Set(dayPeriods.filter((p) => p.type === 'LUNCH').map((p) => p.period_no))
+      const breakSet = new Set(dayPeriods.filter((p) => p.type === 'BREAK').map((p) => p.period_no))
       const days = refBlock.days_per_week || 5
       const studySetByDay = {}
       for (let d = 1; d <= days; d++) {
@@ -69,6 +70,7 @@ export function deriveTeacherPeriodSet(teacher, lessonBlocks, scheduleBlocks, sc
         allPeriodNos: [...new Set(allPeriodNos)].sort((a, b) => a - b),
         studySet,
         lunchSet,
+        breakSet,
         studySetByDay,
         multiBlock: false,
       }
@@ -87,6 +89,7 @@ export function deriveTeacherPeriodSet(teacher, lessonBlocks, scheduleBlocks, sc
       allPeriodNos,
       studySet,
       lunchSet: lunch,
+      breakSet: new Set(),
       studySetByDay,
       multiBlock: false,
     }
@@ -95,6 +98,7 @@ export function deriveTeacherPeriodSet(teacher, lessonBlocks, scheduleBlocks, sc
   const allPeriodNos = new Set()
   const studySet = new Set()
   const lunchSet = new Set()
+  const breakSet = new Set()
   const studySetByDay = {}
   let days = 5
   const collect = (periods) => {
@@ -102,6 +106,7 @@ export function deriveTeacherPeriodSet(teacher, lessonBlocks, scheduleBlocks, sc
       allPeriodNos.add(p.period_no)
       if (p.type === 'STUDY') studySet.add(p.period_no)
       else if (p.type === 'LUNCH') lunchSet.add(p.period_no)
+      else if (p.type === 'BREAK') breakSet.add(p.period_no)
     }
   }
   for (const b of blocks) {
@@ -131,6 +136,7 @@ export function deriveTeacherPeriodSet(teacher, lessonBlocks, scheduleBlocks, sc
     allPeriodNos: [...allPeriodNos].sort((a, b) => a - b),
     studySet,
     lunchSet,
+    breakSet,
     studySetByDay,
     multiBlock: blocks.length > 1,
   }

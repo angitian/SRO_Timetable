@@ -15,6 +15,7 @@ import { Trash2, Lock, Unlock, Move, Plus, FlaskConical } from 'lucide-react'
  */
 export default function CellContextMenu({
   menu,
+  periodLabelMap,
   onClose,
   onDeleteSlot,
   onRemovePlacement,
@@ -46,6 +47,7 @@ export default function CellContextMenu({
   if (!menu) return null
 
   const { x, y, cellType, slot, day, period, classId } = menu
+  const periodLabel = periodLabelMap?.get(period) ?? period
 
   // Adjust position to keep menu on screen
   const menuWidth = 220
@@ -142,7 +144,7 @@ export default function CellContextMenu({
     >
       {/* Header */}
       <div className="px-3 py-2 border-b border-gray-100 text-xs text-gray-400">
-        คาบที่ {day} · วัน{['จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์','อาทิตย์'][day - 1] || day} · คาบ {period}
+        คาบที่ {day} · วัน{['จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์','อาทิตย์'][day - 1] || day} · คาบ {periodLabel}
       </div>
 
       {/* Menu items */}

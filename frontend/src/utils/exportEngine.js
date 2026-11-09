@@ -19,6 +19,7 @@ import { exportMultiPNG } from './exportImage.js'
 import { exportMultiExcel } from './exportExcel.js'
 import { teacherSupervisesFixedSlot } from './teacherLoad.js'
 import { buildTraineeIndex, traineesForSlot } from './traineeTimetable.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from './periodLabels.js'
 
 const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 export { DAY_LABELS }
@@ -41,16 +42,17 @@ function buildPeriodColsTemplate(periodList, breakSet) {
 /**
  * Build header cell HTML for a period (lunch/break/normal with optional time).
  */
-function buildHeaderCellHTML(p, { lunchSet, breakSet, periodTimeMap, showPeriodTimes }) {
+function buildHeaderCellHTML(p, { lunchSet, breakSet, periodTimeMap, showPeriodTimes, periodLabelMap }) {
   const isLunch = lunchSet.has(p)
   const isBreak = breakSet.has(p)
   const timeStr = showPeriodTimes && periodTimeMap[p] && !isLunch && !isBreak
     ? `<div style="font-size:10px;font-weight:400;color:#6b7280;margin-top:1px;">${periodTimeMap[p]}</div>`
     : ''
-  const label = isLunch ? 'พัก' : isBreak ? 'พัก' : p
+  const label = getPeriodDisplayLabel(p, periodLabelMap)
   const bg = isLunch ? '#f3f4f6' : isBreak ? '#f9fafb' : '#fff'
   const color = isLunch ? '#9ca3af' : isBreak ? '#9ca3af' : '#374151'
-  return `<div class="vcell" style="${GRID_CELL_STYLE}background:${bg};text-align:center;font-weight:700;color:${color};min-height:28px;justify-content:center;">${label}${timeStr}</div>`
+  const lunchStyle = isLunch ? 'min-width:48px;overflow-wrap:anywhere;line-height:1.1;' : ''
+  return `<div class="vcell" style="${GRID_CELL_STYLE}background:${bg};text-align:center;font-weight:700;color:${color};min-height:28px;justify-content:center;${lunchStyle}">${label}${timeStr}</div>`
 }
 
 /**
@@ -574,6 +576,10 @@ export function buildExportContext(data) {
   const periodList = (gridConfig?.periodList && gridConfig.periodList.length > 0)
     ? gridConfig.periodList
     : Array.from({ length: periodsPerDay }, (_, i) => i + 1)
+  const periodLabelMap = createPeriodLabelMap(periodList, {
+    lunchPeriods: lunchSet,
+    breakPeriods: breakSet,
+  })
 
   return {
     allSlots: slots || [],
@@ -586,7 +592,7 @@ export function buildExportContext(data) {
     fixedSlots: fixedSlots || [],
     subjectMap, teacherMap, classMap, lessonBlockMap,
     traineeIndex,
-    lunchSet, breakSet, fixedMap, slotMap, userPlacementMap, getFixedSlotsFor,
+    lunchSet, breakSet, periodLabelMap, fixedMap, slotMap, userPlacementMap, getFixedSlotsFor,
     substituteMap, getSubstituteFor,
     dayList, periodList,
     periodTimeMap: periodTimeMap || {},

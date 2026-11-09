@@ -20,6 +20,7 @@
 
 import { teacherSupervisesFixedSlot, normalizeClassTeachers } from './teacherLoad.js'
 import { buildTraineeIndex, traineesForSlot } from './traineeTimetable.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from './periodLabels.js'
 
 const DAY_LABELS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 
@@ -290,16 +291,20 @@ function buildBlockOnSheet(sheet, startRow, title, cellMap, ctx, mode) {
     const p = periodList[i]
     const isLunch = lunchSet.has(p)
     const isBreak = breakSet.has(p)
-    colHeaderRow.getCell(i + 2).value = isLunch ? 'พัก' : isBreak ? 'พัก' : `คาบ ${p}`
+    colHeaderRow.getCell(i + 2).value = isLunch
+      ? 'พักเที่ยง'
+      : isBreak
+        ? 'พัก'
+        : `คาบ ${getPeriodDisplayLabel(p, ctx.periodLabelMap)}`
   }
   for (let c = 1; c <= lastCol; c++) {
     const cell = colHeaderRow.getCell(c)
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_SLATE } }
     cell.font = { name: 'TH Sarabun New', size: 10, bold: true, color: { argb: COLOR_DARK_TEXT } }
-    cell.alignment = { horizontal: 'center', vertical: 'middle' }
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
     cell.border = THIN_BORDER
   }
-  colHeaderRow.height = 20
+  colHeaderRow.height = lunchSet.size > 0 ? 26 : 20
 
   // ── Data Rows: one per day ──
   const formatter = mode === 'class' ? formatClassCell : mode === 'teacher' ? formatTeacherCell : formatFacilityCell
@@ -321,7 +326,7 @@ function buildBlockOnSheet(sheet, startRow, title, cellMap, ctx, mode) {
       const key = `${d}-${p}`
       const entry = cellMap.get(key)
       const cell = row.getCell(pi + 2)
-      cell.value = formatter(entry, isLunch || isBreak)
+      cell.value = isLunch ? 'พักเที่ยง' : isBreak ? 'พัก' : formatter(entry, false)
       cell.border = THIN_BORDER
       if (isLunch) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_LUNCH } }
@@ -522,6 +527,10 @@ function buildExportContext(data) {
   const periodList = (gridConfig?.periodList && gridConfig.periodList.length > 0)
     ? gridConfig.periodList
     : Array.from({ length: periodsPerDay }, (_, i) => i + 1)
+  const periodLabelMap = createPeriodLabelMap(periodList, {
+    lunchPeriods: lunchSet,
+    breakPeriods: breakSet,
+  })
 
   return {
     classes: classes || [],
@@ -531,7 +540,7 @@ function buildExportContext(data) {
     fixedSlots: fixedSlots || [],
     subjectMap, teacherMap, classMap, lessonBlockMap,
     traineeIndex,
-    lunchSet, breakSet, fixedMap, slotMap, getFixedSlotsFor, substituteMap, getSubstituteFor,
+    lunchSet, breakSet, periodLabelMap, fixedMap, slotMap, getFixedSlotsFor, substituteMap, getSubstituteFor,
     dayList, periodList,
     periodTimeMap: data.periodTimeMap || {},
   }
@@ -606,9 +615,10 @@ function buildCombinedSheet(wb, ctx, settings, kind) {
       const p = periodList[pi]
       const col = startCol + pi
       if (lunchSet.has(p) || breakSet.has(p)) {
-        sheet.mergeCells(3, col, 4, col) // lunch/break header: empty merged cell
+        sheet.mergeCells(3, col, 4, col)
+        r3.getCell(col).value = lunchSet.has(p) ? 'พักเที่ยง' : 'พัก'
       } else {
-        r3.getCell(col).value = p
+        r3.getCell(col).value = getPeriodDisplayLabel(p, ctx.periodLabelMap)
         r4.getCell(col).value = periodTimeMap[p] || ''
       }
     }

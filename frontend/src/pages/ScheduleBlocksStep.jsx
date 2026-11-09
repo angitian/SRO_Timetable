@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { generatePeriods, createDefaultBlock, buildClassBlockMap, insertBreakPeriod } from '../utils/periods.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../utils/periodLabels.js'
 import { getRoomTypeColor, isSpecialRoomType } from '../utils/roomTypes.js'
 import { normalizeClassTeachers } from '../utils/teacherLoad.js'
 import { parseSpecialActivitiesExcel, resolveToFixedSlots } from '../utils/specialActivitiesImport.js'
@@ -687,6 +688,7 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
 
           {days.map((d) => {
             const dayPeriods = getPeriodsForDay(d)
+            const periodLabelMap = createPeriodLabelMap(dayPeriods)
             return (
               <div key={d}>
                 {/* Per-day time header (when not apply_to_all_days) */}
@@ -752,7 +754,9 @@ function BlockCard({ block, index, classes, classesByGrade, classBlockMap, fontS
                               ) : (
                                 <>
                                   <Icon className={iconSz} />
-                                  <span className="font-bold">{p.period_no}</span>
+                                  <span className={`font-bold ${p.type === 'LUNCH' ? 'max-w-[52px] leading-tight break-words' : ''}`}>
+                                    {periodLabelMap.get(p.period_no)}
+                                  </span>
                                 </>
                               )}
                             </div>
@@ -1007,6 +1011,20 @@ function SpecialActivitiesSection() {
   const activities = fixtureData?.fixed_slots || []
   const classes = fixtureData?.classes || []
   const teachers = fixtureData?.teachers || []
+  const scheduleBlocks = fixtureData?.schedule_blocks || []
+  const scheduleConfig = fixtureData?.schedule_config || {}
+  const blockPeriods = scheduleBlocks.flatMap((block) => [
+    ...(block.periods || []),
+    ...Object.values(block.periods_by_day || {}).flat(),
+  ])
+  const displayPeriods = blockPeriods.length
+    ? [...new Set(blockPeriods.map((period) => period.period_no))].sort((a, b) => a - b)
+    : Array.from({ length: scheduleConfig.periods_per_day || 8 }, (_, i) => i + 1)
+  const lunchPeriods = blockPeriods.length
+    ? blockPeriods.filter((period) => period.type === 'LUNCH').map((period) => period.period_no)
+    : scheduleConfig.lunch_periods || [4]
+  const breakPeriods = blockPeriods.filter((period) => period.type === 'BREAK').map((period) => period.period_no)
+  const periodLabelMap = createPeriodLabelMap(displayPeriods, { lunchPeriods, breakPeriods })
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [customPresets, setCustomPresets] = useState(() => loadCustomPresets())
@@ -1074,19 +1092,25 @@ function SpecialActivitiesSection() {
 
   function formatPeriodsText(periods) {
     const sorted = periods.slice().sort((a, b) => a - b)
-    if (sorted.length === 1) return `คาบที่ ${sorted[0]}`
+    const labels = sorted.map((period) => String(getPeriodDisplayLabel(period, periodLabelMap)))
+    if (labels.length === 0) return '—'
+    if (labels.length === 1) return labels[0] === 'พักเที่ยง' ? labels[0] : `คาบที่ ${labels[0]}`
+    if (!labels.every((label) => /^\d+$/.test(label))) {
+      return labels.map((label) => label === 'พักเที่ยง' || label === 'พัก' ? label : `คาบ ${label}`).join(', ')
+    }
     const parts = []
-    let start = sorted[0]
-    let prev = sorted[0]
-    for (let i = 1; i <= sorted.length; i++) {
-      if (i < sorted.length && sorted[i] === prev + 1) {
-        prev = sorted[i]
+    let start = Number(labels[0])
+    let prev = start
+    for (let i = 1; i <= labels.length; i++) {
+      const next = Number(labels[i])
+      if (i < labels.length && next === prev + 1) {
+        prev = next
         continue
       }
       parts.push(start === prev ? `${start}` : `${start}-${prev}`)
-      if (i < sorted.length) {
-        start = sorted[i]
-        prev = sorted[i]
+      if (i < labels.length) {
+        start = next
+        prev = next
       }
     }
     return `คาบที่ ${parts.join(', ')}`
@@ -1654,7 +1678,9 @@ function SpecialActivitiesSection() {
               </select>
             </div>
             <div>
-              <label className="font-medium text-gray-600 mb-1 block">คาบเริ่ม</label>
+              <label className="font-medium text-gray-600 mb-1 block">
+                คาบเริ่ม ({getPeriodDisplayLabel(fixedPeriod, periodLabelMap)})
+              </label>
               <input
                 type="number" min="1" max="10"
                 value={fixedPeriod}
@@ -1701,7 +1727,9 @@ function SpecialActivitiesSection() {
                           : 'bg-white text-gray-600 border-gray-200 hover:border-purple-300'
                       }`}
                   >
-                    คาบ {p}
+                    {getPeriodDisplayLabel(p, periodLabelMap) === 'พักเที่ยง'
+                      ? 'พักเที่ยง'
+                      : `คาบ ${getPeriodDisplayLabel(p, periodLabelMap)}`}
                   </button>
                 )
               })}

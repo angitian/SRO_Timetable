@@ -14,6 +14,7 @@ import {
   formatThaiDate, formatDDMMYYYY, getDayHalves, isPeriodInRange,
   computeDaySummary, normalizeDailySchedule, substitutePerson, substitutePersonKey, substituteDisplayName,
 } from './dailySchedule.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../../utils/periodLabels.js'
 
 const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;')
@@ -58,6 +59,19 @@ function buildContext({
   const teacherMap = new Map((teachers || []).map((t) => [t.id, t]))
   const halves = getDayHalves(scheduleBlocks, scheduleConfig)
   const timeMap = buildTimeMap(scheduleBlocks)
+  const allPeriods = (scheduleBlocks || []).flatMap((block) => [
+    ...(block.periods || []),
+    ...Object.values(block.periods_by_day || {}).flat(),
+  ])
+  const periodList = allPeriods.length
+    ? [...new Set(allPeriods.map((period) => period.period_no))].sort((a, b) => a - b)
+    : Array.from({ length: scheduleConfig?.periods_per_day || 8 }, (_, i) => i + 1)
+  const lunchPeriods = allPeriods.length
+    ? allPeriods.filter((period) => period.type === 'LUNCH').map((period) => period.period_no)
+    : scheduleConfig?.lunch_periods || [4]
+  const breakPeriods = allPeriods.filter((period) => period.type === 'BREAK').map((period) => period.period_no)
+  const periodLabelMap = createPeriodLabelMap(periodList, { lunchPeriods, breakPeriods })
+  const displayPeriodLabel = (period) => getPeriodDisplayLabel(period, periodLabelMap)
   const absenceMap = new Map(absences.map((a) => [a.teacherId, a]))
   const assignByKey = new Map()
   for (const a of assignments) {
@@ -99,7 +113,7 @@ function buildContext({
   })
 
   return {
-    ds, absences, assignments, absenceMap, assignByKey, halves, timeMap,
+    ds, absences, assignments, absenceMap, assignByKey, halves, timeMap, displayPeriodLabel,
     subjectName, className, teacherName, substituteName, substitutePersons,
     slots, summary, teacherMap, classMap, subjectMap,
   }
@@ -140,7 +154,7 @@ function buildSummaryHTML(ctx, { dateStr, note }) {
     : [...assignments]
       .sort((a, b) => a.period - b.period || String(a.class_id).localeCompare(String(b.class_id)))
       .map((a) => `<tr>
-        <td style="${TD}text-align:center;font-weight:700;">${a.period}</td>
+        <td style="${TD}text-align:center;font-weight:700;">${ctx.displayPeriodLabel(a.period)}</td>
         <td style="${TD}text-align:center;color:#64748b;">${esc(periodTime(a.period, timeMap))}</td>
         <td style="${TD}">${esc(className(a.class_id))}</td>
         <td style="${TD}">${esc(subjectName(a.subject_id))}</td>
@@ -213,7 +227,7 @@ function buildClassHTML(ctx, cls, { dateStr, onlySubstitute }) {
       : ''
     const coOrig = coAssign ? teacherName(coAssign.original_teacher_id) : ''
     rows.push(`<tr>
-      <td style="${TD}text-align:center;font-weight:700;">${s.period}</td>
+      <td style="${TD}text-align:center;font-weight:700;">${ctx.displayPeriodLabel(s.period)}</td>
       <td style="${TD}text-align:center;color:#64748b;">${esc(periodTime(s.period, timeMap))}</td>
       <td style="${TD}">${esc(subjectName(s.subject_id))}</td>
       <td style="${TD}${mainAssign ? 'color:#c2410c;font-weight:700;' : ''}">
@@ -251,7 +265,7 @@ function buildSubstituteTeacherHTML(ctx, person, { dateStr, onlySubstitute }) {
   const assigned = [...(person.assignments || [])].sort((a, b) => a.period - b.period)
   for (const a of assigned) {
     rows.push(`<tr>
-      <td style="${TD}text-align:center;font-weight:700;">${a.period}</td>
+      <td style="${TD}text-align:center;font-weight:700;">${ctx.displayPeriodLabel(a.period)}</td>
       <td style="${TD}text-align:center;color:#64748b;">${esc(periodTime(a.period, timeMap))}</td>
       <td style="${TD}">${esc(className(a.class_id))}</td>
       <td style="${TD}">${esc(subjectName(a.subject_id))}</td>
@@ -270,7 +284,7 @@ function buildSubstituteTeacherHTML(ctx, person, { dateStr, onlySubstitute }) {
     for (const s of normal) {
       const isCo = s.teacher_id !== person.id
       rows.push(`<tr>
-        <td style="${TD}text-align:center;font-weight:700;">${s.period}</td>
+        <td style="${TD}text-align:center;font-weight:700;">${ctx.displayPeriodLabel(s.period)}</td>
         <td style="${TD}text-align:center;color:#64748b;">${esc(periodTime(s.period, timeMap))}</td>
         <td style="${TD}">${esc(className(s.class_id))}</td>
         <td style="${TD}">${esc(subjectName(s.subject_id))}</td>
@@ -316,7 +330,7 @@ function buildAbsentTeacherHTML(ctx, absence, { dateStr }) {
     const role = s.teacher_id === teacherId ? 'main' : 'co'
     const a = assignByKey.get(`${s.period}-${s.class_id}-${role}`)
     rows.push(`<tr>
-      <td style="${TD}text-align:center;font-weight:700;">${s.period}</td>
+      <td style="${TD}text-align:center;font-weight:700;">${ctx.displayPeriodLabel(s.period)}</td>
       <td style="${TD}text-align:center;color:#64748b;">${esc(periodTime(s.period, timeMap))}</td>
       <td style="${TD}">${esc(className(s.class_id))}</td>
       <td style="${TD}">${esc(subjectName(s.subject_id))}${role === 'co' ? ` <span style="${CO_BADGE}">ครูร่วม</span>` : ''}</td>

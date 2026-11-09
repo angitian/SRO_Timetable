@@ -7,6 +7,7 @@ import CellContextMenu from './CellContextMenu.jsx'
 import CellRoomEditModal from './CellRoomEditModal.jsx'
 import { teacherSupervisesFixedSlot } from '../../utils/teacherLoad.js'
 import { traineesForSlot, traineeHasMentor } from '../../utils/traineeTimetable.js'
+import { createPeriodLabelMap } from '../../utils/periodLabels.js'
 
 export default function TimetableGrid({
   slots = [],
@@ -377,6 +378,10 @@ export default function TimetableGrid({
   const periodList = periodListProp && periodListProp.length > 0
     ? periodListProp
     : Array.from({ length: periodsPerDay }, (_, i) => i + 1)
+  const periodLabelMap = createPeriodLabelMap(periodList, {
+    lunchPeriods: lunchSet,
+    breakPeriods: breakSet,
+  })
   // Build grid-template-columns: BREAK columns are narrower (~0.2fr) than
   // regular columns (1fr) to visually emphasize they are short breaks.
   // minmax(0, ...) prevents grid blowout from long cell content.
@@ -636,6 +641,7 @@ export default function TimetableGrid({
               periodColsTemplate={periodColsTemplate}
               lunchSet={lunchSet}
               breakSet={breakSet}
+              periodLabelMap={periodLabelMap}
             />
 
             {/* Day rows */}
@@ -788,6 +794,7 @@ export default function TimetableGrid({
               periodColsTemplate={periodColsTemplate}
               lunchSet={lunchSet}
               breakSet={breakSet}
+              periodLabelMap={periodLabelMap}
             />
 
             {/* Day rows */}
@@ -1008,6 +1015,7 @@ export default function TimetableGrid({
       {/* Right-click context menu */}
       <CellContextMenu
         menu={contextMenu}
+        periodLabelMap={periodLabelMap}
         onClose={() => setContextMenu(null)}
         onDeleteSlot={onSlotDelete}
         onRemovePlacement={onRemovePlacement}
@@ -1023,6 +1031,7 @@ export default function TimetableGrid({
       {roomEditSlot && (
         <CellRoomEditModal
           slot={roomEditSlot}
+          periodLabelMap={periodLabelMap}
           specialRooms={specialRooms}
           allSlots={localSlots}
           onClose={() => setRoomEditSlot(null)}

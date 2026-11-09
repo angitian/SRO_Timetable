@@ -4,6 +4,7 @@ import {
   Settings, Lock, ArrowLeft,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../utils/periodLabels.js'
 
 const DAY_LABELS = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.']
 const DAY_FULL = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์']
@@ -111,6 +112,11 @@ export default function ConstraintsStep() {
 // ── Schedule Config Section ──────────────────────────────────────────────────
 
 function ScheduleConfigSection({ config, onChange }) {
+  const periods = Array.from({ length: config.periods_per_day }, (_, i) => i + 1)
+  const periodLabelMap = createPeriodLabelMap(periods, {
+    lunchPeriods: config.lunch_periods,
+  })
+
   function update(field, value) {
     onChange({ ...config, [field]: value })
   }
@@ -171,7 +177,7 @@ function ScheduleConfigSection({ config, onChange }) {
       <div>
         <label className="text-sm font-medium text-gray-700 mb-2 block">คาบพักเที่ยง (คลิกเพื่อสลับ)</label>
         <div className="flex flex-wrap gap-2">
-          {Array.from({ length: config.periods_per_day }, (_, i) => i + 1).map((p) => {
+          {periods.map((p) => {
             const isLunch = config.lunch_periods.includes(p)
             return (
               <button
@@ -183,8 +189,8 @@ function ScheduleConfigSection({ config, onChange }) {
                     : 'bg-blue-50 border-blue-300 text-blue-700'
                   }`}
               >
-                คาบ {p}
-                <span className="ml-1 text-xs">{isLunch ? 'พัก' : 'เรียน'}</span>
+                {isLunch ? getPeriodDisplayLabel(p, periodLabelMap) : `คาบ ${getPeriodDisplayLabel(p, periodLabelMap)}`}
+                {!isLunch && <span className="ml-1 text-xs">เรียน</span>}
               </button>
             )
           })}
@@ -205,6 +211,7 @@ function TeacherConstraintsSection({ fixtureData, updateFixtureData }) {
   const days = Array.from({ length: scheduleConfig.days_per_week }, (_, i) => i + 1)
   const periods = Array.from({ length: scheduleConfig.periods_per_day }, (_, i) => i + 1)
   const lunchSet = new Set(scheduleConfig.lunch_periods || [4])
+  const periodLabelMap = createPeriodLabelMap(periods, { lunchPeriods: lunchSet })
 
   function getTeacherState(tid) {
     if (editedTeachers[tid]) return editedTeachers[tid]
@@ -401,9 +408,9 @@ function TeacherConstraintsSection({ fixtureData, updateFixtureData }) {
                   <div className="inline-grid gap-1" style={{ gridTemplateColumns: `50px repeat(${periods.length}, 1fr)` }}>
                     <div className="text-xs text-gray-400 flex items-center justify-center">วัน\คาบ</div>
                     {periods.map((p) => (
-                      <div key={p} className={`text-center text-xs font-bold py-1 rounded
+                      <div key={p} className={`text-center text-xs font-bold py-1 rounded leading-tight ${lunchSet.has(p) ? 'min-w-[48px] break-words' : ''}
                         ${lunchSet.has(p) ? 'bg-gray-200 text-gray-400' : 'text-gray-600'}`}>
-                        {p}
+                        {getPeriodDisplayLabel(p, periodLabelMap)}
                       </div>
                     ))}
                     {days.map((d) => (
@@ -458,6 +465,11 @@ function TeacherConstraintsSection({ fixtureData, updateFixtureData }) {
 function FixedSlotsSection({ fixtureData, updateFixtureData }) {
   const { fixed_slots = [], classes = [] } = fixtureData
   const scheduleConfig = fixtureData.schedule_config || { days_per_week: 5, periods_per_day: 8 }
+  const periods = Array.from({ length: scheduleConfig.periods_per_day }, (_, i) => i + 1)
+  const lunchSet = new Set(scheduleConfig.lunch_periods || [4])
+  const periodLabelMap = createPeriodLabelMap(periods, {
+    lunchPeriods: lunchSet,
+  })
   const [showForm, setShowForm] = useState(false)
   const [newSlot, setNewSlot] = useState({
     name: '',
@@ -538,7 +550,7 @@ function FixedSlotsSection({ fixtureData, updateFixtureData }) {
                       <span className="badge bg-amber-100 text-amber-700">{typeLabel}</span>
                     </td>
                     <td className="px-3 py-2 text-sm text-center">{DAY_FULL[fs.day] || fs.day}</td>
-                    <td className="px-3 py-2 text-sm text-center">{fs.period}</td>
+                    <td className="px-3 py-2 text-sm text-center">{getPeriodDisplayLabel(fs.period, periodLabelMap)}</td>
                     <td className="px-3 py-2 text-sm text-gray-600">
                       {classNames.length === 0 ? 'ทุกห้อง' : classNames.join(', ')}
                     </td>
@@ -601,8 +613,8 @@ function FixedSlotsSection({ fixtureData, updateFixtureData }) {
                     onChange={(e) => setNewSlot({ ...newSlot, period: parseInt(e.target.value) })}
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   >
-                    {Array.from({ length: scheduleConfig.periods_per_day }, (_, i) => i + 1).map((p) => (
-                      <option key={p} value={p}>{p}</option>
+                    {periods.map((p) => (
+                      <option key={p} value={p} disabled={lunchSet.has(p)}>{getPeriodDisplayLabel(p, periodLabelMap)}</option>
                     ))}
                   </select>
                 </div>

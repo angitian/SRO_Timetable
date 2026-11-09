@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Plus, Edit2, Trash2, Save, X, Clock, Layers } from 'lucide-react'
 import { listSchedules, createSchedule, updateSchedule, deleteSchedule } from '../api/client.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../utils/periodLabels.js'
 
 const PERIOD_TYPES = [
   { value: 'teaching', label: 'เรียน', color: 'bg-blue-100 text-blue-700' },
@@ -32,6 +33,7 @@ export default function ScheduleConfigPage() {
   const [editing, setEditing] = useState(null) // null | 'new' | schedule_id
   const [formData, setFormData] = useState(EMPTY_TEMPLATE)
   const [error, setError] = useState(null)
+  const periodLabelMap = createPeriodLabelMap(formData.period_definitions)
 
   async function load() {
     setLoading(true)
@@ -240,8 +242,8 @@ export default function ScheduleConfigPage() {
                         : 'bg-blue-50 border-blue-300 text-blue-700'
                       }`}
                   >
-                    <span className="font-bold">{pd.period_num}</span>
-                    <span className="ml-1 text-xs">{isLunch ? 'พัก' : 'เรียน'}</span>
+                    <span className="font-bold">{getPeriodDisplayLabel(pd.period_num, periodLabelMap)}</span>
+                    {!isLunch && <span className="ml-1 text-xs">เรียน</span>}
                   </button>
                 )
               })}
@@ -298,7 +300,7 @@ export default function ScheduleConfigPage() {
                 <span className="flex items-center gap-1">
                   <Layers className="w-4 h-4" /> {s.periods_per_day} คาบ
                 </span>
-                <span>พักคาบ {s.lunch_periods.join(',')}</span>
+                <span>{s.lunch_periods?.length ? 'พักเที่ยง' : 'ไม่มีพักเที่ยง'}</span>
               </div>
 
               {s.grade_levels?.length > 0 && (

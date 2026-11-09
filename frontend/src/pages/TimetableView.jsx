@@ -26,6 +26,7 @@ import { computePlacedCounts } from '../utils/placementCounts.js'
 import { gradeLevelToLabel } from '../utils/gradeLabels.js'
 import useTraineeRoster from '../hooks/useTraineeRoster.js'
 import { buildTraineeIndex } from '../utils/traineeTimetable.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../utils/periodLabels.js'
 
 const RULE_DAY_LABELS = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.', 'อา.']
 
@@ -340,6 +341,10 @@ export default function TimetableView() {
       daysPerWeek: schedule_config?.days_per_week || 5,
     }
   }, [schedule_blocks, schedule_config])
+  const periodLabelMap = createPeriodLabelMap(gridConfig.periodList, {
+    lunchPeriods: gridConfig.lunchPeriods,
+    breakPeriods: gridConfig.breakPeriods,
+  })
 
   // ── Compute placement counts for status footer ────────────────────
   const totalCount = placedCounts.totalNeeded
@@ -820,7 +825,7 @@ export default function TimetableView() {
             <ul className="list-disc pl-5 mt-1 space-y-0.5">
               {lockViolations.slice(0, 8).map((v, i) => (
                 <li key={i}>
-                  <b>{v.teacherName}</b> — {v.dayName} คาบ{v.period} ({v.subjectName} {v.className}) · {v.lockType}
+                  <b>{v.teacherName}</b> — {v.dayName} คาบ{getPeriodDisplayLabel(v.period, periodLabelMap)} ({v.subjectName} {v.className}) · {v.lockType}
                 </li>
               ))}
               {lockViolations.length > 8 && (
@@ -1340,7 +1345,7 @@ export default function TimetableView() {
                           <th className="border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-500 font-medium w-16">วัน</th>
                           {facilityGrid.periods.map((p) => (
                             <th key={p} className="border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-500 font-medium w-28">
-                              คาบ {p}
+                              คาบ {getPeriodDisplayLabel(p, periodLabelMap)}
                             </th>
                           ))}
                         </tr>
@@ -1394,7 +1399,7 @@ export default function TimetableView() {
                         {facilityTimetableSlots.map((s, i) => (
                           <tr key={i} className="hover:bg-gray-50">
                             <td className="px-3 py-2 font-medium text-gray-900">{s.dayName}</td>
-                            <td className="px-3 py-2 text-center text-gray-700">{s.period}</td>
+                            <td className="px-3 py-2 text-center text-gray-700">{getPeriodDisplayLabel(s.period, periodLabelMap)}</td>
                             <td className="px-3 py-2 text-gray-700">{s.className}</td>
                             <td className="px-3 py-2 text-gray-700">{s.subjectName}</td>
                             <td className="px-3 py-2 text-gray-700">{s.teacherName}</td>
@@ -1482,6 +1487,7 @@ export default function TimetableView() {
         pinnedCount={preAssignedCount}
         fixedSlots={fixed_slots}
         lunchPeriods={gridConfig.lunchPeriods}
+        periodLabelMap={periodLabelMap}
         onNavigateStep={(step) => { setShowConstraintsModal(false); setStep(step) }}
         onClearPins={() => { clearPlacements(); setShowConstraintsModal(false) }}
       />
@@ -1499,6 +1505,7 @@ export default function TimetableView() {
         substitutes={substitutes}
         days={gridConfig.daysPerWeek}
         periods={gridConfig.periodsPerDay}
+        periodLabelMap={periodLabelMap}
         onSet={setSubstitute}
         onRemove={removeSubstitute}
       />

@@ -6,6 +6,7 @@
  */
 import { formatTimeRange, substituteDisplayName } from './dailySchedule.js'
 import { rangeLabel } from './substituteStats.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../../utils/periodLabels.js'
 
 // ── Style constants (mirror exportExcel.js) ──────────────────────────────
 const COLOR_NAVY = 'FF1E3A8A'
@@ -31,13 +32,13 @@ function safeLabel(text) {
 }
 
 // ── HTML ตารางรายวัน ต่อห้อง ─────────────────────────────────────────────
-function buildClassDailyHTML(classRow, { dateStr, dayLabel }) {
+function buildClassDailyHTML(classRow, { dateStr, dayLabel, periodLabelMap }) {
   const { className, periods, cells } = classRow
   const rowsHTML = periods.map((p) => {
     const cell = cells[p.period_no]
     if (!cell) {
       return `<tr>
-        <td class="num">${p.period_no}</td>
+        <td class="num">${getPeriodDisplayLabel(p.period_no, periodLabelMap)}</td>
         <td class="time">${esc(formatTimeRange(p.start_time, p.end_time))}</td>
         <td class="empty" colspan="3">—</td>
       </tr>`
@@ -51,7 +52,7 @@ function buildClassDailyHTML(classRow, { dateStr, dayLabel }) {
       : `<div>+ ${esc(cell.coTeacherName)}</div>`)
     const teacherHTML = `${mainHTML}${coHTML}`
     return `<tr>
-      <td class="num">${p.period_no}</td>
+      <td class="num">${getPeriodDisplayLabel(p.period_no, periodLabelMap)}</td>
       <td class="time">${esc(formatTimeRange(p.start_time, p.end_time))}</td>
       <td>${esc(cell.subjectName)}</td>
       <td>${teacherHTML}</td>
@@ -76,6 +77,7 @@ export function buildDailyScheduleHTML({
   dateStr,
   dayLabel,
   grid,
+  dayPeriods = [],
   assignments,
   absences,
   teachers,
@@ -87,11 +89,12 @@ export function buildDailyScheduleHTML({
   const teacherMap = new Map((teachers || []).map((t) => [t.id, t.name]))
   const subjectMap = new Map((subjects || []).map((s) => [s.id, s.name]))
   const classMap = new Map((classes || []).map((c) => [c.id, c.name]))
+  const periodLabelMap = createPeriodLabelMap(dayPeriods)
   const RANGE = { all: 'ทั้งวัน', morning: 'เช้า', afternoon: 'บ่าย' }
   const reasonOf = (tid) => (absences || []).find((a) => a.teacherId === tid)?.reason || ''
 
   const classPages = grid.rows
-    .map((r) => buildClassDailyHTML(r, { dateStr, dayLabel }))
+    .map((r) => buildClassDailyHTML(r, { dateStr, dayLabel, periodLabelMap }))
     .join('\n')
 
   const absentHTML = (absences || []).length > 0
@@ -105,7 +108,7 @@ export function buildDailyScheduleHTML({
     const subj = subjectMap.get(a.subject_id)
     const reason = reasonOf(a.original_teacher_id)
     return `<tr>
-      <td>คาบ ${a.period}</td>
+      <td>คาบ ${getPeriodDisplayLabel(a.period, periodLabelMap)}</td>
       <td>${esc(cls || a.class_id)}</td>
       <td>${esc(subj || a.subject_id)}</td>
       <td>${esc(teacherMap.get(a.original_teacher_id) || a.original_teacher_id)}${a.role === 'co' ? ' <span class="note">(ครูร่วม)</span>' : ''}</td>
@@ -174,7 +177,8 @@ export async function exportDailySchedulePDF(opts) {
 
 /** export Excel ตารางรายวัน — sheet "ตารางรายวัน" + "รายการสอนแทน" */
 export async function exportDailyScheduleExcel(opts) {
-  const { dateStr, dayLabel, grid, assignments, teachers, subjects, classes, absences } = opts
+  const { dateStr, dayLabel, grid, dayPeriods = [], assignments, teachers, subjects, classes, absences } = opts
+  const periodLabelMap = createPeriodLabelMap(dayPeriods)
   const ExcelJS = await import('exceljs')
   const Workbook = ExcelJS.default?.Workbook || ExcelJS.Workbook
   const wb = new Workbook()
@@ -224,7 +228,7 @@ export async function exportDailyScheduleExcel(opts) {
     row += 1
     for (const p of classRow.periods) {
       const cell = classRow.cells[p.period_no]
-      ws.getCell(row, 1).value = p.period_no
+      ws.getCell(row, 1).value = getPeriodDisplayLabel(p.period_no, periodLabelMap)
       ws.getCell(row, 2).value = formatTimeRange(p.start_time, p.end_time)
       if (cell) {
         ws.getCell(row, 3).value = cell.subjectName
@@ -270,7 +274,7 @@ export async function exportDailyScheduleExcel(opts) {
   const reasonOf = (tid) => (absences || []).find((a) => a.teacherId === tid)?.reason || ''
   ;(assignments || []).forEach((a, idx) => {
     const r = idx + 2
-    ws2.getCell(r, 1).value = `คาบ ${a.period}`
+    ws2.getCell(r, 1).value = `คาบ ${getPeriodDisplayLabel(a.period, periodLabelMap)}`
     ws2.getCell(r, 2).value = classMap.get(a.class_id) || a.class_id
     ws2.getCell(r, 3).value = subjectMap.get(a.subject_id) || a.subject_id
     ws2.getCell(r, 4).value = `${teacherMap.get(a.original_teacher_id) || a.original_teacher_id}${a.role === 'co' ? ' (ครูร่วม)' : ''}`

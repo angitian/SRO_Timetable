@@ -10,6 +10,7 @@ import { buildClassBlockMap } from '../utils/periods.js'
 import { getSmartDefaultInfo, getSafetyWarning } from '../utils/smartDefaults.js'
 import { computeTeacherAvailableSlots, computeFixedSupervision, deriveTeacherPeriodSet, checkTeacherLockIssues, deriveTeacherBlockedCells } from '../utils/teacherLoad.js'
 import { gradeLevelToLabel } from '../utils/gradeLabels.js'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../utils/periodLabels.js'
 
 const QUICK_TOGGLES = [
   { key: 'scout', label: 'ลูกเสือ-เนตรนารี', icon: Flag, subject_id: 'ACT_SCOUT', subject_name: 'ลูกเสือ-เนตรนารี' },
@@ -1131,6 +1132,10 @@ function TeacherPreferencesSection({ teacher, fixtureData, lockIssues = [], user
   const studySet = teacherPeriods.studySet
   const studySetByDay = teacherPeriods.studySetByDay || {}
   const lunchSet = teacherPeriods.lunchSet
+  const periodLabelMap = createPeriodLabelMap(periods, {
+    lunchPeriods: lunchSet,
+    breakPeriods: teacherPeriods.breakSet,
+  })
 
   // Cells already blocked school-wide (กิจกรรม/คาบดูแล/ปักหมุด) — ห้ามล็อก.
   const blockedCells = useMemo(
@@ -1350,7 +1355,7 @@ function TeacherPreferencesSection({ teacher, fixtureData, lockIssues = [], user
                   className={`text-center text-[10px] font-bold py-0.5 rounded
                     ${!isStudy ? 'bg-gray-200 text-gray-400' : isLunchSome ? 'bg-amber-50 text-amber-600' : 'text-gray-600'}`}
                 >
-                  {p}
+                  {getPeriodDisplayLabel(p, periodLabelMap)}
                 </div>
               )
             })}
@@ -1428,7 +1433,7 @@ function TeacherPreferencesSection({ teacher, fixtureData, lockIssues = [], user
               const [d, p] = slot.split('-')
               return (
                 <span key={slot} className="badge bg-red-100 text-red-600 text-[10px]">
-                  {PREF_DAY_FULL[parseInt(d)] || `วัน${d}`} คาบ{p}
+                  {PREF_DAY_FULL[parseInt(d)] || `วัน${d}`} คาบ{getPeriodDisplayLabel(parseInt(p), periodLabelMap)}
                 </span>
               )
             })}

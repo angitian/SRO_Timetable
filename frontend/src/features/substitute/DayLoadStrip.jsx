@@ -8,6 +8,7 @@
  * ▲      = the substitute period currently selected
  */
 import { computePeriodAdjacency, describeAdjacency, unionPeriods } from '../../utils/traineeTimetable.js'
+import { createPeriodLabelMap } from '../../utils/periodLabels.js'
 
 export default function DayLoadStrip({
   periods = [],
@@ -22,6 +23,7 @@ export default function DayLoadStrip({
 }) {
   const blocks = (periods || []).filter((p) => p && p.type !== 'BREAK')
   if (blocks.length === 0) return null
+  const periodLabelMap = createPeriodLabelMap(periods)
 
   const busy = unionPeriods(teaching, duty, substitute)
   const adjacency = computePeriodAdjacency({ periods, markerPeriod, busy, halves })
@@ -34,11 +36,15 @@ export default function DayLoadStrip({
             return (
               <div
                 key={`lunch-${p.period_no}`}
-                className="flex min-w-[8px] flex-[0.35] flex-col items-center gap-0.5"
+                className="flex min-w-[48px] flex-[0.7] flex-col items-center gap-0.5"
                 title="พักเที่ยง"
+                aria-label="พักเที่ยง"
               >
-                <span className="text-[10px] leading-none text-slate-300">·</span>
-                <div className="h-6 w-full rounded-sm bg-slate-200" />
+                <span className="text-[9px] leading-tight text-center text-slate-500 break-words">พักเที่ยง</span>
+                <div
+                  className="h-6 w-full rounded-sm border border-slate-200"
+                  style={{ backgroundImage: 'repeating-linear-gradient(135deg, #e2e8f0 0, #e2e8f0 4px, #f8fafc 4px, #f8fafc 8px)' }}
+                />
               </div>
             )
           }
@@ -65,7 +71,7 @@ export default function DayLoadStrip({
                 : 'bg-slate-100'
           const details = periodDetails?.get?.(p.period_no) || []
           const tooltipLines = [
-            `คาบ ${p.period_no} · ${state}`,
+            `คาบ ${periodLabelMap.get(p.period_no) ?? p.period_no} · ${state}`,
             ...details.flatMap((detail) => [
               detail.subjectName ? `วิชา: ${detail.subjectName}` : '',
               detail.className ? `ชั้น/ห้องเรียน: ${detail.className}` : '',
@@ -86,7 +92,7 @@ export default function DayLoadStrip({
               title={tooltipLines.join('\n')}
             >
               <span className={`text-[10px] leading-none ${isMarker ? 'text-orange-600 font-bold' : 'text-slate-400'}`}>
-                {isMarker ? '▲' : p.period_no}
+                {isMarker ? '▲' : periodLabelMap.get(p.period_no) ?? p.period_no}
               </span>
               <div
                 className={`relative h-6 w-full rounded-sm ${cls}
@@ -103,7 +109,7 @@ export default function DayLoadStrip({
       </div>
       {markerPeriod != null && (
         <div className="text-[10px] text-slate-500">
-          คาบที่เลือก <b className="text-orange-600">{markerPeriod}</b>
+          คาบที่เลือก <b className="text-orange-600">{periodLabelMap.get(markerPeriod) ?? markerPeriod}</b>
           {' · '}
           {describeAdjacency(adjacency)}
         </div>

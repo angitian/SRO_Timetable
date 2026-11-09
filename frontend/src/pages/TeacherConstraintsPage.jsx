@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Save, Clock, Ban, Shield, User } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../utils/periodLabels.js'
 
 const DAY_LABELS = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.']
 const DAY_FULL = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์']
@@ -24,6 +25,7 @@ export default function TeacherConstraintsPage() {
   const days = Array.from({ length: scheduleConfig.days_per_week }, (_, i) => i + 1)
   const periods = Array.from({ length: scheduleConfig.periods_per_day }, (_, i) => i + 1)
   const lunchSet = new Set(scheduleConfig.lunch_periods || [4])
+  const periodLabelMap = createPeriodLabelMap(periods, { lunchPeriods: lunchSet })
 
   // Get current state for a teacher (edited or original)
   function getTeacherState(tid) {
@@ -246,10 +248,10 @@ export default function TeacherConstraintsPage() {
                     {periods.map((p) => (
                       <div
                         key={p}
-                        className={`text-center text-xs font-bold py-1 rounded
+                        className={`text-center text-xs font-bold py-1 rounded leading-tight ${lunchSet.has(p) ? 'min-w-[48px] break-words' : ''}
                           ${lunchSet.has(p) ? 'bg-gray-200 text-gray-400' : 'text-gray-600'}`}
                       >
-                        {p}
+                        {getPeriodDisplayLabel(p, periodLabelMap)}
                       </div>
                     ))}
 
@@ -304,7 +306,7 @@ export default function TeacherConstraintsPage() {
                       const [d, p] = slot.split('-')
                       return (
                         <span key={slot} className="badge bg-red-100 text-red-600 text-xs">
-                          {DAY_FULL[parseInt(d)] || `วัน${d}`} คาบ{p}
+                          {DAY_FULL[parseInt(d)] || `วัน${d}`} คาบ{getPeriodDisplayLabel(parseInt(p), periodLabelMap)}
                         </span>
                       )
                     })}

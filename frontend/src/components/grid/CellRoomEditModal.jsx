@@ -19,6 +19,7 @@ import {
  */
 export default function CellRoomEditModal({
   slot,
+  periodLabelMap,
   specialRooms = [],
   allSlots = [],
   onClose,
@@ -63,6 +64,7 @@ export default function CellRoomEditModal({
   }
 
   const selectedRoom = specialRooms.find((r) => r.id === selectedRoomId)
+  const periodLabel = periodLabelMap?.get(slot.period) ?? slot.period
 
   return (
     <div
@@ -85,7 +87,7 @@ export default function CellRoomEditModal({
 
         {/* Slot info */}
         <div className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2">
-          วันที่ {slot.day} · คาบ {slot.period}
+          วันที่ {slot.day} · คาบ {periodLabel}
         </div>
 
         {/* Room selection */}
@@ -151,7 +153,7 @@ export default function CellRoomEditModal({
             <div className="text-xs text-amber-800">
               <div className="font-bold">⚠️ ห้องนี้ถูกใช้งานในคาบเดียวกัน</div>
               <div className="mt-0.5">
-                ห้อง "{selectedRoom?.name}" มีคาบอื่นในวันที่ {conflictInfo.day} คาบ {conflictInfo.period} อยู่แล้ว
+                ห้อง "{selectedRoom?.name}" มีคาบอื่นในวันที่ {conflictInfo.day} คาบ {periodLabelMap?.get(conflictInfo.period) ?? conflictInfo.period} อยู่แล้ว
               </div>
               <div className="mt-1 text-amber-600">
                 หากบันทึก ระบบจะอนุญาตให้ซ้ำ แต่ควรตรวจสอบอีกครั้งหลังจัดตารางใหม่

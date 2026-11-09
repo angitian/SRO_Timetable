@@ -66,7 +66,7 @@ export default function GridCell({
   if (isLunch) {
     return (
       <div
-        className="bg-gray-100 border border-gray-200 rounded-lg p-2 min-h-[80px] flex items-center justify-center"
+        className="bg-gray-100 border border-gray-200 rounded-lg p-2 min-h-[80px] flex items-center justify-center text-center leading-tight break-words"
         onContextMenu={onContextMenu}
       >
         <span className="text-sm font-semibold text-gray-400">พักเที่ยง</span>

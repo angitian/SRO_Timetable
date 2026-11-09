@@ -1,5 +1,6 @@
 import { X, SlidersHorizontal, Pencil, Trash2, Lock, UtensilsCrossed, Ban } from 'lucide-react'
 import { DAY_LABELS } from '../grid/GridLegend.jsx'
+import { getPeriodDisplayLabel } from '../../utils/periodLabels.js'
 
 /**
  * ConstraintsOverviewModal — read-only summary of all active rules/constraints
@@ -22,6 +23,7 @@ export default function ConstraintsOverviewModal({
   pinnedCount = 0,
   fixedSlots = [],
   lunchPeriods = [],
+  periodLabelMap,
   onNavigateStep,
   onClearPins,
 }) {
@@ -42,7 +44,7 @@ export default function ConstraintsOverviewModal({
     .filter((fs) => fs.day != null && fs.period != null)
     .map((fs) => ({
       id: fs.id,
-      label: `${fs.name || fs.slot_type || 'กิจกรรม'} (${DAY_LABELS[fs.day] || `วัน${fs.day}`} คาบ ${fs.period})`,
+      label: `${fs.name || fs.slot_type || 'กิจกรรม'} (${DAY_LABELS[fs.day] || `วัน${fs.day}`} คาบ ${getPeriodDisplayLabel(fs.period, periodLabelMap)})`,
     }))
 
   return (
@@ -188,7 +190,7 @@ export default function ConstraintsOverviewModal({
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-gray-800">คาบพักเที่ยง</div>
                   <div className="text-xs text-gray-500 mt-0.5">
-                    คาบที่ {lunchPeriods.length > 0 ? lunchPeriods.join(', ') : '—'} ของทุกวัน
+                    {lunchPeriods.length > 0 ? 'พักเที่ยงทุกวัน' : 'ไม่มีพักเที่ยง'}
                     (ถูกกันไว้ ไม่สามารถจัดวิชาลงได้)
                   </div>
                 </div>

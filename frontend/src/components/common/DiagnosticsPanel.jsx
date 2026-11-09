@@ -1,4 +1,5 @@
 import { PinOff } from 'lucide-react'
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../../utils/periodLabels.js'
 
 const DAY_NAMES = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 
@@ -58,11 +59,22 @@ export default function DiagnosticsPanel({ diagnostics, fixtureData, onUnpinConf
   const classes = fixtureData?.classes || []
   const fixedSlots = fixtureData?.fixed_slots || []
   const teachers = fixtureData?.teachers || []
+  const scheduleBlocks = fixtureData?.schedule_blocks || []
+  const scheduleConfig = fixtureData?.schedule_config || {}
+  const blockPeriods = scheduleBlocks.flatMap((block) => block.periods || [])
+  const periodList = blockPeriods.length
+    ? [...new Set(blockPeriods.map((period) => period.period_no))].sort((a, b) => a - b)
+    : Array.from({ length: scheduleConfig.periods_per_day || 8 }, (_, i) => i + 1)
+  const lunchPeriods = blockPeriods.length
+    ? blockPeriods.filter((period) => period.type === 'LUNCH').map((period) => period.period_no)
+    : scheduleConfig.lunch_periods || [4]
+  const breakPeriods = blockPeriods.filter((period) => period.type === 'BREAK').map((period) => period.period_no)
+  const periodLabelMap = createPeriodLabelMap(periodList, { lunchPeriods, breakPeriods })
 
   const describeConflict = (c) => {
     const lb = lbs.find((b) => b.id === c.lesson_block_id)
     const dayLabel = DAY_NAMES[c.day] || `วัน${c.day}`
-    const where = `${dayLabel} คาบ${c.period}`
+    const where = `${dayLabel} คาบ${getPeriodDisplayLabel(c.period, periodLabelMap)}`
     const reason = REASON_LABELS[c.reason] || c.reason
     if (lb) {
       const subjName = subjects.find((s) => s.id === lb.subject_id)?.name || lb.subject_id
@@ -133,7 +145,7 @@ export default function DiagnosticsPanel({ diagnostics, fixtureData, onUnpinConf
     const tName = lb ? teachers.find((t) => t.id === lb.teacher_id)?.name || '' : ''
     const title = `${subjName}${className ? ` (${className}${tName ? `, ${tName}` : ''})` : ''} — เหลือ ${ub.missing_periods} คาบ`
 
-    const fmtSlot = (s) => `${DAY_NAMES[s.day] || `วัน${s.day}`} คาบ${s.period}`
+    const fmtSlot = (s) => `${DAY_NAMES[s.day] || `วัน${s.day}`} คาบ${getPeriodDisplayLabel(s.period, periodLabelMap)}`
     const lines = []
     if (ub.open_slots?.length) {
       lines.push(`ช่องว่างที่ถูกกฎ (วางเองได้): ${ub.open_slots.slice(0, 8).map(fmtSlot).join(', ')}`)

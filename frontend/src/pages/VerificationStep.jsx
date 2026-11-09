@@ -19,6 +19,7 @@ import { exportMatrixExcel, exportMatrixPDF } from '../utils/exportMatrix.js'
 import { classGradeRoom } from '../utils/grades.js'
 import { buildGroupedWorkload } from '../utils/workloadGrouping'
 import { exportWorkloadExcel } from '../utils/workloadExcelExport'
+import { createPeriodLabelMap } from '../utils/periodLabels.js'
 
 export default function VerificationStep() {
   const { fixtureData, error, errorResponse, setStep, userPlacements, removePlacement } = useApp()
@@ -29,6 +30,19 @@ export default function VerificationStep() {
   const lessonBlocks = fixtureData?.lesson_blocks || []
   const fixedSlots = fixtureData?.fixed_slots || []
   const scheduleBlocks = fixtureData?.schedule_blocks || []
+  const schedulePeriods = scheduleBlocks.flatMap((block) => [
+    ...(block.periods || []),
+    ...Object.values(block.periods_by_day || {}).flat(),
+  ])
+  const periodList = schedulePeriods.length
+    ? [...new Set(schedulePeriods.map((period) => period.period_no))].sort((a, b) => a - b)
+    : Array.from({ length: fixtureData?.schedule_config?.periods_per_day || 8 }, (_, i) => i + 1)
+  const periodLabelMap = createPeriodLabelMap(periodList, {
+    lunchPeriods: schedulePeriods.length
+      ? schedulePeriods.filter((period) => period.type === 'LUNCH').map((period) => period.period_no)
+      : fixtureData?.schedule_config?.lunch_periods || [4],
+    breakPeriods: schedulePeriods.filter((period) => period.type === 'BREAK').map((period) => period.period_no),
+  })
   const specialRooms = fixtureData?.special_rooms || []
   const result = fixtureData?.result || null
   const resultSlots = result?.slots || []
@@ -720,6 +734,7 @@ export default function VerificationStep() {
             selectedFacilityId={selectedFacilityId}
             onSelectFacility={setSelectedFacilityId}
             facilityTimetable={facilityTimetable}
+            periodLabelMap={periodLabelMap}
             hasResult={resultSlots.length > 0}
           />
         </div>

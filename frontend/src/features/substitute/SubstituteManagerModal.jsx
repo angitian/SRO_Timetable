@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { X, UserX, CalendarClock, Check, Trash2, ArrowRight } from 'lucide-react'
 import { computeNeededPerTeacher } from '../../utils/teacherLoad.js'
+import { getPeriodDisplayLabel } from '../../utils/periodLabels.js'
 
 const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 const PERIODS = Array.from({ length: 12 }, (_, i) => i + 1)
@@ -23,6 +24,7 @@ export default function SubstituteManagerModal({
   substitutes = [],
   days = 5,
   periods = 8,
+  periodLabelMap,
   onSet,
   onRemove,
 }) {
@@ -157,7 +159,10 @@ export default function SubstituteManagerModal({
                 onChange={(e) => setPeriod(parseInt(e.target.value))}
                 className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
               >
-                {periodNums.map((p) => <option key={p} value={p}>คาบที่ {p}</option>)}
+                {periodNums.map((p) => {
+                  const label = getPeriodDisplayLabel(p, periodLabelMap)
+                  return <option key={p} value={p} disabled={label === 'พักเที่ยง'}>{label === 'พักเที่ยง' ? label : `คาบที่ ${label}`}</option>
+                })}
               </select>
             </div>
           </div>
@@ -256,7 +261,7 @@ export default function SubstituteManagerModal({
                 {substitutes.map((s) => (
                   <div key={s.id} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm">
                     <span className="font-medium text-gray-700 shrink-0">
-                      {DAY_LABELS[s.day] || `วัน${s.day}`} คาบ {s.period}
+                      {DAY_LABELS[s.day] || `วัน${s.day}`} คาบ {getPeriodDisplayLabel(s.period, periodLabelMap)}
                     </span>
                     <span className="text-gray-400 shrink-0">·</span>
                     <span className="text-gray-600 shrink-0">{classMap.get(s.class_id)?.name || s.class_id}</span>

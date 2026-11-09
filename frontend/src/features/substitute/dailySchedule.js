@@ -5,6 +5,7 @@
  * โดยไม่แก้ข้อมูลตารางหลัก — assignment แต่ละรายการอ้างอิง slot เดิม
  * (day, period, class) แล้วแทนที่ครูผู้สอนเฉพาะมุมมองรายวัน/สถิติ
  */
+import { createPeriodLabelMap } from '../../utils/periodLabels.js'
 
 export const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 export const THAI_MONTHS = [
@@ -329,8 +330,10 @@ export function getClassPeriods(classId, scheduleBlocks, scheduleConfig) {
       || scheduleBlocks[0]
     const periods = (block.periods || []).filter((p) => p.type === 'STUDY')
     if (periods.length > 0) {
+      const labels = createPeriodLabelMap(block.periods || [])
       return periods.map((p) => ({
         period_no: p.period_no,
+        display_label: labels.get(p.period_no),
         start_time: p.start_time,
         end_time: p.end_time,
       }))
@@ -338,9 +341,11 @@ export function getClassPeriods(classId, scheduleBlocks, scheduleConfig) {
   }
   const cfg = scheduleConfig || {}
   const lunch = new Set(cfg.lunch_periods || [4])
-  return Array.from({ length: cfg.periods_per_day || 8 }, (_, i) => i + 1)
+  const periods = Array.from({ length: cfg.periods_per_day || 8 }, (_, i) => i + 1)
+  const labels = createPeriodLabelMap(periods, { lunchPeriods: lunch })
+  return periods
     .filter((p) => !lunch.has(p))
-    .map((p) => ({ period_no: p, start_time: '', end_time: '' }))
+    .map((p) => ({ period_no: p, display_label: labels.get(p), start_time: '', end_time: '' }))
 }
 
 /**
@@ -351,7 +356,9 @@ export function getDayPeriodList(scheduleBlocks, scheduleConfig) {
   const map = new Map()
   for (const block of scheduleBlocks || []) {
     for (const p of block.periods || []) {
-      if (map.has(p.period_no)) continue
+      const current = map.get(p.period_no)
+      const priority = (type) => type === 'LUNCH' ? 2 : type === 'BREAK' ? 1 : 0
+      if (current && priority(p.type) <= priority(current.type)) continue
       map.set(p.period_no, {
         period_no: p.period_no,
         type: p.type || 'STUDY',
@@ -372,7 +379,17 @@ export function getDayPeriodList(scheduleBlocks, scheduleConfig) {
       })
     }
   }
-  return [...map.values()].sort((a, b) => a.period_no - b.period_no)
+  const periods = [...map.values()].sort((a, b) => a.period_no - b.period_no)
+  const labels = createPeriodLabelMap(periods)
+  return periods.map((period) => ({
+    ...period,
+    display_label: labels.get(period.period_no),
+  }))
+}
+
+export function isAssignablePeriod(periods, periodNo) {
+  const period = (periods || []).find((item) => item.period_no === periodNo)
+  return !period || period.type === 'STUDY'
 }
 
 /** Resolve the visible subject, class, and room labels for a scheduled slot. */

@@ -1,5 +1,6 @@
 import { Layers } from 'lucide-react'
 import { FACILITY_TYPE_ICONS } from '../../utils/roomTypes.js'
+import { getPeriodDisplayLabel } from '../../utils/periodLabels.js'
 
 /**
  * Renders the facility timetable grid section for the "ห้องปฏิบัติการ" tab,
@@ -17,6 +18,7 @@ export default function FacilityTimetable({
   selectedFacilityId,
   onSelectFacility,
   facilityTimetable,
+  periodLabelMap,
   hasResult,
 }) {
   if (!hasResult || specialRooms.length === 0) return null
@@ -63,7 +65,7 @@ export default function FacilityTimetable({
                 {facilityTimetable.map((s, i) => (
                   <tr key={i} className="hover:bg-gray-50">
                     <td className="px-3 py-2 font-medium text-gray-900">{s.dayName}</td>
-                    <td className="px-3 py-2 text-center text-gray-700">{s.period}</td>
+                    <td className="px-3 py-2 text-center text-gray-700">{getPeriodDisplayLabel(s.period, periodLabelMap)}</td>
                     <td className="px-3 py-2 text-gray-700">{s.className}</td>
                     <td className="px-3 py-2 text-gray-700">{s.subjectName}</td>
                     <td className="px-3 py-2 text-gray-700">{s.teacherName}</td>

@@ -18,7 +18,7 @@ export default function DataSummary({ data }) {
 
   const totalPeriods = data.lesson_blocks?.reduce((sum, lb) => sum + lb.periods_per_week, 0) || 0
   const daysPerWeek = data.schedule_config?.days_per_week || 5
-  const lunchPeriods = data.schedule_config?.lunch_periods || []
+  const hasLunch = (data.schedule_config?.lunch_periods || []).length > 0
   const maxConsec = data.schedule_config?.max_consecutive_teaching || 0
 
   return (
@@ -38,7 +38,7 @@ export default function DataSummary({ data }) {
       <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-600 flex flex-wrap gap-4">
         <span>รวมคาบที่ต้องจัด: <strong>{totalPeriods}</strong> คาบ/สัปดาห์</span>
         <span>วัน/สัปดาห์: <strong>{daysPerWeek}</strong></span>
-        <span>คาบพักเที่ยง: <strong>{lunchPeriods.join(', ')}</strong></span>
+        <span>คาบพักเที่ยง: <strong>{hasLunch ? 'มี' : 'ไม่มี'}</strong></span>
         <span>สอนติดกันสูงสุด: <strong>{maxConsec}</strong> คาบ</span>
       </div>
     </div>

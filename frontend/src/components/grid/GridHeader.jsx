@@ -1,3 +1,5 @@
+import { createPeriodLabelMap, getPeriodDisplayLabel } from '../../utils/periodLabels.js'
+
 /**
  * Reusable timetable grid header row.
  *
@@ -15,7 +17,12 @@ export default function GridHeader({
   periodColsTemplate,
   lunchSet,
   breakSet,
+  periodLabelMap,
 }) {
+  const labelMap = periodLabelMap || createPeriodLabelMap(periodList, {
+    lunchPeriods: lunchSet,
+    breakPeriods: breakSet,
+  })
   return (
     <div
       className="grid gap-2.5 mb-2"
@@ -27,7 +34,7 @@ export default function GridHeader({
       {periodList.map((p) => {
         const isLunch = lunchSet.has(p)
         const isBreak = breakSet.has(p)
-        const label = isLunch ? 'พัก' : isBreak ? 'พัก' : p
+        const label = getPeriodDisplayLabel(p, labelMap)
         const bgClass = isLunch
           ? 'bg-gray-200 text-gray-400'
           : isBreak
@@ -36,7 +43,7 @@ export default function GridHeader({
         return (
           <div
             key={p}
-            className={`text-center text-base font-bold py-2 rounded ${bgClass}`}
+            className={`text-center text-base font-bold py-2 rounded leading-tight ${isLunch ? 'min-w-[48px] break-words' : ''} ${bgClass}`}
           >
             {label}
           </div>
