@@ -32,6 +32,7 @@ import {
 } from '../utils/exportEngine.js'
 import { exportMultiExcel } from '../utils/exportExcel.js'
 import { exportMultiPNG } from '../utils/exportImage.js'
+import useTraineeRoster from '../hooks/useTraineeRoster.js'
 import { normalizeClassTeachers, flattenClassTeachers, computeNeededPerTeacher, computeFixedSupervision } from '../utils/teacherLoad.js'
 import { computePlacedCounts } from '../utils/placementCounts.js'
 import { saveTimetableResult, shareSubstituteSchedule } from '../api/client.js'
@@ -510,6 +511,7 @@ function buildFullPageHTML({ gridHTML, item, kind, ctx, settings, viewerUrl }) {
 // ── Main Component ───────────────────────────────────────────────────────
 export default function PrintStudio() {
   const { fixtureData, result, userPlacements, substitutes, activeSnapshotLabel, setStep, dailySchedules } = useApp()
+  const { trainees } = useTraineeRoster()
 
   // ── Settings state (with localStorage hydration) ──────────────────────
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
@@ -903,12 +905,13 @@ export default function PrintStudio() {
       userPlacements,
       lessonBlocks: lesson_blocks,
       fixedSlots: fixed_slots,
+      trainees,
       substitutes: substitutes || [],
       label: activeSnapshotLabel || 'ตารางสอน',
       periodTimeMap,
       showPeriodTimes: settings.showPeriodTimes,
     }),
-    [resultSlots, classes, subjects, teachers, fixtureData, gridConfig, userPlacements, lesson_blocks, fixed_slots, substitutes, activeSnapshotLabel, periodTimeMap, settings.showPeriodTimes],
+    [resultSlots, classes, subjects, teachers, fixtureData, gridConfig, userPlacements, lesson_blocks, fixed_slots, trainees, substitutes, activeSnapshotLabel, periodTimeMap, settings.showPeriodTimes],
   )
 
   // ── Build export context (shared lookup maps) ─────────────────────────
@@ -2017,7 +2020,7 @@ export default function PrintStudio() {
                     {[
                       ['summary', 'สรุป'],
                       ['classes', 'รายห้อง'],
-                      ['teachers', 'รายครูที่สอนแทน'],
+                      ['teachers', 'รายคนที่สอนแทน'],
                       ['absent', 'ครูที่ลา'],
                     ].map(([key, label]) => (
                       <label key={key} className="inline-flex items-center gap-1 text-xs text-gray-600 cursor-pointer">

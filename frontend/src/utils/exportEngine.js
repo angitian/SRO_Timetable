@@ -18,6 +18,7 @@ import { exportMultiPagePDF } from './exportPdf.js'
 import { exportMultiPNG } from './exportImage.js'
 import { exportMultiExcel } from './exportExcel.js'
 import { teacherSupervisesFixedSlot } from './teacherLoad.js'
+import { buildTraineeIndex, traineesForSlot } from './traineeTimetable.js'
 
 const DAY_LABELS = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 export { DAY_LABELS }
@@ -260,7 +261,7 @@ function resolveClassCell({ day, period, classId, slotMap, fixedMap, getFixedSlo
  * A locked activity (fixed slot) appears ONLY when the teacher supervises it
  * (fs.class_teachers) — not for whole-school or class-specific locks.
  */
-function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subjectMap, classMap, teacherMap, lessonBlockMap, substituteMap, userPlacementMap }) {
+function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subjectMap, classMap, teacherMap, lessonBlockMap, substituteMap, userPlacementMap, traineeIndex }) {
   // Fixed slot shows in a teacher's timetable ONLY when they supervise it
   // (fs.class_teachers) — not merely because it applies to a class they teach.
   // Iterate the raw list so supervisors who teach none of the slot's classes
@@ -297,6 +298,12 @@ function resolveTeacherCell({ day, period, teacherId, slotMap, fixedSlots, subje
       subjectId: s.subject_id,
       mainTeacherName: teacherMap.get(s.teacher_id)?.name || s.teacher_id,
       coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+      traineeNames: traineesForSlot(
+        traineeIndex,
+        s,
+        { teacherMap, classMap, subjectMap, lessonBlockMap },
+        { onlyMentorId: teacherId },
+      ),
     }
   })
   // User placements (วางด้วยมือ/ปักหมุด) not covered by solver slots — the
@@ -412,7 +419,7 @@ export function buildTeacherGridHTML(teacher, ctx) {
             slotMap: ctx.slotMap, fixedSlots: ctx.fixedSlots,
             subjectMap: ctx.subjectMap, classMap: ctx.classMap, teacherMap: ctx.teacherMap,
             lessonBlockMap: ctx.lessonBlockMap, substituteMap: ctx.substituteMap,
-            userPlacementMap: ctx.userPlacementMap,
+            userPlacementMap: ctx.userPlacementMap, traineeIndex: ctx.traineeIndex,
           })
           if (cell.kind === 'fixed') {
             return buildFixedCellHTML(cell)
@@ -425,10 +432,14 @@ export function buildTeacherGridHTML(teacher, ctx) {
               const teacherLine = s.coTeacherName
                 ? `<div class="vcell-sub" style="font-weight:500;color:#6b7280;font-size:9px;margin-top:0.5px;">${s.mainTeacherName} + ${s.coTeacherName}</div>`
                 : ''
+              const traineeLine = s.traineeNames?.length > 0
+                ? `<div class="vcell-sub" style="font-weight:500;color:#7c3aed;font-size:9px;margin-top:0.5px;">🎓 ${s.traineeNames.join(', ')}</div>`
+                : ''
               return `<div style="text-align:center;padding:1px 0;">
                 <div class="vcell-title" style="font-weight:700;color:#1e293b;font-size:12px;line-height:1.15;">${s.className}</div>
                 <div class="vcell-sub" style="font-weight:500;color:#475569;font-size:10px;margin-top:1px;">${s.subjectName}</div>
                 ${teacherLine}
+                ${traineeLine}
                 ${subTag}
               </div>`
             }).join('')
@@ -498,13 +509,14 @@ export function buildFacilityGridHTML(room, ctx) {
  * Build the shared context object used by both class and teacher grid builders.
  */
 export function buildExportContext(data) {
-  const { slots, classes, subjects, teachers, gridConfig, userPlacements, lessonBlocks, fixedSlots, periodTimeMap, showPeriodTimes } = data
+  const { slots, classes, subjects, teachers, trainees, gridConfig, userPlacements, lessonBlocks, fixedSlots, periodTimeMap, showPeriodTimes } = data
   const { periodsPerDay = 7, lunchPeriods = [], breakPeriods = [], daysPerWeek = 5 } = gridConfig
 
   const subjectMap = new Map((subjects || []).map((s) => [s.id, s]))
   const teacherMap = new Map((teachers || []).map((t) => [t.id, t]))
   const classMap = new Map((classes || []).map((c) => [c.id, c]))
   const lessonBlockMap = new Map((lessonBlocks || []).map((lb) => [lb.id, lb]))
+  const traineeIndex = buildTraineeIndex(trainees || [], { classes })
   const lunchSet = new Set(lunchPeriods)
   const breakSet = new Set(breakPeriods)
 
@@ -573,6 +585,7 @@ export function buildExportContext(data) {
     lessonBlocks: lessonBlocks || [],
     fixedSlots: fixedSlots || [],
     subjectMap, teacherMap, classMap, lessonBlockMap,
+    traineeIndex,
     lunchSet, breakSet, fixedMap, slotMap, userPlacementMap, getFixedSlotsFor,
     substituteMap, getSubstituteFor,
     dayList, periodList,

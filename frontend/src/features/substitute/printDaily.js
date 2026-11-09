@@ -12,7 +12,7 @@
  */
 import {
   formatThaiDate, formatDDMMYYYY, getDayHalves, isPeriodInRange,
-  computeDaySummary, normalizeDailySchedule,
+  computeDaySummary, normalizeDailySchedule, substitutePerson, substitutePersonKey, substituteDisplayName,
 } from './dailySchedule.js'
 
 const esc = (s) => String(s ?? '')
@@ -66,6 +66,25 @@ function buildContext({
   const subjectName = (id) => subjectMap.get(id)?.name || id
   const className = (id) => classMap.get(id)?.name || id
   const teacherName = (id) => teacherMap.get(id)?.name || id || ''
+  const substituteName = (assignment, opts) => substituteDisplayName(assignment, teacherMap, opts)
+
+  // ผู้รับสอนแทนทั้งหมดของวัน (ครู + นศ.) — ใช้สร้างหน้า "รายคนที่สอนแทน"
+  const substitutePersons = new Map()
+  for (const a of assignments) {
+    const person = substitutePerson(a)
+    if (!person) continue
+    const key = substitutePersonKey(a)
+    if (!substitutePersons.has(key)) {
+      substitutePersons.set(key, {
+        key,
+        kind: person.kind,
+        id: person.id,
+        name: substituteName(a),
+        assignments: [],
+      })
+    }
+    substitutePersons.get(key).assignments.push(a)
+  }
 
   // คาบของวัน แยกตำแหน่ง (main / co)
   const slots = []
@@ -81,24 +100,30 @@ function buildContext({
 
   return {
     ds, absences, assignments, absenceMap, assignByKey, halves, timeMap,
-    subjectName, className, teacherName, slots, summary, teacherMap, classMap, subjectMap,
+    subjectName, className, teacherName, substituteName, substitutePersons,
+    slots, summary, teacherMap, classMap, subjectMap,
   }
 }
 
-/** ครูที่รับสอนแทน + จำนวนคาบ */
-function substituteLoad(assignments, teacherName) {
-  const counts = new Map()
+/** ผู้รับสอนแทน + จำนวนคาบ (ครู + นศ.) */
+function substituteLoad(assignments, substituteName) {
+  const map = new Map()
   for (const a of assignments) {
-    counts.set(a.substitute_teacher_id, (counts.get(a.substitute_teacher_id) || 0) + 1)
+    const person = substitutePerson(a)
+    if (!person) continue
+    const key = substitutePersonKey(a)
+    if (!map.has(key)) {
+      map.set(key, { key, kind: person.kind, name: substituteName(a), count: 0 })
+    }
+    map.get(key).count += 1
   }
-  return [...counts.entries()]
-    .map(([tid, n]) => ({ id: tid, name: teacherName(tid), count: n }))
+  return [...map.values()]
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'th'))
 }
 
 /* ── A. สรุปการสอนแทนรายวัน ─────────────────────────────────────────── */
 function buildSummaryHTML(ctx, { dateStr, note }) {
-  const { absences, assignments, subjectName, className, teacherName, absenceMap, timeMap, summary } = ctx
+  const { absences, assignments, subjectName, className, teacherName, substituteName, absenceMap, timeMap, summary } = ctx
 
   const absentHTML = absences.length === 0
     ? '<div style="font-size:11px;color:#64748b;font-style:italic;">ไม่มีครูที่ลาในวันนี้</div>'
@@ -120,18 +145,18 @@ function buildSummaryHTML(ctx, { dateStr, note }) {
         <td style="${TD}">${esc(className(a.class_id))}</td>
         <td style="${TD}">${esc(subjectName(a.subject_id))}</td>
         <td style="${TD}">${esc(teacherName(a.original_teacher_id))}${a.role === 'co' ? ` <span style="${CO_BADGE}">ครูร่วม</span>` : ''}</td>
-        <td style="${TD}font-weight:700;color:#c2410c;">${esc(teacherName(a.substitute_teacher_id))}</td>
+        <td style="${TD}font-weight:700;color:#c2410c;">${esc(substituteName(a, { withKind: true }))}</td>
         <td style="${TD}">${esc(absenceMap.get(a.original_teacher_id)?.reason || '—')}</td>
       </tr>`).join('')
 
-  const load = substituteLoad(assignments, teacherName)
+  const load = substituteLoad(assignments, substituteName)
   const loadHTML = load.length === 0
     ? ''
     : `<div style="margin-top:10px;">
         <div style="font-size:11px;font-weight:700;color:#334155;margin-bottom:4px;">ภาระสอนแทนวันนี้</div>
         <div style="display:flex;flex-wrap:wrap;gap:5px;">
           ${load.map((r) => `<span style="display:inline-block;border:1px solid #fdba74;background:#fff7ed;border-radius:9999px;padding:2px 9px;font-size:11px;color:#9a3412;">
-            <b>${esc(r.name)}</b> · ${r.count} คาบ</span>`).join('')}
+            <b>${esc(r.name)}</b>${r.kind === 'trainee' ? ' 🎓' : ''} · ${r.count} คาบ</span>`).join('')}
         </div>
       </div>`
 
@@ -167,7 +192,7 @@ function buildSummaryHTML(ctx, { dateStr, note }) {
 
 /* ── B. ตารางรายห้องของวันนั้น ──────────────────────────────────────── */
 function buildClassHTML(ctx, cls, { dateStr, onlySubstitute }) {
-  const { slots, assignByKey, teacherName, subjectName, timeMap } = ctx
+  const { slots, assignByKey, teacherName, substituteName, subjectName, timeMap } = ctx
   const classSlots = slots
     .filter((s) => s.class_id === cls.id)
     .sort((a, b) => a.period - b.period)
@@ -177,10 +202,14 @@ function buildClassHTML(ctx, cls, { dateStr, onlySubstitute }) {
     const mainAssign = assignByKey.get(`${s.period}-${s.class_id}-main`)
     const coAssign = s.coTeacherId ? assignByKey.get(`${s.period}-${s.class_id}-co`) : null
     if (onlySubstitute && !mainAssign && !coAssign) continue
-    const mainName = mainAssign ? teacherName(mainAssign.substitute_teacher_id) : teacherName(s.teacher_id)
+    const mainName = mainAssign ? substituteName(mainAssign, { withKind: true }) : teacherName(s.teacher_id)
     const mainOrig = mainAssign ? teacherName(mainAssign.original_teacher_id) : ''
-    const coName = s.coTeacherId
-      ? (coAssign ? teacherName(coAssign.substitute_teacher_id) : teacherName(s.coTeacherId))
+    // ครูร่วมที่รับสอนแทนตำแหน่งครูหลัก (หรือกลับกัน) — แสดงชื่อครั้งเดียว
+    const mainEffectiveId = mainAssign ? (substitutePerson(mainAssign)?.id || s.teacher_id) : s.teacher_id
+    const coEffectiveId = coAssign ? (substitutePerson(coAssign)?.id || s.coTeacherId) : s.coTeacherId
+    const coSameAsMain = !!coEffectiveId && mainEffectiveId === coEffectiveId
+    const coName = s.coTeacherId && !coSameAsMain
+      ? (coAssign ? substituteName(coAssign, { withKind: true }) : teacherName(s.coTeacherId))
       : ''
     const coOrig = coAssign ? teacherName(coAssign.original_teacher_id) : ''
     rows.push(`<tr>
@@ -213,35 +242,33 @@ function buildClassHTML(ctx, cls, { dateStr, onlySubstitute }) {
   `
 }
 
-/* ── C. ตารางของครูที่รับสอนแทน ─────────────────────────────────────── */
-function buildSubstituteTeacherHTML(ctx, teacherId, { dateStr, onlySubstitute }) {
-  const { slots, assignByKey, teacherName, className, subjectName, timeMap, absenceMap } = ctx
+/* ── C. ตารางของครู/นศ.ที่รับสอนแทน ─────────────────────────────────── */
+function buildSubstituteTeacherHTML(ctx, person, { dateStr, onlySubstitute }) {
+  const { slots, className, subjectName, timeMap, absenceMap } = ctx
   const rows = []
 
-  // คาบที่ครูคนนี้รับสอนแทน
-  const assigned = ctx.assignments
-    .filter((a) => a.substitute_teacher_id === teacherId)
-    .sort((a, b) => a.period - b.period)
+  // คาบที่คนนี้รับสอนแทน
+  const assigned = [...(person.assignments || [])].sort((a, b) => a.period - b.period)
   for (const a of assigned) {
     rows.push(`<tr>
       <td style="${TD}text-align:center;font-weight:700;">${a.period}</td>
       <td style="${TD}text-align:center;color:#64748b;">${esc(periodTime(a.period, timeMap))}</td>
       <td style="${TD}">${esc(className(a.class_id))}</td>
       <td style="${TD}">${esc(subjectName(a.subject_id))}</td>
-      <td style="${TD}color:#c2410c;font-weight:700;">สอนแทน ${esc(teacherName(a.original_teacher_id))}${a.role === 'co' ? ` <span style="${CO_BADGE}">ครูร่วม</span>` : ''}</td>
+      <td style="${TD}color:#c2410c;font-weight:700;">สอนแทน ${esc(ctx.teacherName(a.original_teacher_id))}${a.role === 'co' ? ` <span style="${CO_BADGE}">ครูร่วม</span>` : ''}</td>
       <td style="${TD}">${esc(absenceMap.get(a.original_teacher_id)?.reason || '—')}</td>
     </tr>`)
   }
 
-  // โหมดทั้งตาราง: เพิ่มคาบปกติอื่นของวันนั้น (ที่ไม่ใช่คาบสอนแทน)
-  if (!onlySubstitute) {
+  // โหมดทั้งตาราง: เพิ่มคาบปกติอื่นของวันนั้น (เฉพาะครู — นศ. ไม่มี slot ของตัวเอง)
+  if (!onlySubstitute && person.kind === 'teacher') {
     const assignedKeys = new Set(assigned.map((a) => `${a.period}-${a.class_id}`))
     const normal = slots
-      .filter((s) => (s.teacher_id === teacherId || s.coTeacherId === teacherId))
+      .filter((s) => (s.teacher_id === person.id || s.coTeacherId === person.id))
       .filter((s) => !assignedKeys.has(`${s.period}-${s.class_id}`))
       .sort((a, b) => a.period - b.period)
     for (const s of normal) {
-      const isCo = s.teacher_id !== teacherId
+      const isCo = s.teacher_id !== person.id
       rows.push(`<tr>
         <td style="${TD}text-align:center;font-weight:700;">${s.period}</td>
         <td style="${TD}text-align:center;color:#64748b;">${esc(periodTime(s.period, timeMap))}</td>
@@ -256,8 +283,10 @@ function buildSubstituteTeacherHTML(ctx, teacherId, { dateStr, onlySubstitute })
   if (rows.length === 0) return null
 
   return `
-    <h2 style="${H2}">${esc(teacherName(teacherId))} — ตารางสอนแทน ${esc(formatThaiDate(dateStr))}</h2>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">รับสอนแทน ${assigned.length} คาบ</div>
+    <h2 style="${H2}">${esc(person.name)} — ตารางสอนแทน ${esc(formatThaiDate(dateStr))}</h2>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;">
+      รับสอนแทน ${assigned.length} คาบ${person.kind === 'trainee' ? ' · นศ.ฝึกสอน' : ''}
+    </div>
     <table style="${TABLE}">
       <thead><tr>
         <th style="${TH}width:9%;">คาบ</th>
@@ -274,7 +303,7 @@ function buildSubstituteTeacherHTML(ctx, teacherId, { dateStr, onlySubstitute })
 
 /* ── D. ตารางของครูที่ลา ───────────────────────────────────────────── */
 function buildAbsentTeacherHTML(ctx, absence, { dateStr }) {
-  const { slots, assignByKey, teacherName, className, subjectName, timeMap } = ctx
+  const { slots, assignByKey, teacherName, substituteName, className, subjectName, timeMap } = ctx
   const teacherId = absence.teacherId
   const rows = []
 
@@ -292,7 +321,7 @@ function buildAbsentTeacherHTML(ctx, absence, { dateStr }) {
       <td style="${TD}">${esc(className(s.class_id))}</td>
       <td style="${TD}">${esc(subjectName(s.subject_id))}${role === 'co' ? ` <span style="${CO_BADGE}">ครูร่วม</span>` : ''}</td>
       <td style="${TD}${a ? 'color:#15803d;font-weight:700;' : 'color:#b91c1c;font-weight:700;'}">
-        ${a ? esc(teacherName(a.substitute_teacher_id)) : 'ยังไม่ได้จัดสอนแทน'}
+        ${a ? esc(substituteName(a, { withKind: true })) : 'ยังไม่ได้จัดสอนแทน'}
       </td>
     </tr>`)
   }
@@ -375,15 +404,15 @@ export function buildDailyPages({
   }
 
   if (docs.teachers) {
-    const teacherIds = [...new Set(ctx.assignments.map((a) => a.substitute_teacher_id))]
-    for (const tid of teacherIds) {
-      const html = buildSubstituteTeacherHTML(ctx, tid, { dateStr, onlySubstitute })
+    for (const person of ctx.substitutePersons.values()) {
+      const html = buildSubstituteTeacherHTML(ctx, person, { dateStr, onlySubstitute })
       if (!html) continue
+      const suffix = person.kind === 'trainee' ? 'นศ.รับสอนแทน' : 'รับสอนแทน'
       pages.push({
-        id: `sub-teacher-${tid}`,
-        label: `${ctx.teacherName(tid)} (รับสอนแทน)`,
+        id: `sub-teacher-${person.kind}-${person.id}`,
+        label: `${person.name} (${suffix})`,
         kind: 'sub-teacher',
-        item: { name: `${ctx.teacherName(tid)} · ${dateLabel}` },
+        item: { name: `${person.name} · ${dateLabel}` },
         gridHTML: html,
       })
     }
@@ -470,20 +499,20 @@ export async function exportDailyMultiExcel(opts) {
     ws1.getCell(r, 3).value = ctx.className(a.class_id)
     ws1.getCell(r, 4).value = ctx.subjectName(a.subject_id)
     ws1.getCell(r, 5).value = `${ctx.teacherName(a.original_teacher_id)}${a.role === 'co' ? ' (ครูร่วม)' : ''}`
-    ws1.getCell(r, 6).value = ctx.teacherName(a.substitute_teacher_id)
+    ws1.getCell(r, 6).value = ctx.substituteName(a, { withKind: true })
     ws1.getCell(r, 6).font = { bold: true, color: { argb: ORANGE } }
     ws1.getCell(r, 7).value = ctx.absenceMap.get(a.original_teacher_id)?.reason || ''
     borderRow(ws1, r, 7)
   })
 
-  // Sheet 2: ภาระสอนแทนรายครู
-  const ws2 = wb.addWorksheet('ภาระสอนแทนรายครู', { views: [{ showGridLines: false }] })
+  // Sheet 2: ภาระสอนแทนรายคน
+  const ws2 = wb.addWorksheet('ภาระสอนแทนรายคน', { views: [{ showGridLines: false }] })
   ws2.columns = [{ width: 30 }, { width: 14 }]
-  titleRow(ws2, `ภาระสอนแทนรายครู ${formatThaiDate(dateStr)}`, 2)
-  headerRow(ws2, 3, ['ครู', 'จำนวนคาบ'])
-  substituteLoad(ctx.assignments, ctx.teacherName).forEach((r, idx) => {
+  titleRow(ws2, `ภาระสอนแทนรายคน ${formatThaiDate(dateStr)}`, 2)
+  headerRow(ws2, 3, ['ครู / นศ.ฝึกสอน', 'จำนวนคาบ'])
+  substituteLoad(ctx.assignments, ctx.substituteName).forEach((r, idx) => {
     const row = idx + 4
-    ws2.getCell(row, 1).value = r.name
+    ws2.getCell(row, 1).value = `${r.name}${r.kind === 'trainee' ? ' (นศ.ฝึกสอน)' : ''}`
     ws2.getCell(row, 2).value = r.count
     ws2.getCell(row, 2).alignment = { horizontal: 'center' }
     borderRow(ws2, row, 2)
@@ -523,7 +552,7 @@ export async function exportDailyMultiExcel(opts) {
       ws4.getCell(r4, 3).value = periodTime(s.period, ctx.timeMap)
       ws4.getCell(r4, 4).value = ctx.subjectName(s.subject_id)
       ws4.getCell(r4, 5).value = `${mainA ? ctx.teacherName(mainA.original_teacher_id) : ctx.teacherName(s.teacher_id)}${coA ? ` + ${ctx.teacherName(coA.original_teacher_id)}` : ''}`
-      ws4.getCell(r4, 6).value = `${mainA ? ctx.teacherName(mainA.substitute_teacher_id) : ctx.teacherName(s.teacher_id)}${coA ? ` + ${ctx.teacherName(coA.substitute_teacher_id)}` : ''}`
+      ws4.getCell(r4, 6).value = `${mainA ? ctx.substituteName(mainA, { withKind: true }) : ctx.teacherName(s.teacher_id)}${coA ? ` + ${ctx.substituteName(coA, { withKind: true })}` : ''}`
       ws4.getCell(r4, 6).font = { bold: true, color: { argb: ORANGE } }
       borderRow(ws4, r4, 6)
       r4 += 1

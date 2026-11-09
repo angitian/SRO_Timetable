@@ -7,7 +7,7 @@ import { formatThaiDate } from '../features/substitute/dailySchedule.js'
 const GROUPS = [
   { id: 'summary', label: 'สรุปการสอนแทน', kinds: ['sub-summary'] },
   { id: 'classes', label: 'รายห้อง', kinds: ['sub-class'] },
-  { id: 'teachers', label: 'รายครูที่สอนแทน', kinds: ['sub-teacher'] },
+  { id: 'teachers', label: 'รายคนที่สอนแทน', kinds: ['sub-teacher'] },
   { id: 'absent', label: 'ครูที่ลา', kinds: ['sub-absent'] },
 ]
 

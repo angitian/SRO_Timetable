@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   CalendarDays, CalendarClock, UserX, Users, Check, X, Trash2, ArrowRight,
   History, BarChart3, FileDown, Printer, ArrowLeft, Info, AlertTriangle,
-  Plus, Eye, Pencil, Loader2, CheckCircle2, Cloud,
+  Plus, Eye, Pencil, Loader2, CheckCircle2, Cloud, GraduationCap,
 } from 'lucide-react'
 import { useApp } from '../../context/AppContext.jsx'
 import DateField from '../../components/common/DateField.jsx'
@@ -10,6 +10,7 @@ import {
   DAY_LABELS, dateToDayOfWeek, todayISO, formatThaiDate, formatShortDate,
   getDaySlots, computeFreeTeachers, formatTimeRange, buildDailyGrid, makeAssignmentId,
   normalizeDailySchedule, getDayHalves, filterSlotsByRange, computeDaySummary, isPeriodInRange,
+  getDayPeriodList, getSlotDisplayDetails, substitutePerson, substitutePersonKey, substituteDisplayName,
 } from './dailySchedule.js'
 import TeacherSearchSelect from './TeacherSearchSelect.jsx'
 import {
@@ -20,6 +21,14 @@ import {
 import {
   exportDailySchedulePDF, exportDailyScheduleExcel, exportStatsPDF, exportStatsExcel,
 } from './exportDailySchedule.js'
+import useTraineeRoster from '../../hooks/useTraineeRoster.js'
+import {
+  buildTraineeIndex, traineeMatchesSlot, traineeHasMentor, isTraineeMentorAbsent,
+  dayTeachingCount,
+} from '../../utils/traineeTimetable.js'
+import { flattenClassTeachers } from '../../utils/teacherLoad.js'
+import { mentorNamesForTrainee } from '../../utils/traineeAttendance.js'
+import DayLoadStrip, { DayLoadLegend } from './DayLoadStrip.jsx'
 
 function toISODate(d) {
   const m = String(d.getMonth() + 1).padStart(2, '0')
@@ -79,6 +88,7 @@ function SubstituteCenterInner() {
     isSnapshotDirty, lastSnapshotSaveAt, activeSnapshotId, saveSnapshot, saveToCloud, user,
   } = useApp()
   const readOnly = !canManage
+  const { trainees, loading: traineesLoading, error: traineesError } = useTraineeRoster()
 
   const [activeTab, setActiveTab] = useState('daily') // 'daily' | 'history' | 'stats'
   const [dateStr, setDateStr] = useState(() => todayISO())
@@ -96,7 +106,10 @@ function SubstituteCenterInner() {
   const toastTimerRef = useRef(null)
   const initDateRef = useRef(null)
 
-  const { teachers, classes, subjects, lesson_blocks, schedule_blocks = [], schedule_config } = fixtureData
+  const {
+    teachers, classes, subjects, rooms = [], special_rooms = [],
+    lesson_blocks, schedule_blocks = [], schedule_config,
+  } = fixtureData
   const resultSlots = result?.slots || []
   const lessonBlockMap = useMemo(() => new Map((lesson_blocks || []).map((lb) => [lb.id, lb])), [lesson_blocks])
   const dayOfWeek = dateToDayOfWeek(dateStr)
@@ -221,20 +234,21 @@ function SubstituteCenterInner() {
     persistDaily(undefined, undefined, v)
   }
 
-  const assignSubstitute = (slot, substituteTeacherId) => {
+  const upsertAssignment = (slot, patch) => {
     const role = slot.role || 'main'
     const existingIdx = assignments.findIndex(
       (a) => a.period === slot.period && a.class_id === slot.classId && (a.role || 'main') === role,
     )
+    const existing = existingIdx >= 0 ? assignments[existingIdx] : null
     const entry = {
-      id: existingIdx >= 0 ? assignments[existingIdx].id : makeAssignmentId(),
+      id: existing?.id || makeAssignmentId(),
       period: slot.period,
       class_id: slot.classId,
       subject_id: slot.subjectId,
       original_teacher_id: slot.teacherId,
-      substitute_teacher_id: substituteTeacherId,
       role,
-      created_at: existingIdx >= 0 ? assignments[existingIdx].created_at : new Date().toISOString(),
+      created_at: existing?.created_at || new Date().toISOString(),
+      ...patch,
     }
     const next = existingIdx >= 0
       ? assignments.map((a, i) => (i === existingIdx ? entry : a))
@@ -242,7 +256,28 @@ function SubstituteCenterInner() {
     setAssignments(next)
     persistDaily(next)
     setSelectedSlot(null)
-    showToast(`มอบหมาย ${teachers.find((t) => t.id === substituteTeacherId)?.name || ''} สอนแทนแล้ว`)
+    return entry
+  }
+
+  const assignSubstitute = (slot, substituteTeacherId) => {
+    const teacher = teachers.find((t) => t.id === substituteTeacherId)
+    upsertAssignment(slot, {
+      substitute_teacher_id: substituteTeacherId,
+      substitute_trainee_id: null,
+      substitute_kind: 'teacher',
+      substitute_name: teacher?.name || '',
+    })
+    showToast(`มอบหมาย ${teacher?.name || ''} สอนแทนแล้ว`)
+  }
+
+  const assignTraineeSubstitute = (slot, trainee) => {
+    upsertAssignment(slot, {
+      substitute_teacher_id: null,
+      substitute_trainee_id: trainee.id,
+      substitute_kind: 'trainee',
+      substitute_name: trainee.name || '',
+    })
+    showToast(`มอบหมาย ${trainee.name || ''} (นศ.ฝึกสอน) สอนแทนแล้ว`)
   }
 
   const removeAssignment = (id) => {
@@ -306,6 +341,29 @@ function SubstituteCenterInner() {
   const subjectMap = useMemo(() => new Map((subjects || []).map((s) => [s.id, s])), [subjects])
   const classMap = useMemo(() => new Map((classes || []).map((c) => [c.id, c])), [classes])
   const teacherMap = useMemo(() => new Map((teachers || []).map((t) => [t.id, t])), [teachers])
+  const roomMap = useMemo(
+    () => new Map([...(rooms || []), ...(special_rooms || [])].map((r) => [r.id, r])),
+    [rooms, special_rooms],
+  )
+  const slotDetailsContext = useMemo(
+    () => ({ classMap, subjectMap, roomMap, lessonBlockMap }),
+    [classMap, subjectMap, roomMap, lessonBlockMap],
+  )
+
+  // ── นศ.ฝึกสอน: index + คาบของวัน + แผนที่ภาระรายวัน ────────────────────
+  const traineeIndex = useMemo(() => buildTraineeIndex(trainees), [trainees])
+  const dayPeriods = useMemo(
+    () => getDayPeriodList(schedule_blocks, schedule_config),
+    [schedule_blocks, schedule_config],
+  )
+  const absenceMap = useMemo(
+    () => new Map(absences.map((a) => [a.teacherId, a])),
+    [absences],
+  )
+  const traineeMatchCtx = useMemo(
+    () => ({ teacherMap, classMap, subjectMap, lessonBlockMap }),
+    [teacherMap, classMap, subjectMap, lessonBlockMap],
+  )
 
   // ── คาบของครูที่ลา (ตาม teacherId + ช่วงของ absence นั้น) + role ──────
   const slotsForTeacher = (teacherId, periodRange) => {
@@ -381,6 +439,131 @@ function SubstituteCenterInner() {
       .filter(Boolean)
     return [...coRows, ...rows]
   }, [selectedSlot, dayOfWeek, daySlots, assignments, teachers, absences, lessonBlockMap, fixtureData.fixed_slots, baseLoads, subCountsThisWeek])
+
+  const selectedAbsence = selectedAbsenceIdx != null ? absences[selectedAbsenceIdx] : null
+  const selectedSlotDetail = useMemo(() => {
+    if (!selectedSlot) return null
+    const slot = daySlots.find((s) => (
+      s.class_id === selectedSlot.classId
+      && s.period === selectedSlot.period
+      && s.subject_id === selectedSlot.subjectId
+    ))
+    return getSlotDisplayDetails(slot || {
+      class_id: selectedSlot.classId,
+      subject_id: selectedSlot.subjectId,
+    }, slotDetailsContext)
+  }, [selectedSlot, daySlots, slotDetailsContext])
+
+  // ── ภาระรายวันของครู: คาบสอน (main+co) / ดูแลกิจกรรม / รับสอนแทน ─────
+  const teacherDayMap = useMemo(() => {
+    const map = new Map()
+    const get = (id) => {
+      if (!map.has(id)) {
+        map.set(id, {
+          teaching: new Set(),
+          duty: new Set(),
+          substitute: new Set(),
+          details: new Map(),
+        })
+      }
+      return map.get(id)
+    }
+    const addLesson = (id, slot) => {
+      if (!id) return
+      const info = get(id)
+      info.teaching.add(slot.period)
+      const detail = getSlotDisplayDetails(slot, slotDetailsContext)
+      const list = info.details.get(slot.period) || []
+      if (!list.some((item) => (
+        item.subjectName === detail.subjectName
+        && item.className === detail.className
+        && item.roomName === detail.roomName
+      ))) {
+        info.details.set(slot.period, [...list, detail])
+      }
+    }
+    for (const s of daySlots) {
+      addLesson(s.teacher_id, s)
+      const lb = lessonBlockMap.get(s.lesson_block_id)
+      const coId = lb?.co_teacher_id || s.co_teacher_id
+      addLesson(coId, s)
+    }
+    for (const fs of fixtureData.fixed_slots || []) {
+      if (fs.day !== dayOfWeek) continue
+      const periods = [...new Set([fs.period, ...(fs.periods || [])])]
+      for (const tid of flattenClassTeachers(fs.class_teachers)) {
+        for (const p of periods) get(tid).duty.add(p)
+      }
+    }
+    for (const a of assignments) {
+      if (a.substitute_teacher_id) get(a.substitute_teacher_id).substitute.add(a.period)
+    }
+    return map
+  }, [daySlots, lessonBlockMap, slotDetailsContext, fixtureData.fixed_slots, dayOfWeek, assignments])
+
+  // ── ภาระรายวันของ นศ.: คาบที่สอนตามครูพี่เลี้ยง / คาบที่ครูพี่เลี้ยงลา / รับแทน ──
+  const traineeDayMap = useMemo(() => {
+    const map = new Map()
+    for (const entry of traineeIndex) {
+      const info = {
+        teaching: new Set(),
+        mentorAbsent: new Set(),
+        substitute: new Set(),
+        details: new Map(),
+      }
+      for (const s of daySlots) {
+        if (!traineeMatchesSlot(entry, s, traineeMatchCtx)) continue
+        const detail = getSlotDisplayDetails(s, slotDetailsContext)
+        const list = info.details.get(s.period) || []
+        if (!list.some((item) => (
+          item.subjectName === detail.subjectName
+          && item.className === detail.className
+          && item.roomName === detail.roomName
+        ))) {
+          info.details.set(s.period, [...list, detail])
+        }
+        if (isTraineeMentorAbsent(entry, s, { absenceMap, halves: dayHalves, lessonBlockMap, teacherMap })) {
+          info.mentorAbsent.add(s.period)
+        } else {
+          info.teaching.add(s.period)
+        }
+      }
+      for (const a of assignments) {
+        if (a.substitute_trainee_id === entry.trainee.id) info.substitute.add(a.period)
+      }
+      map.set(entry.trainee.id, info)
+    }
+    return map
+  }, [traineeIndex, daySlots, traineeMatchCtx, slotDetailsContext, absenceMap, dayHalves, lessonBlockMap, teacherMap, assignments])
+
+  const freeTraineeRows = useMemo(() => {
+    if (!selectedSlot) return []
+    const period = selectedSlot.period
+    const absentId = selectedAbsence?.teacherId || null
+    const absentName = absentId ? (teacherMap.get(absentId)?.name || '') : ''
+    return traineeIndex
+      .filter((entry) => {
+        const info = traineeDayMap.get(entry.trainee.id)
+        return !info?.teaching.has(period) && !info?.substitute.has(period)
+      })
+      .map((entry) => {
+        const info = traineeDayMap.get(entry.trainee.id)
+          || { teaching: new Set(), mentorAbsent: new Set(), substitute: new Set(), details: new Map() }
+        return {
+          trainee: entry.trainee,
+          entry,
+          info,
+          dayTeaching: dayTeachingCount(info.teaching, info.substitute),
+          subPeriodsThisWeek: subCountsThisWeek[entry.trainee.id] || 0,
+          mentorIsAbsent: traineeHasMentor(entry, absentId, absentName),
+          hasSchedule: entry.hasMentor || entry.hasAssignmentDetail,
+          hasMatchedPeriods: info.teaching.size + info.mentorAbsent.size + info.substitute.size > 0,
+        }
+      })
+      .sort((a, b) => (Number(b.mentorIsAbsent) - Number(a.mentorIsAbsent))
+        || (a.dayTeaching - b.dayTeaching)
+        || (a.trainee.name || '').localeCompare(b.trainee.name || '', 'th'))
+  }, [selectedSlot, selectedAbsence, traineeIndex, traineeDayMap, subCountsThisWeek, teacherMap])
 
   const historyDates = useMemo(
     () => Object.keys(dailySchedules || {}).sort((a, b) => b.localeCompare(a)),
@@ -533,8 +716,18 @@ function SubstituteCenterInner() {
           selectedSlot={selectedSlot}
           setSelectedSlot={setSelectedSlot}
           freeTeacherRows={freeTeacherRows}
+          freeTraineeRows={freeTraineeRows}
+          traineeCount={traineeIndex.length}
+          traineesLoading={traineesLoading}
+          traineesError={traineesError}
+          onGoTrainees={() => setStep(9)}
+          dayPeriods={dayPeriods}
+          teacherDayMap={teacherDayMap}
+          traineeDayMap={traineeDayMap}
           assignSubstitute={assignSubstitute}
+          assignTraineeSubstitute={assignTraineeSubstitute}
           assignmentStatus={assignmentStatus}
+          selectedSlotDetail={selectedSlotDetail}
           assignments={assignments}
           removeAssignment={removeAssignment}
           note={note}
@@ -752,15 +945,20 @@ function AbsenceDialog({ teachers, teacherMap, existing, absentIds, fixtureName,
 }
 
 /* ═══════════════════════════ Tab: รายวัน (โหมดจัด) ═══════════════════════════ */
-function DailyTab({
+export function DailyTab({
   dateStr, setDateStr, dayOfWeek, teachers, subjectMap, classMap, teacherMap,
   slotsForTeacher, absences, selectedAbsenceIdx, setSelectedAbsenceIdx,
   removeAbsence, onOpenAbsenceDialog, onEditAbsence,
-  selectedSlot, setSelectedSlot, freeTeacherRows, assignSubstitute, assignmentStatus,
+  selectedSlot, setSelectedSlot, freeTeacherRows, freeTraineeRows = [],
+  traineeCount = 0, traineesLoading = false, traineesError = '', onGoTrainees,
+  dayPeriods = [], teacherDayMap, traineeDayMap, dayHalves,
+  assignSubstitute, assignTraineeSubstitute, assignmentStatus,
+  selectedSlotDetail,
   assignments, removeAssignment, note, handleNoteChange,
   summary, onShowResult, confirmDeleteDate, setConfirmDeleteDate, handleDeleteDate,
   readOnly, staleCount = 0, onClearStale, onOpenPrintStudio,
 }) {
+  const [personTab, setPersonTab] = useState('teacher')
   const selectedAbsence = selectedAbsenceIdx != null ? absences[selectedAbsenceIdx] : null
   const teacherDaySlots = useMemo(
     () => (selectedAbsence ? slotsForTeacher(selectedAbsence.teacherId, selectedAbsence.periodRange) : []),
@@ -924,7 +1122,6 @@ function DailyTab({
                 {teacherDaySlots.map((s) => {
                   const role = s.role || 'main'
                   const assign = assignmentStatus(s.period, s.class_id)[role]
-                  const coName = (() => { const lb = teacherMap.get(s.co_teacher_id); return lb?.name })()
                   const isSelected = selectedSlot?.period === s.period && selectedSlot?.classId === s.class_id && (selectedSlot?.role || 'main') === role
                   return (
                     <button
@@ -933,7 +1130,9 @@ function DailyTab({
                         period: s.period,
                         classId: s.class_id,
                         subjectId: s.subject_id,
-                        teacherId: s.teacher_id,
+                        teacherId: role === 'co'
+                          ? (s._coTeacherId || s.co_teacher_id || s.teacher_id)
+                          : s.teacher_id,
                         role,
                       })}
                       className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg border text-left text-sm transition-colors
@@ -951,7 +1150,8 @@ function DailyTab({
                       {assign && (
                         <span className="ml-auto shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
                           <Check className="w-3.5 h-3.5" />
-                          {teacherMap.get(assign.substitute_teacher_id)?.name || ''}
+                          {substituteDisplayName(assign, teacherMap)}
+                          {assign.substitute_kind === 'trainee' && <span title="นักศึกษาฝึกสอน">🎓</span>}
                         </span>
                       )}
                       {!assign && isSelected && <ArrowRight className="ml-auto w-4 h-4 text-orange-500 shrink-0" />}
@@ -963,75 +1163,240 @@ function DailyTab({
           </div>
         </div>
 
-        {/* ครูที่ว่าง */}
+        {/* คนที่ว่างคาบนี้ */}
         <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-2 mb-2">
             <Users className="w-4 h-4 text-blue-600" />
             <h3 className="font-bold text-gray-800 text-sm">
-              2. ครูที่ว่างคาบนี้
+              2. คนที่ว่างคาบนี้
               {selectedSlot && <span className="ml-1 text-xs text-gray-400">(คาบ {selectedSlot.period}{selectedSlot.role === 'co' ? ' · ครูร่วม' : ''})</span>}
             </h3>
           </div>
+
+          <div className="flex gap-1.5 mb-2">
+            <button
+              onClick={() => setPersonTab('teacher')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors
+                ${personTab === 'teacher' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            >
+              ครู ({freeTeacherRows.length})
+            </button>
+            <button
+              onClick={() => setPersonTab('trainee')}
+              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors
+                ${personTab === 'trainee' ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            >
+              <GraduationCap className="w-3.5 h-3.5" /> นศ.ฝึกสอน ({freeTraineeRows.length})
+            </button>
+          </div>
+          <div className="mb-2">
+            <DayLoadLegend />
+          </div>
+
           {!selectedSlot ? (
             <div className="text-xs text-gray-400 italic bg-gray-50 rounded-lg px-3 py-4 text-center">
-              กดเลือกคาบจากฝั่งซ้ายเพื่อดูรายชื่อครูที่ว่าง
+              กดเลือกคาบจากฝั่งซ้ายเพื่อดูรายชื่อคนที่ว่าง
             </div>
-          ) : freeTeacherRows.length === 0 ? (
+          ) : personTab === 'teacher' ? (
+            freeTeacherRows.length === 0 ? (
+              <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3 space-y-2">
+                <div>ไม่มีครูว่างในคาบนี้ — ต้องสลับคาบอื่นก่อน หรือปล่อยไว้ (คาบนี้จะไม่มีครูสอนแทน)</div>
+                {freeTraineeRows.length > 0 && (
+                  <button
+                    onClick={() => setPersonTab('trainee')}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 text-white hover:bg-violet-700"
+                  >
+                    <GraduationCap className="w-3.5 h-3.5" /> มี นศ.ฝึกสอนว่าง {freeTraineeRows.length} คน — ดูแท็บ นศ.
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-[560px] overflow-y-auto pr-1">
+                <div className="text-xs text-gray-400 mb-1">
+                  {freeTeacherRows.length} คนว่าง · เรียงตามภาระรวมน้อยสุดก่อน · คาบ {selectedSlot.period} · {classMap.get(selectedSlot.classId)?.name}
+                  {' · '}{subjectMap.get(selectedSlot.subjectId)?.name}
+                </div>
+                {freeTeacherRows.some((r) => r.isCoTeacher) && (
+                  <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-2.5 py-1.5 mb-1">
+                    คาบนี้มีครูร่วมอยู่แล้ว — แนะนำเลือกครูร่วมก่อน (หรือเลือกครูท่านอื่นก็ได้)
+                  </div>
+                )}
+                {freeTeacherRows.map((row) => {
+                  const info = teacherDayMap?.get(row.teacher.id)
+                  const teaching = info?.teaching || new Set()
+                  const duty = info?.duty || new Set()
+                  const substitute = info?.substitute || new Set()
+                  const dayTotal = dayTeachingCount(teaching, substitute)
+                  const markerBusy = teaching.has(selectedSlot.period)
+                    || substitute.has(selectedSlot.period)
+                    || duty.has(selectedSlot.period)
+                  return (
+                    <div
+                      key={row.teacher.id}
+                      className={`flex items-start justify-between gap-2 rounded-lg px-3 py-2.5 border
+                        ${row.isCoTeacher ? 'bg-indigo-50/40 border-indigo-200' : 'bg-white border-gray-200'}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-stretch gap-3">
+                          <div className="w-[42%] max-w-[220px] min-w-0 shrink-0">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-base font-semibold text-gray-900">{row.teacher.name}</span>
+                              {row.isCoTeacher && (
+                                <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">
+                                  ครูร่วม (สอนอยู่แล้ว)
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-0.5 text-sm text-gray-600 truncate">
+                              ภาระ {row.basePeriodsPerWeek} คาบ/สัปดาห์ · รวม {row.totalLoad} คาบ
+                            </div>
+                            <div className="mt-1">
+                              {row.subPeriodsThisWeek === 0 ? (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">
+                                  ยังไม่เคยสอนแทน
+                                </span>
+                              ) : (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 font-bold">
+                                  สอนแทนแล้ว {row.subPeriodsThisWeek} คาบ
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
+                            <DayLoadStrip
+                              periods={dayPeriods}
+                              teaching={teaching}
+                              duty={duty}
+                              substitute={substitute}
+                              markerPeriod={selectedSlot.period}
+                              markerDetail={selectedSlotDetail}
+                              periodDetails={info?.details}
+                              halves={dayHalves}
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-1.5">
+                          <div className="text-[11px] text-slate-500">
+                            สอนวันนี้ <b className="text-gray-700">{dayTotal}</b> คาบ
+                            {markerBusy
+                              ? <span className="text-indigo-600"> · มีสอนคาบนี้อยู่แล้ว{row.isCoTeacher ? ' (ครูร่วม)' : ''}</span>
+                              : <span className="text-orange-600"> · +1 ถ้ารับแทน → {dayTotal + 1} คาบ</span>}
+                          </div>
+                        </div>
+                      </div>
+                      {!readOnly && (
+                        <button
+                          onClick={() => assignSubstitute(selectedSlot, row.teacher.id)}
+                          className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold
+                            bg-orange-600 text-white hover:bg-orange-700 transition-colors"
+                        >
+                          ให้สอนแทน
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          ) : traineesLoading ? (
+            <div className="text-xs text-gray-400 italic bg-gray-50 rounded-lg px-3 py-4 text-center">
+              กำลังโหลดรายชื่อนักศึกษาฝึกสอน…
+            </div>
+          ) : traineeCount === 0 ? (
+            <div className="text-xs text-gray-500 bg-violet-50 border border-violet-200 rounded-lg px-3 py-3 space-y-2">
+              <div>ยังไม่มีรายชื่อนักศึกษาฝึกสอนใน workspace นี้</div>
+              {traineesError && <div className="text-[10px] text-gray-400">{traineesError}</div>}
+              {onGoTrainees && (
+                <button
+                  onClick={onGoTrainees}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 text-white hover:bg-violet-700"
+                >
+                  ไปเพิ่มรายชื่อ นศ. (ขั้นที่ 9)
+                </button>
+              )}
+            </div>
+          ) : freeTraineeRows.length === 0 ? (
             <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3">
-              ไม่มีครูว่างในคาบนี้ — ต้องสลับคาบอื่นก่อน หรือปล่อยไว้ (คาบนี้จะไม่มีครูสอนแทน)
+              ไม่มี นศ.ฝึกสอนว่างในคาบนี้ — อาจติดคาบสอนของตัวเองอยู่
             </div>
           ) : (
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 max-h-[560px] overflow-y-auto pr-1">
               <div className="text-xs text-gray-400 mb-1">
-                {freeTeacherRows.length} คนว่าง · เรียงตามภาระรวมน้อยสุดก่อน · คาบ {selectedSlot.period} · {classMap.get(selectedSlot.classId)?.name}
-                {' · '}{subjectMap.get(selectedSlot.subjectId)?.name}
+                {freeTraineeRows.length} คนว่าง · เรียง นศ.ของครูที่ลาก่อน แล้วตามคาบสอนวันนี้น้อยสุด
               </div>
-              {freeTeacherRows.some((r) => r.isCoTeacher) && (
-                <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-2.5 py-1.5 mb-1">
-                  คาบนี้มีครูร่วมอยู่แล้ว — แนะนำเลือกครูร่วมก่อน (หรือเลือกครูท่านอื่นก็ได้)
-                </div>
-              )}
-              {freeTeacherRows.map((row) => (
-                <div
-                  key={row.teacher.id}
-                  className={`flex items-center justify-between rounded-lg px-3 py-2.5 border
-                    ${row.isCoTeacher ? 'bg-indigo-50/40 border-indigo-200' : 'bg-white border-gray-200'}`}
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-base font-semibold text-gray-900 truncate">{row.teacher.name}</span>
-                      {row.isCoTeacher && (
-                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">
-                          ครูร่วม (สอนอยู่แล้ว)
-                        </span>
+              {freeTraineeRows.map((row) => {
+                const mentorLabel = mentorNamesForTrainee(row.trainee).join(', ')
+                return (
+                  <div
+                    key={row.trainee.id}
+                    className="flex items-start justify-between gap-2 rounded-lg px-3 py-2.5 border bg-white border-gray-200"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-stretch gap-3">
+                        <div className="w-[42%] max-w-[220px] min-w-0 shrink-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="truncate text-base font-semibold text-gray-900">{row.trainee.name}</span>
+                            {row.mentorIsAbsent && (
+                              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold">
+                                ⭐ นศ.ของครูที่ลา
+                              </span>
+                            )}
+                            {row.subPeriodsThisWeek > 0 && (
+                              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 font-medium">
+                                รับแทนแล้ว {row.subPeriodsThisWeek} คาบ
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-gray-500 truncate mt-0.5">
+                            {[row.trainee.major, row.trainee.institution].filter(Boolean).join(' · ') || '—'}
+                          </div>
+                          <div className="text-[11px] text-gray-400 truncate">
+                            {mentorLabel ? `ครูพี่เลี้ยง: ${mentorLabel}` : 'ยังไม่ระบุครูพี่เลี้ยง'}
+                            {(row.trainee.subjectName || row.trainee.className) && (
+                              <> · {[row.trainee.subjectName, row.trainee.className].filter(Boolean).join(' / ')}</>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
+                          <DayLoadStrip
+                            periods={dayPeriods}
+                            teaching={row.info.teaching}
+                            mentorAbsent={row.info.mentorAbsent}
+                            substitute={row.info.substitute}
+                            markerPeriod={selectedSlot.period}
+                            markerDetail={selectedSlotDetail}
+                            periodDetails={row.info.details}
+                            halves={dayHalves}
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        สอนวันนี้ <b className="text-gray-700">{row.dayTeaching}</b> คาบ
+                        <span className="text-orange-600"> · +1 ถ้ารับแทน → {row.dayTeaching + 1} คาบ</span>
+                      </div>
+                      {!row.hasSchedule && (
+                        <div className="text-[10px] text-amber-600 mt-0.5">
+                          ยังไม่กำหนดครูพี่เลี้ยง/วิชา/ชั้น — ตารางที่แสดงอาจไม่ตรง
+                        </div>
+                      )}
+                      {row.hasSchedule && !row.hasMatchedPeriods && (
+                        <div className="text-[10px] text-amber-600 mt-0.5">
+                          ไม่พบคาบที่ตรงกับครูพี่เลี้ยง/วิชา/ชั้นในตารางหลักของวันนี้
+                        </div>
                       )}
                     </div>
-                    <div className="text-sm text-gray-600 truncate mt-0.5">
-                      ภาระ {row.basePeriodsPerWeek} คาบ/สัปดาห์ · รวม {row.totalLoad} คาบ
-                    </div>
-                    <div className="mt-1">
-                      {row.subPeriodsThisWeek === 0 ? (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">
-                          ยังไม่เคยสอนแทน
-                        </span>
-                      ) : (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 font-bold">
-                          สอนแทนแล้ว {row.subPeriodsThisWeek} คาบ
-                        </span>
-                      )}
-                    </div>
+                    {!readOnly && (
+                      <button
+                        onClick={() => assignTraineeSubstitute(selectedSlot, row.trainee)}
+                        className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold
+                          bg-violet-600 text-white hover:bg-violet-700 transition-colors"
+                      >
+                        ให้สอนแทน
+                      </button>
+                    )}
                   </div>
-                  {!readOnly && (
-                    <button
-                      onClick={() => assignSubstitute(selectedSlot, row.teacher.id)}
-                      className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold
-                        bg-orange-600 text-white hover:bg-orange-700 transition-colors"
-                    >
-                      ให้สอนแทน
-                    </button>
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
 
@@ -1047,7 +1412,10 @@ function DailyTab({
                     <span className="text-gray-400 shrink-0">·</span>
                     <span className="text-gray-500 truncate">{teacherMap.get(a.original_teacher_id)?.name || a.original_teacher_id}</span>
                     <ArrowRight className="w-3 h-3 text-orange-500 shrink-0" />
-                    <span className="font-bold text-orange-700 truncate">{teacherMap.get(a.substitute_teacher_id)?.name || a.substitute_teacher_id}</span>
+                    <span className="font-bold text-orange-700 truncate">{substituteDisplayName(a, teacherMap)}</span>
+                    {a.substitute_kind === 'trainee' && (
+                      <span className="shrink-0" title="นักศึกษาฝึกสอน">🎓</span>
+                    )}
                     {a.role === 'co' && (
                       <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-indigo-100 text-indigo-700">ครูร่วม</span>
                     )}
@@ -1143,12 +1511,22 @@ function ResultView({
     return ''
   }
   const substituteLoad = useMemo(() => {
-    const counts = new Map()
+    const map = new Map()
     for (const a of assignments || []) {
-      counts.set(a.substitute_teacher_id, (counts.get(a.substitute_teacher_id) || 0) + 1)
+      const person = substitutePerson(a)
+      if (!person) continue
+      const key = substitutePersonKey(a)
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          kind: person.kind,
+          name: substituteDisplayName(a, teacherMap),
+          count: 0,
+        })
+      }
+      map.get(key).count += 1
     }
-    return [...counts.entries()]
-      .map(([tid, n]) => ({ name: teacherMap.get(tid)?.name || tid, count: n }))
+    return [...map.values()]
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'th'))
   }, [assignments, teacherMap])
 
@@ -1213,8 +1591,9 @@ function ResultView({
           </h3>
           <div className="flex flex-wrap gap-2">
             {substituteLoad.map((r) => (
-              <span key={r.name} className="inline-flex items-center gap-1.5 text-xs bg-orange-50 border border-orange-200 rounded-lg px-3 py-1.5">
+              <span key={r.key} className="inline-flex items-center gap-1.5 text-xs bg-orange-50 border border-orange-200 rounded-lg px-3 py-1.5">
                 <b className="text-orange-700">{r.name}</b>
+                {r.kind === 'trainee' && <span title="นักศึกษาฝึกสอน">🎓</span>}
                 <span className="text-gray-500">{r.count} คาบ</span>
               </span>
             ))}
@@ -1283,6 +1662,9 @@ function ResultView({
                             <div className="font-medium text-gray-800 leading-tight">{cell.subjectName}</div>
                             <div className={`leading-tight ${cell.mainIsSubstitute ? 'text-orange-700 font-bold' : 'text-gray-500'}`}>
                               {cell.teacherName}
+                              {cell.mainSubstituteKind === 'trainee' && (
+                                <span className="ml-1" title="นักศึกษาฝึกสอน">🎓</span>
+                              )}
                             </div>
                             {cell.mainIsSubstitute && (
                               <div className="text-[10px] text-gray-400 leading-tight">(แทน {cell.originalName})</div>
@@ -1290,6 +1672,9 @@ function ResultView({
                             {cell.coTeacherName && (
                               <div className={`leading-tight text-[10px] ${cell.coIsSubstitute ? 'text-orange-700 font-bold' : 'text-gray-400'}`}>
                                 + {cell.coTeacherName}
+                                {cell.coSubstituteKind === 'trainee' && (
+                                  <span className="ml-1" title="นักศึกษาฝึกสอน">🎓</span>
+                                )}
                                 {cell.coIsSubstitute && <span className="text-gray-400"> (แทน {cell.coOriginalName})</span>}
                               </div>
                             )}
@@ -1425,7 +1810,13 @@ function StatsTab({ teachers, dailySchedules, resultSlots, userPlacements, lesso
     return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]))
   }, [dailySchedules, fromDate, toDate])
 
-  const teacherMap = useMemo(() => new Map(teachers.map((t) => [t.id, t.name])), [teachers])
+  const personMap = useMemo(() => {
+    const map = new Map(teachers.map((t) => [t.id, t.name]))
+    for (const [id, s] of Object.entries(subStats || {})) {
+      if (!map.has(id) && s.name) map.set(id, s.name)
+    }
+    return map
+  }, [teachers, subStats])
   const maxSub = Math.max(1, ...rows.map((r) => r.subPeriods))
   const maxReason = Math.max(1, ...reasonStats.map((r) => r.count))
 
@@ -1487,20 +1878,20 @@ function StatsTab({ teachers, dailySchedules, resultSlots, userPlacements, lesso
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
           <div className="text-3xl font-bold text-blue-600">{summary.teacherCount}</div>
-          <div className="text-xs text-gray-500 mt-1">ครูที่รับสอนแทน</div>
+          <div className="text-xs text-gray-500 mt-1">ครู/นศ.ที่รับสอนแทน</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
           <div className="text-3xl font-bold text-gray-800 truncate">
-            {summary.busiestTeacherId ? teacherMap.get(summary.busiestTeacherId) || '' : '—'}
+            {summary.busiestTeacherId ? personMap.get(summary.busiestTeacherId) || '' : '—'}
           </div>
-          <div className="text-xs text-gray-500 mt-1">ครูที่รับสอนแทนมากสุด ({summary.busiestCount} คาบ)</div>
+          <div className="text-xs text-gray-500 mt-1">ครู/นศ.ที่รับสอนแทนมากสุด ({summary.busiestCount} คาบ)</div>
         </div>
       </div>
 
       {/* ── ตารางต่อครู ── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <h3 className="font-bold text-gray-800 text-sm">ภาระครู: สอนปกติ vs สอนแทน</h3>
+          <h3 className="font-bold text-gray-800 text-sm">ภาระครู/นศ.ฝึกสอน: สอนปกติ vs สอนแทน</h3>
           <div className="flex gap-1.5">
             <button
               onClick={handleExportPDF}
@@ -1522,7 +1913,7 @@ function StatsTab({ teachers, dailySchedules, resultSlots, userPlacements, lesso
             <thead>
               <tr className="bg-gray-50">
                 <th className="px-2 py-2 text-left text-gray-500 font-semibold">#</th>
-                <th className="px-2 py-2 text-left text-gray-500 font-semibold">ครู</th>
+                <th className="px-2 py-2 text-left text-gray-500 font-semibold">ครู / นศ.ฝึกสอน</th>
                 <th className="px-2 py-2 text-center text-gray-500 font-semibold">คาบปกติ/สัปดาห์</th>
                 <th className="px-2 py-2 text-center text-gray-500 font-semibold">ชม./สัปดาห์</th>
                 <th className="px-2 py-2 text-center text-orange-600 font-semibold">คาบสอนแทน</th>
@@ -1535,7 +1926,12 @@ function StatsTab({ teachers, dailySchedules, resultSlots, userPlacements, lesso
               {rows.map((r) => (
                 <tr key={r.teacherId} className="border-t border-gray-100 hover:bg-gray-50/60">
                   <td className="px-2 py-2 text-gray-400">{r.rank}</td>
-                  <td className="px-2 py-2 font-medium text-gray-800">{r.teacherName}</td>
+                  <td className="px-2 py-2 font-medium text-gray-800">
+                    {r.teacherName}
+                    {r.personKind === 'trainee' && (
+                      <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 font-semibold">🎓 นศ.</span>
+                    )}
+                  </td>
                   <td className="px-2 py-2 text-center text-gray-600">{r.basePeriodsPerWeek}</td>
                   <td className="px-2 py-2 text-center text-gray-600">{r.baseHoursPerWeek.toFixed(1)}</td>
                   <td className="px-2 py-2 text-center">
@@ -1638,7 +2034,7 @@ function ConfirmAssignmentsDialog({ pending, teacherMap, onCancel, onResolve }) 
             <div key={a.id}>
               คาบ {a.period} · {teacherMap.get(a.original_teacher_id)?.name || a.original_teacher_id}
               {' → '}
-              <b className="text-orange-700">{teacherMap.get(a.substitute_teacher_id)?.name || a.substitute_teacher_id}</b>
+              <b className="text-orange-700">{substituteDisplayName(a, teacherMap)}</b>
             </div>
           ))}
         </div>

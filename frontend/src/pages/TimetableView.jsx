@@ -24,6 +24,8 @@ import {
 import DiagnosticsPanel from '../components/common/DiagnosticsPanel.jsx'
 import { computePlacedCounts } from '../utils/placementCounts.js'
 import { gradeLevelToLabel } from '../utils/gradeLabels.js'
+import useTraineeRoster from '../hooks/useTraineeRoster.js'
+import { buildTraineeIndex } from '../utils/traineeTimetable.js'
 
 const RULE_DAY_LABELS = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.', 'อา.']
 
@@ -93,6 +95,11 @@ export default function TimetableView() {
     loadFromCloud,
     deleteFromCloud,
   } = useApp()
+  const { trainees } = useTraineeRoster()
+  const traineeIndex = useMemo(
+    () => buildTraineeIndex(trainees, { classes: fixtureData?.classes || [] }),
+    [trainees, fixtureData?.classes],
+  )
   const [activeTab, setActiveTab] = useState('timetable')
   const [viewMode, setViewMode] = useState('class') // 'class' | 'teacher'
   const [selectedClassIndex, setSelectedClassIndex] = useState(0)
@@ -1061,6 +1068,7 @@ export default function TimetableView() {
                   onDropFromSidebar={handleDropFromSidebar}
                   lessonBlocks={lesson_blocks}
                   sidebarDragBlock={sidebarDragBlock}
+                  traineeIndex={traineeIndex}
                   selectedClass={viewMode === 'class' ? selectedClass?.id : null}
                   selectedTeacher={viewMode === 'teacher' ? selectedTeacher?.id : null}
                   viewMode={viewMode}

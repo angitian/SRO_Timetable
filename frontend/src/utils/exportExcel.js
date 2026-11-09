@@ -19,6 +19,7 @@
  */
 
 import { teacherSupervisesFixedSlot, normalizeClassTeachers } from './teacherLoad.js'
+import { buildTraineeIndex, traineesForSlot } from './traineeTimetable.js'
 
 const DAY_LABELS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์']
 
@@ -110,7 +111,7 @@ function buildClassCellMap(cls, ctx) {
  * Build a lookup map for a single teacher: "day-period" → [{ subjectName, className }]
  */
 function buildTeacherCellMap(teacher, ctx) {
-  const { slotMap, substituteMap, subjectMap, classMap, teacherMap, userPlacements, lessonBlockMap } = ctx
+  const { slotMap, substituteMap, subjectMap, classMap, teacherMap, userPlacements, lessonBlockMap, traineeIndex } = ctx
   const map = new Map()
 
   // Solver slots for this teacher (includes co-taught, resolved from the
@@ -131,6 +132,12 @@ function buildTeacherCellMap(teacher, ctx) {
         className: classMap.get(s.class_id)?.name || s.class_id,
         mainTeacherName: teacherMap.get(s.teacher_id)?.name || s.teacher_id,
         coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+        traineeNames: traineesForSlot(
+          traineeIndex,
+          s,
+          { teacherMap, classMap, subjectMap, lessonBlockMap },
+          { onlyMentorId: teacher.id },
+        ),
       }
     }))
   }
@@ -148,6 +155,20 @@ function buildTeacherCellMap(teacher, ctx) {
           className: classMap.get(lb.class_id)?.name || lb.class_id,
           mainTeacherName: teacherMap.get(lb.teacher_id)?.name || lb.teacher_id,
           coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+          traineeNames: traineesForSlot(
+            traineeIndex,
+            {
+              lesson_block_id: lb.id,
+              day: p.day,
+              period: p.period,
+              subject_id: lb.subject_id,
+              teacher_id: lb.teacher_id,
+              class_id: lb.class_id,
+              co_teacher_id: lb.co_teacher_id,
+            },
+            { teacherMap, classMap, subjectMap, lessonBlockMap },
+            { onlyMentorId: teacher.id },
+          ),
         }])
       }
     }
@@ -209,8 +230,8 @@ function formatTeacherCell(entry, isLunch) {
   if (isLunch) return 'พักเที่ยง'
   if (!entry) return ''
   if (entry.isFixed) return `🔒 ${entry.fixedName}`
-  // entry is an array of { subjectName, className, mainTeacherName?, coTeacherName? }
-  return entry.map((s) => `${s.subjectName}\n${s.className}${s.coTeacherName ? `\n👥 ${s.mainTeacherName} + ${s.coTeacherName}` : ''}${s.isSubstitute ? '\n🔁 สอนแทน' : ''}`).join('\n\n')
+  // entry is an array of { subjectName, className, mainTeacherName?, coTeacherName?, traineeNames? }
+  return entry.map((s) => `${s.subjectName}\n${s.className}${s.coTeacherName ? `\n👥 ${s.mainTeacherName} + ${s.coTeacherName}` : ''}${s.traineeNames?.length > 0 ? `\n🎓 ${s.traineeNames.join(', ')}` : ''}${s.isSubstitute ? '\n🔁 สอนแทน' : ''}`).join('\n\n')
 }
 
 /**
@@ -449,13 +470,14 @@ function buildFacilitiesSheet(wb, ctx) {
  * Build the export context (shared lookup maps) from raw data.
  */
 function buildExportContext(data) {
-  const { slots, classes, subjects, teachers, gridConfig, userPlacements, lessonBlocks, fixedSlots, specialRooms } = data
+  const { slots, classes, subjects, teachers, trainees, gridConfig, userPlacements, lessonBlocks, fixedSlots, specialRooms } = data
   const { periodsPerDay = 7, lunchPeriods = [], breakPeriods = [], daysPerWeek = 5 } = gridConfig
 
   const subjectMap = new Map((subjects || []).map((s) => [s.id, s]))
   const teacherMap = new Map((teachers || []).map((t) => [t.id, t]))
   const classMap = new Map((classes || []).map((c) => [c.id, c]))
   const lessonBlockMap = new Map((lessonBlocks || []).map((lb) => [lb.id, lb]))
+  const traineeIndex = buildTraineeIndex(trainees || [], { classes })
   const lunchSet = new Set(lunchPeriods)
   const breakSet = new Set(breakPeriods)
 
@@ -508,6 +530,7 @@ function buildExportContext(data) {
     userPlacements: userPlacements || {},
     fixedSlots: fixedSlots || [],
     subjectMap, teacherMap, classMap, lessonBlockMap,
+    traineeIndex,
     lunchSet, breakSet, fixedMap, slotMap, getFixedSlotsFor, substituteMap, getSubstituteFor,
     dayList, periodList,
     periodTimeMap: data.periodTimeMap || {},

@@ -204,13 +204,13 @@ export default function TeacherDashboardPage() {
 
       {/* Teacher table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-        <h3 className="font-bold text-gray-800 text-sm mb-3">ภาระครู: สอนปกติ vs สอนแทน</h3>
+        <h3 className="font-bold text-gray-800 text-sm mb-3">ภาระครู/นศ.ฝึกสอน: สอนปกติ vs สอนแทน</h3>
         <div className="overflow-x-auto rounded-lg border border-gray-200">
           <table className="min-w-full text-xs">
             <thead>
               <tr className="bg-gray-50">
                 <th className="px-2 py-2 text-left text-gray-500 font-semibold">#</th>
-                <th className="px-2 py-2 text-left text-gray-500 font-semibold">ครู</th>
+                <th className="px-2 py-2 text-left text-gray-500 font-semibold">ครู / นศ.ฝึกสอน</th>
                 <th className="px-2 py-2 text-center text-gray-500 font-semibold">คาบปกติ/สัปดาห์</th>
                 <th className="px-2 py-2 text-center text-gray-500 font-semibold">ชม./สัปดาห์</th>
                 <th className="px-2 py-2 text-center text-orange-600 font-semibold">คาบสอนแทน</th>
@@ -223,7 +223,12 @@ export default function TeacherDashboardPage() {
               {rows.map((r) => (
                 <tr key={r.teacherId} className="border-t border-gray-100 hover:bg-gray-50/60">
                   <td className="px-2 py-2 text-gray-400">{r.rank}</td>
-                  <td className="px-2 py-2 font-medium text-gray-800">{r.teacherName}</td>
+                  <td className="px-2 py-2 font-medium text-gray-800">
+                    {r.teacherName}
+                    {r.personKind === 'trainee' && (
+                      <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 font-semibold">🎓 นศ.</span>
+                    )}
+                  </td>
                   <td className="px-2 py-2 text-center text-gray-600">{r.basePeriodsPerWeek}</td>
                   <td className="px-2 py-2 text-center text-gray-600">{r.baseHoursPerWeek.toFixed(1)}</td>
                   <td className="px-2 py-2 text-center">

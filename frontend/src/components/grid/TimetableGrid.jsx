@@ -6,6 +6,7 @@ import { DAY_LABELS } from './GridLegend.jsx'
 import CellContextMenu from './CellContextMenu.jsx'
 import CellRoomEditModal from './CellRoomEditModal.jsx'
 import { teacherSupervisesFixedSlot } from '../../utils/teacherLoad.js'
+import { traineesForSlot, traineeHasMentor } from '../../utils/traineeTimetable.js'
 
 export default function TimetableGrid({
   slots = [],
@@ -33,6 +34,8 @@ export default function TimetableGrid({
   onDropFromSidebar,
   // Lesson blocks list (needed to resolve user placements into display data)
   lessonBlocks = [],
+  // Trainee index (from the trainee module) — shows trainee names in cells
+  traineeIndex = [],
   // Currently dragged lesson block from sidebar (set at dragstart, cleared at dragend)
   sidebarDragBlock,
   // Single-class mode: render only this class's grid at full width
@@ -86,6 +89,7 @@ export default function TimetableGrid({
   const teacherMap = new Map(teachers.map((t) => [t.id, t]))
   const classMap = new Map(classes.map((c) => [c.id, c]))
   const lessonBlockMap = new Map(lessonBlocks.map((lb) => [lb.id, lb]))
+  const traineeCtx = { teacherMap, classMap, subjectMap, lessonBlockMap }
   const lunchSet = new Set(lunchPeriods)
 
   // Build special room name lookup: { id → name } for displaying room badges
@@ -298,6 +302,7 @@ export default function TimetableGrid({
           // Names of BOTH teachers for co-taught entries (ตารางครูต้องโชว์ 2 ชื่อ)
           mainTeacherName: teacherMap.get(s.teacher_id)?.name || s.teacher_id,
           coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+          traineeNames: traineesForSlot(traineeIndex, s, traineeCtx, { onlyMentorId: activeTeacherId }),
           isPreAssigned: (() => {
             const placements = userPlacements[s.lesson_block_id]
             return !!(placements && placements.some((pp) => pp.day === s.day && pp.period === s.period))
@@ -328,6 +333,15 @@ export default function TimetableGrid({
         coTeacherId,
         mainTeacherName: teacherMap.get(lb.teacher_id)?.name || lb.teacher_id,
         coTeacherName: coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null,
+        traineeNames: traineesForSlot(traineeIndex, {
+          lesson_block_id: lb.id,
+          day: p.day,
+          period: p.period,
+          subject_id: lb.subject_id,
+          teacher_id: lb.teacher_id,
+          class_id: lb.class_id,
+          co_teacher_id: lb.co_teacher_id,
+        }, traineeCtx, { onlyMentorId: activeTeacherId }),
         isPreAssigned: true,
       })
     }
@@ -350,6 +364,13 @@ export default function TimetableGrid({
   }
 
   const dayList = Array.from({ length: days }, (_, i) => i + 1)
+  const activeTeacherTraineeCount = activeTeacherId
+    ? traineeIndex.filter((entry) => traineeHasMentor(
+      entry,
+      activeTeacherId,
+      teacherMap.get(activeTeacherId)?.name,
+    )).length
+    : 0
   const breakSet = new Set(breakPeriods)
   // Use explicit periodList prop (supports decimals) when provided;
   // otherwise fall back to integer range 1..periodsPerDay.
@@ -692,6 +713,11 @@ export default function TimetableGrid({
                     }
                   }
 
+                  // Trainee names (class view: no mentor restriction)
+                  const traineeNames = displaySlot
+                    ? traineesForSlot(traineeIndex, displaySlot, traineeCtx)
+                    : []
+
                   // Substitute (สอนแทน) for this class slot
                   const substituteEntry = (isFixed || isLunch || isBreak) ? null : substituteMap.get(`${d}-${p}-${classId}`)
                   const displaySubstitute = substituteEntry
@@ -734,6 +760,7 @@ export default function TimetableGrid({
                       coTeacher={displayCoTeacher}
                       substitute={displaySubstitute}
                       substituteOriginalName={substituteOriginalName}
+                      traineeNames={traineeNames}
                       classGroup={displayClass}
                       roomName={getSpecialRoomName(displaySlot)}
                       onRemoveSlot={displaySlot && !isFixed ? () => onRemoveSlot?.(displaySlot.lesson_block_id, isPreAssigned, d, p) : undefined}
@@ -840,6 +867,11 @@ export default function TimetableGrid({
               👨‍🏫 {teacherMap.get(activeTeacherId)?.name || activeTeacherId} — ทุกห้อง
             </span>
             <span className="text-xs text-gray-500">{teacherClasses.length} ห้อง</span>
+            {activeTeacherTraineeCount > 0 && (
+              <span className="text-xs font-semibold text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-lg">
+                🎓 นศ.ในดูแล {activeTeacherTraineeCount} คน
+              </span>
+            )}
           </>
         ) : (
           <span className="text-base font-bold bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1 rounded-lg">

@@ -61,6 +61,49 @@ export function makeAssignmentId() {
 }
 
 /**
+ * ผู้รับสอนแทนของ assignment — ครู (เดิม) หรือ นศ.ฝึกสอน (ใหม่)
+ * คืน { kind: 'teacher'|'trainee', id, name } หรือ null
+ */
+export function substitutePerson(assignment) {
+  if (!assignment) return null
+  if (assignment.substitute_trainee_id) {
+    return {
+      kind: 'trainee',
+      id: assignment.substitute_trainee_id,
+      name: assignment.substitute_name || '',
+    }
+  }
+  if (assignment.substitute_teacher_id) {
+    return {
+      kind: 'teacher',
+      id: assignment.substitute_teacher_id,
+      name: assignment.substitute_name || '',
+    }
+  }
+  return null
+}
+
+/** key สำหรับ group สถิติ/เอกสาร: 't:<teacherId>' หรือ 'tr:<traineeId>' */
+export function substitutePersonKey(assignment) {
+  const person = substitutePerson(assignment)
+  if (!person) return ''
+  return `${person.kind === 'trainee' ? 'tr' : 't'}:${person.id}`
+}
+
+/**
+ * ชื่อที่แสดงของผู้สอนแทน — ใช้ snapshot name ก่อน แล้ว fallback teacherMap
+ * `withKind` = ต่อท้าย " (นศ.ฝึกสอน)" สำหรับเอกสารพิมพ์/Excel
+ */
+export function substituteDisplayName(assignment, teacherMap, { withKind = false } = {}) {
+  const person = substitutePerson(assignment)
+  if (!person) return ''
+  const entry = teacherMap?.get ? teacherMap.get(person.id) : null
+  const fallback = typeof entry === 'string' ? entry : entry?.name
+  const name = person.name || fallback || person.id || ''
+  return withKind && person.kind === 'trainee' ? `${name} (นศ.ฝึกสอน)` : name
+}
+
+/**
  * Normalize ข้อมูล daily schedule 1 วัน — backward compat:
  *   - `absentTeacherIds: string[]` (โมเดลเก่า) → `absences` [{ teacherId, reason:'', periodRange:'all' }]
  *   - assignment ที่ไม่มี `role` → 'main'
@@ -76,7 +119,12 @@ export function normalizeDailySchedule(raw) {
         reason: '',
         periodRange: 'all',
       }))
-  const assignments = (raw.assignments || []).map((a) => ({ role: 'main', ...a }))
+  const assignments = (raw.assignments || []).map((a) => ({
+    role: 'main',
+    substitute_kind: a.substitute_trainee_id ? 'trainee' : (a.substitute_kind || 'teacher'),
+    substitute_name: a.substitute_name || '',
+    ...a,
+  }))
   return {
     ...raw,
     day_type: raw.day_type || 'normal',
@@ -251,7 +299,7 @@ export function computeFreeTeachers({
     else if (s.co_teacher_id) busy.add(s.co_teacher_id)
   }
   for (const a of assignments || []) {
-    if (a.period === period) busy.add(a.substitute_teacher_id)
+    if (a.period === period && a.substitute_teacher_id) busy.add(a.substitute_teacher_id)
   }
   // ครูผู้ดูแลกิจกรรม (fixed slots) ณ คาบนี้ — ว่างไม่ได้
   for (const fs of fixedSlots || []) {
@@ -293,6 +341,56 @@ export function getClassPeriods(classId, scheduleBlocks, scheduleConfig) {
   return Array.from({ length: cfg.periods_per_day || 8 }, (_, i) => i + 1)
     .filter((p) => !lunch.has(p))
     .map((p) => ({ period_no: p, start_time: '', end_time: '' }))
+}
+
+/**
+ * รายการคาบทั้งหมดของวัน (union จาก schedule blocks, fallback schedule_config)
+ * ใช้วาดแถบสถานะรายคาบ — คง type ไว้เพื่อแยก LUNCH/BREAK
+ */
+export function getDayPeriodList(scheduleBlocks, scheduleConfig) {
+  const map = new Map()
+  for (const block of scheduleBlocks || []) {
+    for (const p of block.periods || []) {
+      if (map.has(p.period_no)) continue
+      map.set(p.period_no, {
+        period_no: p.period_no,
+        type: p.type || 'STUDY',
+        start_time: p.start_time || '',
+        end_time: p.end_time || '',
+      })
+    }
+  }
+  if (map.size === 0) {
+    const cfg = scheduleConfig || {}
+    const lunch = new Set(cfg.lunch_periods || [4])
+    for (let i = 1; i <= (cfg.periods_per_day || 8); i++) {
+      map.set(i, {
+        period_no: i,
+        type: lunch.has(i) ? 'LUNCH' : 'STUDY',
+        start_time: '',
+        end_time: '',
+      })
+    }
+  }
+  return [...map.values()].sort((a, b) => a.period_no - b.period_no)
+}
+
+/** Resolve the visible subject, class, and room labels for a scheduled slot. */
+export function getSlotDisplayDetails(slot, {
+  classMap,
+  subjectMap,
+  roomMap,
+  lessonBlockMap,
+} = {}) {
+  if (!slot) return null
+  const lessonBlock = lessonBlockMap?.get ? lessonBlockMap.get(slot.lesson_block_id) : null
+  const roomId = slot.room_id || lessonBlock?.room_id || ''
+  const room = roomMap?.get ? roomMap.get(roomId) : null
+  return {
+    subjectName: subjectMap?.get?.(slot.subject_id)?.name || slot.subject_id || '',
+    className: classMap?.get?.(slot.class_id)?.name || slot.class_id || '',
+    roomName: (typeof room === 'string' ? room : room?.name) || roomId,
+  }
 }
 
 /** ระยะเวลาของคาบ (นาที) จากช่วงเวลาจริงของ block */
@@ -369,32 +467,41 @@ export function buildDailyGrid({
       const coAssign = assign.co
       const mainIsSubstitute = !!mainAssign
       const coIsSubstitute = !!coAssign
-      const mainSub = mainAssign ? teacherMap.get(mainAssign.substitute_teacher_id) : null
+      const mainPerson = mainAssign ? substitutePerson(mainAssign) : null
+      const coPerson = coAssign ? substitutePerson(coAssign) : null
+      // ครูร่วมที่รับสอนแทนตำแหน่งครูหลัก (หรือกลับกัน) — แสดงชื่อครั้งเดียว
+      const mainEffectiveId = mainPerson ? mainPerson.id : slot.teacher_id
+      const coEffectiveId = coPerson ? coPerson.id : coTeacherId
+      const coSameAsMain = !!coEffectiveId && mainEffectiveId === coEffectiveId
       const mainOrig = mainAssign ? teacherMap.get(mainAssign.original_teacher_id) : null
-      const coSub = coAssign ? teacherMap.get(coAssign.substitute_teacher_id) : null
       const coOrig = coAssign ? teacherMap.get(coAssign.original_teacher_id) : null
       cells[p.period_no] = {
         subjectId: slot.subject_id,
         subjectName: subj?.name || slot.subject_id,
-        teacherId: mainIsSubstitute ? mainAssign.substitute_teacher_id : slot.teacher_id,
-        teacherName: mainIsSubstitute
-          ? (mainSub?.name || mainAssign.substitute_teacher_id)
+        teacherId: mainPerson ? mainPerson.id : slot.teacher_id,
+        teacherName: mainPerson
+          ? substituteDisplayName(mainAssign, teacherMap)
           : (teacher?.name || ''),
-        originalId: mainIsSubstitute ? mainAssign.original_teacher_id : null,
-        originalName: mainIsSubstitute
+        originalId: mainPerson ? mainAssign.original_teacher_id : null,
+        originalName: mainPerson
           ? (mainOrig?.name || mainAssign.original_teacher_id)
           : null,
         mainIsSubstitute,
-        coTeacherId: coIsSubstitute ? coAssign.substitute_teacher_id : coTeacherId,
-        coTeacherName: coIsSubstitute
-          ? (coSub?.name || coAssign.substitute_teacher_id)
-          : (coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null),
-        coOriginalId: coIsSubstitute ? coAssign.original_teacher_id : null,
-        coOriginalName: coIsSubstitute
+        mainSubstituteKind: mainPerson?.kind || null,
+        coTeacherId: coSameAsMain ? null : coEffectiveId,
+        coTeacherName: coSameAsMain
+          ? null
+          : coPerson
+            ? substituteDisplayName(coAssign, teacherMap)
+            : (coTeacherId ? (teacherMap.get(coTeacherId)?.name || coTeacherId) : null),
+        coOriginalId: coPerson ? coAssign.original_teacher_id : null,
+        coOriginalName: coPerson
           ? (coOrig?.name || coAssign.original_teacher_id)
           : null,
         coIsSubstitute,
+        coSubstituteKind: coPerson?.kind || null,
         isSubstitute: mainIsSubstitute || coIsSubstitute,
+        isTraineeSubstitute: mainPerson?.kind === 'trainee' || coPerson?.kind === 'trainee',
         start_time: p.start_time,
         end_time: p.end_time,
       }

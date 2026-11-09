@@ -4,7 +4,7 @@
  * PDF ผ่าน print dialog (เหมือน exportPdf.js), Excel ผ่าน exceljs (เหมือน exportExcel.js)
  * ใช้กับหน้า SubstituteCenter (Step 7)
  */
-import { formatTimeRange } from './dailySchedule.js'
+import { formatTimeRange, substituteDisplayName } from './dailySchedule.js'
 import { rangeLabel } from './substituteStats.js'
 
 // ── Style constants (mirror exportExcel.js) ──────────────────────────────
@@ -43,11 +43,11 @@ function buildClassDailyHTML(classRow, { dateStr, dayLabel }) {
       </tr>`
     }
     const mainHTML = cell.mainIsSubstitute
-      ? `<span class="sub">${esc(cell.teacherName)}</span>
+      ? `<span class="sub">${esc(cell.teacherName)}${cell.mainSubstituteKind === 'trainee' ? ' 🎓' : ''}</span>
          <div class="orig">(แทน ${esc(cell.originalName || '')})</div>`
       : esc(cell.teacherName)
     const coHTML = !cell.coTeacherName ? '' : (cell.coIsSubstitute
-      ? `<div><span class="sub">+ ${esc(cell.coTeacherName)}</span><span class="orig"> (แทน ${esc(cell.coOriginalName || '')})</span></div>`
+      ? `<div><span class="sub">+ ${esc(cell.coTeacherName)}${cell.coSubstituteKind === 'trainee' ? ' 🎓' : ''}</span><span class="orig"> (แทน ${esc(cell.coOriginalName || '')})</span></div>`
       : `<div>+ ${esc(cell.coTeacherName)}</div>`)
     const teacherHTML = `${mainHTML}${coHTML}`
     return `<tr>
@@ -110,7 +110,7 @@ export function buildDailyScheduleHTML({
       <td>${esc(subj || a.subject_id)}</td>
       <td>${esc(teacherMap.get(a.original_teacher_id) || a.original_teacher_id)}${a.role === 'co' ? ' <span class="note">(ครูร่วม)</span>' : ''}</td>
       <td>${esc(reason || '—')}</td>
-      <td class="sub-cell">${esc(teacherMap.get(a.substitute_teacher_id) || a.substitute_teacher_id)}</td>
+      <td class="sub-cell">${esc(substituteDisplayName(a, teacherMap, { withKind: true }))}</td>
     </tr>`
   }).join('')
 
@@ -229,10 +229,10 @@ export async function exportDailyScheduleExcel(opts) {
       if (cell) {
         ws.getCell(row, 3).value = cell.subjectName
         const mainName = cell.mainIsSubstitute
-          ? `${cell.teacherName} (แทน ${cell.originalName || ''})`
+          ? `${cell.teacherName}${cell.mainSubstituteKind === 'trainee' ? ' 🎓' : ''} (แทน ${cell.originalName || ''})`
           : cell.teacherName
         const coName = !cell.coTeacherName ? '' : cell.coIsSubstitute
-          ? ` + ${cell.coTeacherName} (แทน ${cell.coOriginalName || ''})`
+          ? ` + ${cell.coTeacherName}${cell.coSubstituteKind === 'trainee' ? ' 🎓' : ''} (แทน ${cell.coOriginalName || ''})`
           : ` + ${cell.coTeacherName}`
         ws.getCell(row, 4).value = `${mainName}${coName}`
         ws.getCell(row, 5).value = cell.isSubstitute ? 'สอนแทน' : ''
@@ -275,7 +275,7 @@ export async function exportDailyScheduleExcel(opts) {
     ws2.getCell(r, 3).value = subjectMap.get(a.subject_id) || a.subject_id
     ws2.getCell(r, 4).value = `${teacherMap.get(a.original_teacher_id) || a.original_teacher_id}${a.role === 'co' ? ' (ครูร่วม)' : ''}`
     ws2.getCell(r, 5).value = reasonOf(a.original_teacher_id) || '—'
-    ws2.getCell(r, 6).value = teacherMap.get(a.substitute_teacher_id) || a.substitute_teacher_id
+    ws2.getCell(r, 6).value = substituteDisplayName(a, teacherMap, { withKind: true })
     ws2.getCell(r, 6).font = { bold: true, color: { argb: 'FFC2410C' } }
     for (let col = 1; col <= 6; col++) ws2.getCell(r, col).border = THIN_BORDER
   })
@@ -298,7 +298,7 @@ export async function exportDailyScheduleExcel(opts) {
 export function buildStatsReportHTML({ rows, fromDate, toDate, dayLabel, reasonRows = [] }) {
   const bodyRows = rows.map((r) => `<tr>
     <td class="num">${r.rank}</td>
-    <td>${esc(r.teacherName)}</td>
+    <td>${esc(r.teacherName)}${r.personKind === 'trainee' ? ' (นศ.ฝึกสอน)' : ''}</td>
     <td class="num">${r.basePeriodsPerWeek}</td>
     <td class="num">${r.baseHoursPerWeek.toFixed(1)}</td>
     <td class="num">${r.subPeriods}</td>
@@ -317,7 +317,7 @@ export function buildStatsReportHTML({ rows, fromDate, toDate, dayLabel, reasonR
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<title>รายงานสถิติภาระครู (สอนแทน) ${esc(rangeLabel(fromDate, toDate))}</title>
+<title>รายงานสถิติภาระครู/นศ.ฝึกสอน (สอนแทน) ${esc(rangeLabel(fromDate, toDate))}</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: 'Sarabun', 'Segoe UI', Tahoma, sans-serif; margin: 16px; color: #1f2937; }
@@ -331,12 +331,12 @@ export function buildStatsReportHTML({ rows, fromDate, toDate, dayLabel, reasonR
 </style>
 </head>
 <body>
-  <h1>รายงานสถิติภาระครู — สอนแทน</h1>
+  <h1>รายงานสถิติภาระครู/นศ.ฝึกสอน — สอนแทน</h1>
   <div class="meta">ช่วง: ${esc(rangeLabel(fromDate, toDate))}${dayLabel ? ` · สร้างเมื่อ ${esc(dayLabel)}` : ''}</div>
   <table>
     <thead>
       <tr>
-        <th>อันดับ</th><th>ครู</th><th>คาบปกติ/สัปดาห์</th><th>ชั่วโมงปกติ/สัปดาห์</th>
+        <th>อันดับ</th><th>ครู / นศ.ฝึกสอน</th><th>คาบปกติ/สัปดาห์</th><th>ชั่วโมงปกติ/สัปดาห์</th>
         <th>คาบสอนแทน</th><th>ชั่วโมงสอนแทน</th><th>รวมคาบ</th><th>% สอนแทน</th>
       </tr>
     </thead>
@@ -383,13 +383,13 @@ export async function exportStatsExcel({ rows, fromDate, toDate, reasonRows }) {
   ]
   ws.mergeCells('A1:H1')
   const title = ws.getCell('A1')
-  title.value = `รายงานสถิติภาระครู — สอนแทน (${rangeLabel(fromDate, toDate)})`
+  title.value = `รายงานสถิติภาระครู/นศ.ฝึกสอน — สอนแทน (${rangeLabel(fromDate, toDate)})`
   title.font = { bold: true, size: 14, color: { argb: COLOR_WHITE } }
   title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR_NAVY } }
   title.alignment = { horizontal: 'center', vertical: 'middle' }
   ws.getRow(1).height = 24
 
-  const headers = ['อันดับ', 'ครู', 'คาบปกติ/สัปดาห์', 'ชั่วโมงปกติ/สัปดาห์', 'คาบสอนแทน', 'ชั่วโมงสอนแทน', 'รวมคาบ', '% สอนแทน']
+  const headers = ['อันดับ', 'ครู / นศ.ฝึกสอน', 'คาบปกติ/สัปดาห์', 'ชั่วโมงปกติ/สัปดาห์', 'คาบสอนแทน', 'ชั่วโมงสอนแทน', 'รวมคาบ', '% สอนแทน']
   headers.forEach((h, i) => {
     const cell = ws.getCell(2, i + 1)
     cell.value = h
@@ -399,7 +399,7 @@ export async function exportStatsExcel({ rows, fromDate, toDate, reasonRows }) {
   })
   rows.forEach((r, idx) => {
     const row = idx + 3
-    const vals = [r.rank, r.teacherName, r.basePeriodsPerWeek, Number(r.baseHoursPerWeek.toFixed(1)), r.subPeriods, Number(r.subHours.toFixed(1)), r.totalPeriods, Number(r.sharePct.toFixed(1))]
+    const vals = [r.rank, `${r.teacherName}${r.personKind === 'trainee' ? ' (นศ.ฝึกสอน)' : ''}`, r.basePeriodsPerWeek, Number(r.baseHoursPerWeek.toFixed(1)), r.subPeriods, Number(r.subHours.toFixed(1)), r.totalPeriods, Number(r.sharePct.toFixed(1))]
     vals.forEach((v, i) => {
       const cell = ws.getCell(row, i + 1)
       cell.value = v

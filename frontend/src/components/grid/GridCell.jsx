@@ -33,6 +33,7 @@ export default function GridCell({
   coTeacher,        // second teacher (co-teaching, e.g. MEP Thai + foreign)
   substitute,       // substitute teacher object (สอนแทน) — shows instead of teacher
   substituteOriginalName, // original teacher name when substituted
+  traineeNames,     // trainee (นศ.ฝึกสอน) names in this slot — shown with 🎓
   classGroup,
   classColorMap,
   colorMode = 'subject',
@@ -155,7 +156,7 @@ export default function GridCell({
                 onDragStart={(e) => onDragStart?.(e, s)}
                 onDragEnd={onDragEnd}
                 className={`group/sub relative ${sColors.bg} ${sColors.border} border rounded px-1.5 py-0.5
-                  cursor-grab hover:shadow-sm transition-all flex-1 flex items-center min-h-0
+                  cursor-grab hover:shadow-sm transition-all flex-1 flex flex-col justify-center min-h-0
                   ${s.isPreAssigned ? 'ring-1 ring-green-400' : ''}`}
               >
                 <div className={`text-xs sm:text-sm font-bold ${sColors.text} truncate w-full pr-4`}>
@@ -165,8 +166,13 @@ export default function GridCell({
                   {s.isSubstitute && <span className="ml-1 text-[9px] text-orange-600 bg-orange-100 rounded px-1">สอนแทน</span>}
                 </div>
                 {s.coTeacherName && (
-                  <div className="text-[10px] font-medium text-slate-500 truncate w-full leading-tight">
+                  <div className="text-[10px] font-medium text-slate-500 truncate w-full pr-4 leading-tight">
                     👥 {s.mainTeacherName || s.teacher_id} + {s.coTeacherName}
+                  </div>
+                )}
+                {s.traineeNames?.length > 0 && (
+                  <div className="text-[10px] font-medium text-violet-600 truncate w-full pr-4 leading-tight" title={s.traineeNames.join(', ')}>
+                    🎓 {s.traineeNames.join(', ')}
                   </div>
                 )}
                 {onTogglePinSlot && (
@@ -195,6 +201,9 @@ export default function GridCell({
                 {s.className || s.class_id} · {s.subjectName || s.subject_id}
                 {s.coTeacherName && (
                   <span className="text-slate-400"> — {s.mainTeacherName || s.teacher_id} + {s.coTeacherName}</span>
+                )}
+                {s.traineeNames?.length > 0 && (
+                  <span className="text-violet-300"> · 🎓 {s.traineeNames.join(', ')}</span>
                 )}
               </div>
             ))}
@@ -280,6 +289,11 @@ export default function GridCell({
           {classGroup?.name || slot.class_id}
         </span>
       </div>
+      {traineeNames?.length > 0 && (
+        <div className="text-[10px] font-medium text-violet-600 truncate mt-0.5" title={traineeNames.join(', ')}>
+          🎓 {traineeNames.join(', ')}
+        </div>
+      )}
       {substitute && (
         <div className="mt-0.5">
           <span className="inline-block text-[10px] text-orange-700 bg-orange-100 px-1 py-0.5 rounded font-bold border border-orange-200">
@@ -343,6 +357,9 @@ export default function GridCell({
             {coTeacher && <span> + {coTeacher.name || coTeacher.id}</span>}
           </div>
           <div className="text-gray-300">{classGroup?.name || slot.class_id}</div>
+          {traineeNames?.length > 0 && (
+            <div className="text-violet-300 mt-0.5">🎓 {traineeNames.join(', ')}</div>
+          )}
           {roomName && (
             <div className="text-indigo-300 mt-0.5">🔬 {roomName}</div>
           )}

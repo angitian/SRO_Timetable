@@ -6,7 +6,7 @@
  *   - ภาระสอนแทน: จาก dailySchedules (รายวัน) ตามช่วงวันที่เลือก
  * ชั่วโมงคำนวณจากช่วงเวลาจริงของ schedule block (ไม่นับ lunch/break)
  */
-import { getPeriodDurationMinutes } from './dailySchedule.js'
+import { getPeriodDurationMinutes, substitutePerson } from './dailySchedule.js'
 import { flattenClassTeachers } from '../../utils/teacherLoad.js'
 
 /** ตรวจว่าวันที่อยู่ในช่วง (จาก/ถึง) หรือไม่ — เปรียบเทียบ string YYYY-MM-DD */
@@ -112,11 +112,20 @@ export function computeSubstituteStats(dailySchedules, { fromDate, toDate, sched
     if (!isDateInRange(ds.date, fromDate, toDate)) continue
     const weekStart = mondayOfWeek(ds.date)
     for (const a of ds.assignments || []) {
-      const tid = a.substitute_teacher_id
-      if (!stats[tid]) {
-        stats[tid] = { periods: 0, minutes: 0, periodsPerDate: {}, periodsPerWeek: {} }
+      const person = substitutePerson(a)
+      if (!person) continue
+      const pid = person.id
+      if (!stats[pid]) {
+        stats[pid] = {
+          periods: 0,
+          minutes: 0,
+          periodsPerDate: {},
+          periodsPerWeek: {},
+          name: person.name || '',
+          kind: person.kind,
+        }
       }
-      const S = stats[tid]
+      const S = stats[pid]
       S.periods += 1
       S.minutes += getPeriodDurationMinutes(a.class_id, a.period, scheduleBlocks, scheduleConfig)
       S.periodsPerDate[ds.date] = (S.periodsPerDate[ds.date] || 0) + 1
@@ -126,27 +135,33 @@ export function computeSubstituteStats(dailySchedules, { fromDate, toDate, sched
   return stats
 }
 
-/** รวมสถิติสอนแทนทั้งระบบตามช่วง: { totalPeriods, teacherCount, busiestTeacherId } */
+/** รวมสถิติสอนแทนทั้งระบบตามช่วง: { totalPeriods, teacherCount, busiestTeacherId, busiestPersonId, busiestCount } */
 export function computeSubstituteSummary(dailySchedules, { fromDate, toDate, scheduleBlocks, scheduleConfig } = {}) {
   const stats = computeSubstituteStats(dailySchedules, { fromDate, toDate, scheduleBlocks, scheduleConfig })
   let totalPeriods = 0
-  let busiestTeacherId = null
+  let busiestPersonId = null
   let busiestCount = 0
-  for (const [tid, s] of Object.entries(stats)) {
+  for (const [pid, s] of Object.entries(stats)) {
     totalPeriods += s.periods
     if (s.periods > busiestCount) {
       busiestCount = s.periods
-      busiestTeacherId = tid
+      busiestPersonId = pid
     }
   }
-  return { totalPeriods, teacherCount: Object.keys(stats).length, busiestTeacherId, busiestCount }
+  return {
+    totalPeriods,
+    teacherCount: Object.keys(stats).length,
+    busiestTeacherId: busiestPersonId,
+    busiestPersonId,
+    busiestCount,
+  }
 }
 
 /**
- * รวมตารางรายงานสถิติต่อครู (ใช้แสดง + export)
- * rows: [{ rank, teacherId, teacherName, basePeriodsPerWeek, baseHoursPerWeek,
- *          subPeriods, subHours, totalPeriods, sharePct }]
- * เรียงจากรับสอนแทนมากสุด
+ * รวมตารางรายงานสถิติต่อครู/นศ. (ใช้แสดง + export)
+ * rows: [{ rank, teacherId, teacherName, personKind, basePeriodsPerWeek,
+ *          baseHoursPerWeek, subPeriods, subHours, totalPeriods, sharePct }]
+ * เรียงจากรับสอนแทนมากสุด — id ที่ไม่ใช่ครู (เช่น นศ.ฝึกสอน) ถูกต่อท้ายด้วย base 0
  */
 export function buildStatsRows({
   teachers,
@@ -156,13 +171,15 @@ export function buildStatsRows({
   toDate,
 }) {
   const totalSub = Object.values(subStats || {}).reduce((sum, s) => sum + s.periods, 0) || 1
-  const rows = (teachers || [])
+  const teacherIds = new Set((teachers || []).map((t) => t.id))
+  const teacherRows = (teachers || [])
     .map((t) => {
       const base = baseLoads[t.id] || {}
       const sub = subStats[t.id] || { periods: 0, minutes: 0 }
       return {
         teacherId: t.id,
         teacherName: t.name,
+        personKind: 'teacher',
         basePeriodsPerWeek: base.periodsPerWeek || 0,
         baseHoursPerWeek: ((base.minutesPerWeek || 0) / 60),
         subPeriods: sub.periods || 0,
@@ -171,9 +188,23 @@ export function buildStatsRows({
         sharePct: Math.round(((sub.periods || 0) / totalSub) * 1000) / 10,
       }
     })
+  // ผู้รับสอนแทนที่ไม่ใช่ครูในรายชื่อ (นศ.ฝึกสอน หรือครูที่ถูกลบ) — ยังต้องเห็นในสถิติ
+  const extraRows = Object.entries(subStats || {})
+    .filter(([id, s]) => !teacherIds.has(id) && (s.periods || 0) > 0)
+    .map(([id, s]) => ({
+      teacherId: id,
+      teacherName: s.name || id,
+      personKind: s.kind || 'trainee',
+      basePeriodsPerWeek: 0,
+      baseHoursPerWeek: 0,
+      subPeriods: s.periods || 0,
+      subHours: (s.minutes || 0) / 60,
+      totalPeriods: s.periods || 0,
+      sharePct: Math.round(((s.periods || 0) / totalSub) * 1000) / 10,
+    }))
+  return [...teacherRows, ...extraRows]
     .sort((a, b) => b.subPeriods - a.subPeriods)
     .map((r, i) => ({ ...r, rank: i + 1 }))
-  return rows
 }
 
 /** label ช่วงวันที่ เช่น 'สัปดาห์ 29 ก.ย. – 5 ต.ค. 69' หรือ '6 ต.ค. 69' */
