@@ -7,7 +7,7 @@ import { formatDDMMYYYY } from '../../features/substitute/dailySchedule.js'
  * ใช้ native date picker ผ่าน showPicker() (รองรับ Chrome/Edge/Firefox/Safari ใหม่)
  * input ซ่อนสนิท (1px, opacity 0) เพื่อไม่ให้เห็นไอคอนปฏิทินซ้ำซ้อน
  */
-export default function DateField({ value, onChange, className = '', title }) {
+export default function DateField({ value, onChange, className = '', title, block = false }) {
   const inputRef = useRef(null)
 
   const openPicker = () => {
@@ -26,12 +26,12 @@ export default function DateField({ value, onChange, className = '', title }) {
   }
 
   return (
-    <div className={`relative inline-flex items-center ${className}`}>
+    <div className={`relative items-center ${block ? 'flex w-full' : 'inline-flex'} ${className}`}>
       <button
         type="button"
         onClick={openPicker}
         title={title || 'เลือกวันที่'}
-        className="inline-flex items-center gap-1.5 border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white hover:border-blue-400 hover:bg-blue-50/40 transition-colors"
+        className={`inline-flex items-center gap-1.5 border border-gray-300 rounded-lg px-2.5 py-1.5 bg-white hover:border-blue-400 hover:bg-blue-50/40 transition-colors ${block ? 'w-full justify-start min-h-[40px]' : ''}`}
       >
         <CalendarDays className="w-4 h-4 text-gray-400 shrink-0" />
         <span className="text-sm text-gray-800 tabular-nums whitespace-nowrap">
