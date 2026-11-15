@@ -98,7 +98,7 @@ function writeAllSnapshots(snapshots) {
 /**
  * Build a snapshot object from the current workspace state.
  */
-export function buildSnapshot({ label, status, fixtureName, fixtureData, result, userPlacements, substitutes, dailySchedules, solverPreset, solverCustomTime, solverCustomMode, description, version }) {
+export function buildSnapshot({ label, status, fixtureName, fixtureData, result, userPlacements, substitutes, dailySchedules, solverPreset, solverCustomTime, solverCustomMode, description, version, cloudId, shortCode }) {
   const now = Date.now()
   const snap = {
     id: `snap_${now}_${Math.random().toString(36).slice(2, 8)}`,
@@ -116,6 +116,9 @@ export function buildSnapshot({ label, status, fixtureName, fixtureData, result,
     solverCustomTime: solverCustomTime ?? 60,
     solverCustomMode: solverCustomMode || 'BALANCED',
     description: description || '',
+    // Cloud twin (filled in after the first upload so later saves UPDATE it)
+    cloudId: cloudId || null,
+    shortCode: shortCode || null,
     createdAt: now,
     updatedAt: now,
   }
@@ -157,6 +160,20 @@ export function saveSnapshot(snapshot) {
   return ok
     ? { ok: true, snapshot }
     : { ok: false, error: 'ไม่สามารถบันทึกได้ — localStorage เต็ม (quota exceeded)' }
+}
+
+/**
+ * Remember (or clear) the cloud twin of a local snapshot.
+ * Only the two metadata fields are touched — the payload is left as-is.
+ * @returns {{ ok: boolean }}
+ */
+export function setSnapshotCloudLink(id, { cloudId = null, shortCode = null } = {}) {
+  if (!id) return { ok: false }
+  const all = readAllSnapshots()
+  const idx = all.findIndex((s) => s.id === id)
+  if (idx < 0) return { ok: false }
+  all[idx] = { ...all[idx], cloudId: cloudId || null, shortCode: shortCode || null }
+  return { ok: writeAllSnapshots(all) }
 }
 
 /**

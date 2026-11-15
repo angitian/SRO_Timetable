@@ -14,6 +14,7 @@ import PublicViewerPage from './pages/PublicViewerPage.jsx'
 import SubstituteViewerPage from './pages/SubstituteViewerPage.jsx'
 import TraineeViewerPage from './pages/TraineeViewerPage.jsx'
 import AuthCallback from './pages/AuthCallback.jsx'
+import DuplicateWorkspaceDialog from './components/workspace/DuplicateWorkspaceDialog.jsx'
 import PortalPage from './features/portal/PortalPage.jsx'
 import PortalAdminPage from './features/portal/PortalAdminPage.jsx'
 
@@ -67,6 +68,7 @@ export default function App() {
   return (
     <AppProvider>
       <AppContent />
+      <DuplicateWorkspaceDialog />
     </AppProvider>
   )
 }

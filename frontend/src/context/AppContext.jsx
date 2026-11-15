@@ -1,4 +1,4 @@
-import { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react'
+import { createContext, useContext, useReducer, useCallback, useEffect, useRef, useState } from 'react'
 import {
   generateTimetable,
   loginWithGoogle,
@@ -32,7 +32,9 @@ import {
   importFromFile,
   buildSnapshot,
   generateLabel,
+  setSnapshotCloudLink,
 } from '../utils/versionManager.js'
+import { pickAutoOpenTarget, WORKSPACE_PREFERENCE_KEY } from '../utils/workspacePreference.js'
 
 const AppContext = createContext(null)
 
@@ -104,6 +106,7 @@ const initialState = {
   authToken: null, // JWT string or null
   authError: null, // Thai message when a login attempt fails (null = no error)
   authPending: false, // true while redirecting to the Google consent screen
+  authInitialized: false, // true after the first /me attempt settles (success OR expired token)
   // ── Cloud workspaces ──
   cloudWorkspaces: [], // list of cloud-saved workspaces (metadata)
   activeCloudWorkspaceId: null, // currently loaded cloud workspace id
@@ -507,6 +510,9 @@ function reducer(state, action) {
         solverCustomMode: action.payload.solverCustomMode || state.solverCustomMode,
         activeSnapshotId: action.payload.id,
         activeSnapshotLabel: action.payload.label,
+        // A snapshot that was uploaded before remembers its cloud twin so the
+        // next save is an UPDATE (same short_code) and the portal opens directly.
+        activeCloudWorkspaceId: action.payload.cloudId || null,
         // Local snapshots may carry manager_emails embedded in workspace_json;
         // owner id is unknown locally → treat as unrestricted when list is empty.
         managerEmails: action.payload.managerEmails || [],
@@ -529,6 +535,7 @@ function reducer(state, action) {
           accessMode: 'team',
           myWorkspaceRole: 'owner',
           myTraineeRole: 'owner',
+          shortCode: action.payload.shortCode || null,
         },
         activeTraineeWorkspace: null,
         activeStep: action.payload._stayOnLanding ? 0 : 5,
@@ -571,6 +578,8 @@ function reducer(state, action) {
       return { ...state, authError: action.payload }
     case 'SET_AUTH_PENDING':
       return { ...state, authPending: action.payload }
+    case 'SET_AUTH_INITIALIZED':
+      return { ...state, authInitialized: true }
     case 'LOGOUT':
       return {
         ...state,
@@ -956,6 +965,16 @@ const FIXTURE_PATHS = {
 
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState)
+  // Shown when the same owner already has a workspace with the requested title.
+  const [pendingDuplicate, setPendingDuplicate] = useState(null)
+  const duplicateResolverRef = useRef(null)
+
+  const resolveDuplicate = useCallback((choice) => {
+    const resolver = duplicateResolverRef.current
+    duplicateResolverRef.current = null
+    setPendingDuplicate(null)
+    if (resolver) resolver(choice)
+  }, [])
 
   const selectFixture = useCallback((size) => {
     dispatch({ type: 'SET_FIXTURE', payload: size })
@@ -1440,6 +1459,7 @@ export function AppProvider({ children }) {
   }, [])
 
   const doSaveSnapshot = useCallback((label, opts = {}) => {
+    const previousSnap = state.activeSnapshotId ? loadSnapshot(state.activeSnapshotId) : null
     const snap = buildSnapshot({
       label: label || generateLabel(state.snapshots.length),
       status: opts.status || 'draft',
@@ -1453,6 +1473,8 @@ export function AppProvider({ children }) {
       solverCustomTime: state.solverCustomTime,
       solverCustomMode: state.solverCustomMode,
       description: opts.description || '',
+      cloudId: previousSnap?.cloudId || null,
+      shortCode: previousSnap?.shortCode || null,
     })
     // If we have an active snapshot, update it instead of creating new
     if (opts.updateExisting && state.activeSnapshotId) {
@@ -1474,9 +1496,13 @@ export function AppProvider({ children }) {
     const snap = loadSnapshot(id)
     if (!snap) return { ok: false, error: 'ไม่พบ snapshot' }
     dispatch({ type: 'LOAD_SNAPSHOT', payload: { ...snap, _stayOnLanding: !!opts.stayOnLanding } })
-    try {
-      localStorage.setItem('sro_last_workspace', JSON.stringify({ kind: 'local', id }))
-    } catch { /* best effort */ }
+    // Auto-open must NOT rewrite the preference — otherwise a transient fallback
+    // (e.g. before login) permanently pins the app to a local snapshot.
+    if (opts.remember !== false) {
+      try {
+        localStorage.setItem(WORKSPACE_PREFERENCE_KEY, JSON.stringify({ kind: 'local', id }))
+      } catch { /* best effort */ }
+    }
     return { ok: true }
   }, [state.activeSnapshotId, flushPendingSave])
 
@@ -1619,6 +1645,8 @@ export function AppProvider({ children }) {
     if (!state.isSnapshotDirty || !state.activeSnapshotId) return
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     autoSaveTimerRef.current = setTimeout(() => {
+      // Keep the cloud twin link — rebuilding from state alone would drop it.
+      const previous = state.activeSnapshotId ? loadSnapshot(state.activeSnapshotId) : null
       const snap = buildSnapshot({
         label: state.activeSnapshotLabel || 'ตารางฉบับร่าง',
         fixtureName: state.selectedFixture,
@@ -1630,6 +1658,8 @@ export function AppProvider({ children }) {
         solverPreset: state.solverPreset,
         solverCustomTime: state.solverCustomTime,
         solverCustomMode: state.solverCustomMode,
+        cloudId: previous?.cloudId || null,
+        shortCode: previous?.shortCode || null,
       })
       snap.id = state.activeSnapshotId
       snap.createdAt = state.lastSnapshotSaveAt || Date.now()
@@ -1829,7 +1859,10 @@ export function AppProvider({ children }) {
 
   const doRefreshMe = useCallback(async () => {
     const token = getAuthToken()
-    if (!token) return
+    if (!token) {
+      dispatch({ type: 'SET_AUTH_INITIALIZED' })
+      return
+    }
     dispatch({ type: 'SET_AUTH_TOKEN', payload: token })
     try {
       const user = await fetchMe()
@@ -1837,6 +1870,10 @@ export function AppProvider({ children }) {
     } catch {
       clearAuthToken()
       dispatch({ type: 'LOGOUT' })
+    } finally {
+      // auto-open must wait for this — otherwise it picks a local snapshot
+      // before the cloud list exists and then overwrites the preference.
+      dispatch({ type: 'SET_AUTH_INITIALIZED' })
     }
   }, [])
 
@@ -1876,7 +1913,7 @@ export function AppProvider({ children }) {
     }
   }, [])
 
-  const doSaveToCloud = useCallback(async (label) => {
+  const doSaveToCloud = useCallback(async (label, opts = {}) => {
     dispatch({ type: 'SET_CLOUD_SYNCING', payload: true })
     try {
       const activeCloudTitle = state.cloudWorkspaces.find((w) => w.id === state.activeCloudWorkspaceId)?.title
@@ -1894,13 +1931,14 @@ export function AppProvider({ children }) {
         accessMode: state.workspaceAccessMode,
       }
       const result = await saveWorkspaceToCloud({
-        id: state.activeCloudWorkspaceId || null,
+        id: opts.id || state.activeCloudWorkspaceId || null,
         title: label || state.activeSnapshotLabel || activeCloudTitle || 'ตารางของฉัน',
         academicYear: 2569,
         term: 1,
         workspace,
         managerEmails: state.managerEmails,
         accessMode: state.workspaceAccessMode,
+        forceNew: !!opts.forceNew,
       })
       // If this was a local workspace with trainee data, carry that module
       // into the newly-created cloud record (best effort; an existing cloud
@@ -1937,16 +1975,38 @@ export function AppProvider({ children }) {
           myTraineeRole: state.activeWorkspace?.myTraineeRole || 'none',
         },
       })
+      // Local snapshot that was just uploaded remembers its cloud twin, so the
+      // next save is an UPDATE (same short_code) and the portal opens directly.
+      if (state.activeWorkspace?.kind === 'local' && state.activeSnapshotId) {
+        setSnapshotCloudLink(state.activeSnapshotId, {
+          cloudId: result.id,
+          shortCode: result.short_code || null,
+        })
+      }
       try {
-        localStorage.setItem('sro_last_workspace', JSON.stringify({ kind: 'cloud', id: result.id }))
+        localStorage.setItem(WORKSPACE_PREFERENCE_KEY, JSON.stringify({ kind: 'cloud', id: result.id }))
       } catch { /* best effort */ }
       await doListCloudWorkspaces()
       return { ok: true, id: result.id, shortCode: result.short_code || '', title: result.title }
     } catch (e) {
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
+      // Same owner already has a workspace with this name → let the user decide.
+      if (e.conflict && !opts._retried) {
+        const choice = await new Promise((resolve) => {
+          duplicateResolverRef.current = resolve
+          setPendingDuplicate({ ...e.conflict, requestedTitle: label || '' })
+        })
+        if (choice === 'update') {
+          return doSaveToCloud(label, { ...opts, id: e.conflict.existing_id, _retried: true })
+        }
+        if (choice === 'new') {
+          return doSaveToCloud(label, { ...opts, forceNew: true, _retried: true })
+        }
+        return { ok: false, error: 'cancelled' }
+      }
       return { ok: false, error: e.message }
     }
-  }, [state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotLabel, state.managerEmails, state.workspaceAccessMode, state.cloudWorkspaces, state.user, state.activeWorkspace, state.workspaceOwnerId, doListCloudWorkspaces])
+  }, [state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotId, state.activeSnapshotLabel, state.managerEmails, state.workspaceAccessMode, state.cloudWorkspaces, state.user, state.activeWorkspace, state.workspaceOwnerId, doListCloudWorkspaces])
 
   /**
    * Resolve the portal entry point for the ACTIVE workspace.
@@ -1999,9 +2059,11 @@ export function AppProvider({ children }) {
         },
       })
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
-      try {
-        localStorage.setItem('sro_last_workspace', JSON.stringify({ kind: 'cloud', id }))
-      } catch { /* best effort */ }
+      if (opts.remember !== false) {
+        try {
+          localStorage.setItem(WORKSPACE_PREFERENCE_KEY, JSON.stringify({ kind: 'cloud', id }))
+        } catch { /* best effort */ }
+      }
       return { ok: true }
     } catch (e) {
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
@@ -2107,6 +2169,10 @@ export function AppProvider({ children }) {
       autoOpenAttemptedRef.current = true
       return
     }
+    // Wait until the first /me attempt settles (success OR expired token) —
+    // otherwise we pick a local snapshot before the cloud list exists and then
+    // overwrite the stored preference with it.
+    if (!state.authInitialized) return
     if (!state.snapshotsLoaded) return
     if (state.user && !state.cloudListLoaded) return
 
@@ -2120,29 +2186,35 @@ export function AppProvider({ children }) {
       id: w.id,
       updatedAt: w.updated_at ? new Date(w.updated_at).getTime() : 0,
     }))
-    const candidates = [...localItems, ...cloudItems].sort((a, b) => b.updatedAt - a.updatedAt)
-    if (candidates.length === 0) {
-      return
-    }
 
-    let preferred = null
+    let preference = null
     try {
-      const raw = localStorage.getItem('sro_last_workspace')
-      if (raw) {
-        const saved = JSON.parse(raw)
-        preferred = candidates.find((c) => c.kind === saved.kind && c.id === saved.id) || null
-      }
+      const raw = localStorage.getItem(WORKSPACE_PREFERENCE_KEY)
+      if (raw) preference = JSON.parse(raw)
     } catch { /* ignore malformed preference */ }
-    const target = preferred || candidates[0]
+
+    const { target, keepPreference } = pickAutoOpenTarget({
+      preference,
+      localItems,
+      cloudItems,
+      user: Boolean(state.user),
+    })
+    if (!target) return
+
     autoOpenAttemptedRef.current = true
-    if (target.kind === 'local') doLoadSnapshot(target.id, { stayOnLanding: true })
-    else doLoadFromCloud(target.id, { stayOnLanding: true }).catch(() => {})
+    if (!keepPreference) {
+      try { localStorage.removeItem(WORKSPACE_PREFERENCE_KEY) } catch { /* ignore */ }
+    }
+    // remember:false → an automatic fallback must never pin the preference.
+    if (target.kind === 'local') doLoadSnapshot(target.id, { stayOnLanding: true, remember: false })
+    else doLoadFromCloud(target.id, { stayOnLanding: true, remember: false }).catch(() => {})
   }, [
     state.activeWorkspace,
     state.snapshots,
     state.snapshotsLoaded,
     state.cloudWorkspaces,
     state.cloudListLoaded,
+    state.authInitialized,
     state.user,
     doLoadSnapshot,
     doLoadFromCloud,
@@ -2300,6 +2372,9 @@ export function AppProvider({ children }) {
         openPortal: doOpenPortal,
         loadFromCloud: doLoadFromCloud,
         deleteFromCloud: doDeleteFromCloud,
+        // Duplicate workspace confirmation
+        pendingDuplicate,
+        resolveDuplicate,
       }}
     >
       {children}

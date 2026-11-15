@@ -286,7 +286,9 @@ export async function fetchMe() {
  * @param {{ id?: string, title: string, academicYear: number, term: number, workspace: object }} payload
  * @returns {Promise<{ id: string, title: string, updated_at: string }>}
  */
-export async function saveWorkspaceToCloud({ id, title, academicYear, term, workspace, managerEmails, accessMode }) {
+export async function saveWorkspaceToCloud({
+  id, title, academicYear, term, workspace, managerEmails, accessMode, forceNew,
+}) {
   const res = await fetch(`${BASE_URL}/api/v1/timetables/save-workspace`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -298,9 +300,20 @@ export async function saveWorkspaceToCloud({ id, title, academicYear, term, work
       workspace,
       manager_emails: managerEmails ?? null,
       access_mode: accessMode ?? null,
+      force_new: !!forceNew,
     }),
   })
   if (res.status === 401) throw new Error('กรุณาเข้าสู่ระบบเพื่อบันทึกขึ้นคลาวด์')
+  if (res.status === 409) {
+    // Same owner + same title already exists → caller must ask the user.
+    let detail = null
+    try {
+      detail = (await res.json())?.detail || null
+    } catch { /* non-JSON body */ }
+    const error = new Error(detail?.message || 'มีงานชื่อเดียวกันอยู่แล้ว')
+    error.conflict = detail && typeof detail === 'object' ? detail : null
+    throw error
+  }
   if (!res.ok) {
     const err = await res.text().catch(() => `HTTP ${res.status}`)
     throw new Error(err)
