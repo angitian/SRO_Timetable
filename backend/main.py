@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import os
 import functools
 import sys
 from pathlib import Path
@@ -91,7 +92,13 @@ async def dev_db_page(_: None = Depends(require_local_dev)):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "solver": "OR-Tools CP-SAT"}
+    """Health + build info — ใช้ตรวจว่า deploy ล่าสุดขึ้นจริงหรือยัง"""
+    return {
+        "status": "ok",
+        "solver": "OR-Tools CP-SAT",
+        "commit": os.environ.get("RENDER_GIT_COMMIT") or "",
+        "portal": True,
+    }
 
 
 @app.post("/generate", response_model=TimetableResponse)
