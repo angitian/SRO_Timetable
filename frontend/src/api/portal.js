@@ -15,6 +15,10 @@ async function parseError(res) {
   } catch {
     /* non-JSON body */
   }
+  // FastAPI default 404 = route ไม่มีจริง → backend ยังไม่ได้ deploy โค้ดพอร์ทัล
+  if (res.status === 404 && detail === 'Not Found') {
+    detail = 'เซิร์ฟเวอร์หลักยังไม่รองรับพอร์ทัล (backend ยังไม่ได้อัปเดต) — แจ้งผู้ดูแลระบบให้ deploy backend ก่อน'
+  }
   return new Error(detail)
 }
 

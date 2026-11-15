@@ -68,7 +68,7 @@ export default function LandingPage() {
 
   const PORTAL_ERRORS = {
     no_workspace: 'ยังไม่มีงานที่เปิดอยู่ — เลือกงานก่อน',
-    saved_without_code: 'บันทึกขึ้นคลาวด์แล้วแต่ไม่ได้รับรหัสพอร์ทัล — ลองโหลดงานใหม่',
+    saved_without_code: 'บันทึกขึ้นคลาวด์แล้วแต่ไม่ได้รับรหัสพอร์ทัล — เซิร์ฟเวอร์หลักอาจยังไม่ได้อัปเดต (ต้อง deploy backend ก่อน)',
   }
 
   async function handleOpenPortal() {
@@ -446,17 +446,21 @@ export default function LandingPage() {
 
         {/* ── พอร์ทัลแจ้งเตือน & ส่งงาน ─────────────────────────────── */}
         <div className="w-full max-w-4xl mx-auto mb-6">
-          <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 flex flex-wrap items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-white ring-1 ring-indigo-100 flex items-center justify-center shrink-0">
-              <BellRing className="w-5 h-5 text-indigo-600" />
+          <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="flex items-start gap-3 min-w-0 sm:flex-1">
+              <div className="w-10 h-10 rounded-lg bg-white ring-1 ring-indigo-100 flex items-center justify-center shrink-0">
+                <BellRing className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-indigo-900">พอร์ทัลแจ้งเตือน &amp; ส่งงาน</h3>
+                <p className="text-xs text-indigo-700 leading-relaxed">
+                  ครูเปิดลิงก์ดูงาน/สอนแทน/ส่งไฟล์ด้วย PIN · ฝ่ายวิชาการตรวจงาน ดาวน์โหลด ZIP/Excel
+                </p>
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <h3 className="text-sm font-bold text-indigo-900">พอร์ทัลแจ้งเตือน &amp; ส่งงาน</h3>
-              <p className="text-xs text-indigo-700 leading-relaxed">
-                ครูเปิดลิงก์ดูงาน/สอนแทน/ส่งไฟล์ด้วย PIN · ฝ่ายวิชาการตรวจงาน ดาวน์โหลด ZIP/Excel
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+
+            <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
               {portalWorkspaces.length > 1 && !activePortalCode && (
                 <select
                   value={portalShortCode}
@@ -473,25 +477,18 @@ export default function LandingPage() {
               )}
 
               {portalEntry.state === 'save_then_open' || portalEntry.state === 'need_login' ? (
-                <>
-                  <button
-                    onClick={handleOpenPortal}
-                    disabled={cloudSyncing}
-                    className="min-h-[38px] px-3 rounded-lg bg-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-60"
-                  >
-                    {cloudSyncing
-                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      : <Cloud className="w-3.5 h-3.5" />}
-                    {portalEntry.state === 'need_login'
-                      ? 'เข้าสู่ระบบเพื่อเปิดพอร์ทัล'
-                      : 'บันทึกขึ้นคลาวด์ + เปิดพอร์ทัล'}
-                  </button>
-                  <span className="text-[11px] font-medium text-indigo-700">
-                    {portalEntry.state === 'need_login'
-                      ? 'ต้องเข้าสู่ระบบ Google เพื่อผูกเจ้าของงานก่อน'
-                      : 'งานนี้ยังอยู่ในเบราว์เซอร์ — บันทึกขึ้นคลาวด์ก่อนเพื่อให้ครูเปิดลิงก์ได้'}
-                  </span>
-                </>
+                <button
+                  onClick={handleOpenPortal}
+                  disabled={cloudSyncing}
+                  className="min-h-[38px] px-3 rounded-lg bg-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  {cloudSyncing
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <Cloud className="w-3.5 h-3.5" />}
+                  {portalEntry.state === 'need_login'
+                    ? 'เข้าสู่ระบบเพื่อเปิดพอร์ทัล'
+                    : 'บันทึกขึ้นคลาวด์ + เปิดพอร์ทัล'}
+                </button>
               ) : portalShortCode ? (
                 <>
                   <button
@@ -513,19 +510,26 @@ export default function LandingPage() {
                   </a>
                 </>
               ) : (
-                <>
-                  <a
-                    href="/portal"
-                    className="min-h-[38px] px-3 rounded-lg bg-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5"
-                  >
-                    <ClipboardCheck className="w-3.5 h-3.5" /> เปิดพอร์ทัลด้วยรหัส
-                  </a>
-                  <span className="text-[11px] font-medium text-indigo-700">
-                    หรือเลือกงานด้านล่างเพื่อสร้างลิงก์
-                  </span>
-                </>
+                <a
+                  href="/portal"
+                  className="min-h-[38px] px-3 rounded-lg bg-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <ClipboardCheck className="w-3.5 h-3.5" /> เปิดพอร์ทัลด้วยรหัส
+                </a>
               )}
             </div>
+
+            </div>
+
+            {(portalEntry.state === 'need_login' || portalEntry.state === 'save_then_open' || !portalShortCode) && (
+              <p className="mt-2 text-[11px] font-medium text-indigo-700 leading-relaxed">
+                {portalEntry.state === 'need_login'
+                  ? 'ต้องเข้าสู่ระบบ Google เพื่อผูกเจ้าของงานก่อน'
+                  : portalEntry.state === 'save_then_open'
+                    ? 'งานนี้ยังอยู่ในเบราว์เซอร์ — บันทึกขึ้นคลาวด์ก่อนเพื่อให้ครูเปิดลิงก์ได้'
+                    : 'หรือเลือกงานด้านล่างเพื่อสร้างลิงก์'}
+              </p>
+            )}
           </div>
         </div>
 

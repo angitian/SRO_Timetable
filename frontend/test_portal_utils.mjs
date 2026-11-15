@@ -23,6 +23,7 @@ import {
   splitDateTime,
   isValidTime24,
   maskTimeInput,
+  parseDriveFolderLink,
   portalEntryState,
   progressLabel,
   removeAudienceMember,
@@ -355,4 +356,33 @@ test('splitDateTime round-trips through joinDateTime', () => {
   const original = '2026-11-16 16:30'
   const { date, time } = splitDateTime(original)
   assert.equal(joinDateTime(date, time), original)
+})
+
+// ── ลิงก์โฟลเดอร์ Google Drive ───────────────────────────────────────────
+
+test('parseDriveFolderLink reads folder links', () => {
+  assert.equal(
+    parseDriveFolderLink('https://drive.google.com/drive/folders/1AbCdEf?usp=sharing').folderId,
+    '1AbCdEf',
+  )
+  assert.equal(
+    parseDriveFolderLink('https://drive.google.com/drive/u/1/folders/XYZ123').folderId,
+    'XYZ123',
+  )
+  assert.equal(
+    parseDriveFolderLink('https://drive.google.com/open?id=OPEN99').folderId,
+    'OPEN99',
+  )
+})
+
+test('parseDriveFolderLink detects shared drive roots', () => {
+  const parsed = parseDriveFolderLink('https://drive.google.com/drive/0AJiHl9SharedDrive')
+  assert.equal(parsed.folderId, '0AJiHl9SharedDrive')
+  assert.equal(parsed.driveId, '0AJiHl9SharedDrive')
+})
+
+test('parseDriveFolderLink rejects files and unknown links', () => {
+  assert.match(parseDriveFolderLink('https://drive.google.com/file/d/1FILE/view').error, /ไฟล์/)
+  assert.match(parseDriveFolderLink('').error, /ว่าง/)
+  assert.match(parseDriveFolderLink('https://example.com/abc').error, /ไม่พบรหัสโฟลเดอร์/)
 })

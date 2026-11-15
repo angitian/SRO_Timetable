@@ -11,7 +11,7 @@ const ROLE_LABEL = {
 
 const PORTAL_ERRORS = {
   no_workspace: 'ยังไม่มีงานที่เปิดอยู่ — เลือกงานก่อน',
-  saved_without_code: 'บันทึกขึ้นคลาวด์แล้วแต่ไม่ได้รับรหัสพอร์ทัล — ลองโหลดงานใหม่',
+  saved_without_code: 'บันทึกขึ้นคลาวด์แล้วแต่ไม่ได้รับรหัสพอร์ทัล — เซิร์ฟเวอร์หลักอาจยังไม่ได้อัปเดต (ต้อง deploy backend ก่อน)',
 }
 
 export default function WorkspaceBar() {
