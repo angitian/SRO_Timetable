@@ -359,6 +359,58 @@ class TestWorkspace:
         ).json()
         assert updated["short_code"] == created["short_code"]
 
+    def test_duplicate_title_returns_409_with_existing_ids(self, client, jwt_secret):
+        token = _make_jwt()
+        first = client.post(
+            "/api/v1/timetables/save-workspace",
+            json=self._workspace_payload(title="ตารางฉบับร่าง"),
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()
+        resp = client.post(
+            "/api/v1/timetables/save-workspace",
+            json=self._workspace_payload(title="  ตารางฉบับร่าง  "),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "duplicate_title"
+        assert detail["existing_id"] == first["id"]
+        assert detail["short_code"] == first["short_code"]
+
+    def test_force_new_allows_same_title(self, client, jwt_secret):
+        token = _make_jwt()
+        first = client.post(
+            "/api/v1/timetables/save-workspace",
+            json=self._workspace_payload(title="ตาราง 1/2569"),
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()
+        payload = self._workspace_payload(title="ตาราง 1/2569")
+        payload["force_new"] = True
+        second = client.post(
+            "/api/v1/timetables/save-workspace",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert second.status_code == 200, second.text
+        body = second.json()
+        assert body["id"] != first["id"]
+        assert body["short_code"] != first["short_code"]
+
+    def test_duplicate_title_ignores_other_owners(self, client, jwt_secret, temp_store):
+        token = _make_jwt()
+        client.post(
+            "/api/v1/timetables/save-workspace",
+            json=self._workspace_payload(title="ตารางโรงเรียน"),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        other_token = _make_jwt(email="other@example.com", user_id="999")
+        resp = client.post(
+            "/api/v1/timetables/save-workspace",
+            json=self._workspace_payload(title="ตารางโรงเรียน"),
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert resp.status_code == 200, resp.text
+
     def test_load_workspace(self, client, jwt_secret):
         token = _make_jwt()
         # Save first

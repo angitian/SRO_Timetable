@@ -279,6 +279,25 @@ async def claim_timetable(
 # ── Workspace endpoints (private, owner-scoped, no re-solve) ────────────────
 
 
+async def _find_owned_workspace_by_title(
+    store: Any, user_id: str | None, email: str | None, title: str
+) -> dict | None:
+    """Return the caller's own workspace whose title matches (trimmed)."""
+    wanted = (title or "").strip()
+    if not wanted or not user_id:
+        return None
+    try:
+        records = await store.get_user_schedules(user_id, email)
+    except D1Error:
+        return None
+    for record in records:
+        if record.get("user_id") != user_id:
+            continue
+        if (record.get("title") or "").strip() == wanted:
+            return record
+    return None
+
+
 @router.post("/save-workspace", response_model=WorkspaceSaveResult)
 async def save_workspace(
     body: WorkspaceSaveRequest,
@@ -319,7 +338,25 @@ async def save_workspace(
         # Preserve the original owner — a manager saving must NOT become owner
         owner_id = existing.get("user_id")
     else:
-        # Create path: allocate a fresh short_code (private, so it's just a placeholder)
+        # Create path: refuse to silently create a second workspace with the same
+        # name — the UI asks whether to update the existing one instead.
+        if not body.force_new:
+            duplicate = await _find_owned_workspace_by_title(
+                store, identity.user_id, identity.email, body.title
+            )
+            if duplicate:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "duplicate_title",
+                        "message": "มีงานชื่อเดียวกันอยู่แล้ว",
+                        "existing_id": duplicate.get("id"),
+                        "short_code": duplicate.get("short_code"),
+                        "title": duplicate.get("title"),
+                        "updated_at": duplicate.get("updated_at"),
+                    },
+                )
+        # Allocate a fresh short_code (private, so it's just a placeholder)
         short_code = None
         for _ in range(_SHORT_CODE_MAX_ATTEMPTS):
             candidate = _generate_short_code()

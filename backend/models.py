@@ -677,6 +677,10 @@ class WorkspaceSaveRequest(BaseModel):
     workspace: dict = Field(description="Full workspace payload (fixtureData, result, userPlacements, ...)")
     manager_emails: Optional[list[str]] = Field(default=None, description="Emails of additional managers (owner only may change)")
     access_mode: Optional[str] = Field(default=None, description="'team' | 'private' (owner only may change; default keeps the existing mode)")
+    force_new: bool = Field(
+        default=False,
+        description="Create a new record even when the caller already owns one with the same title",
+    )
 
     @field_validator("access_mode")
     @classmethod
