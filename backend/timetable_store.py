@@ -265,6 +265,19 @@ class LocalTimetableStore:
                 return _row_to_record(r)
         return None
 
+    async def get_workspace_by_short_code(
+        self, short_code: str, include_private: bool = False
+    ) -> dict | None:
+        """Portal lookup: allow non-public workspaces (portal has its own flag)."""
+        rows = await self._load_all()
+        for r in rows:
+            if r.get("short_code") != short_code:
+                continue
+            if not include_private and not bool(r.get("is_public", 1)):
+                continue
+            return _row_to_record(r)
+        return None
+
     async def _team_owner_ids_for_email(self, email: str | None) -> set[str]:
         """Owner ids whose team includes this email (lowercased match)."""
         email = normalize_email(email)

@@ -341,6 +341,23 @@ class TestWorkspace:
         assert "id" in body
         assert body["title"] == "My Workspace"
         assert body["updated_at"] is not None
+        # The portal needs the short_code to build /portal?w= and /admin?w=
+        assert body["short_code"]
+        assert len(body["short_code"]) == 6
+
+    def test_update_workspace_keeps_same_short_code(self, client, jwt_secret):
+        token = _make_jwt()
+        created = client.post(
+            "/api/v1/timetables/save-workspace",
+            json=self._workspace_payload(title="Original"),
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()
+        updated = client.post(
+            "/api/v1/timetables/save-workspace",
+            json=self._workspace_payload(id=created["id"], title="Updated"),
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()
+        assert updated["short_code"] == created["short_code"]
 
     def test_load_workspace(self, client, jwt_secret):
         token = _make_jwt()
