@@ -336,3 +336,191 @@ python _run_migration.py ../scripts/008_trainee_shares.sql
 - `008` เพิ่มตาราง `trainee_shares` (1 ลิงก์ต่อโมดูล, short code 6 ตัว)
 - รันซ้ำได้ (`CREATE TABLE/INDEX IF NOT EXISTS`)
 - ถ้ายังไม่รัน: การกดสร้างลิงก์จะได้ error 502 จาก backend
+
+---
+
+---
+
+## 8. Portal v2 — กิจกรรมโรงเรียน + งานส่งไฟล์
+
+พอร์ทัลสำหรับครู (มือถือ, ไม่ต้อง login) และฝ่ายวิชาการ (ตรวจงาน) ผูกกับ workspace
+ผ่าน `timetables.short_code` — ใช้ข้อมูลครู/ห้องเรียน/ตารางสอนแทนที่มีอยู่แล้ว
+
+| หน้า | URL | สิทธิ์ |
+|---|---|---|
+| พอร์ทัลครู | `/portal?w=<short_code>` | ไม่ต้อง login (ต้องเปิด "เผยแพร่พอร์ทัล" ก่อน) |
+| ตรวจงาน (ฝ่ายวิชาการ) | `/admin?w=<short_code>` | Google login + role owner/editor ของ workspace |
+
+### 8.1 แนวคิดหลัก (v2 แยกสองระบบออกจากกัน)
+
+| | กิจกรรมโรงเรียน | งานส่งไฟล์ |
+|---|---|---|
+| ตาราง | `portal_events` | `portal_tasks` + `portal_task_slots` |
+| ผู้เข้าร่วม | ครู / กลุ่มสาระ / **ห้องเรียน** | ครู / กลุ่มสาระ |
+| ไฟล์ | ไม่มี | **หลายกล่องต่องาน** (กำหนดนามสกุล/ขนาด/บังคับหรือไม่ต่อกล่อง) |
+| ครูเห็น | ปฏิทินรวมทั้งโรงเรียน → คลิกดูผู้เข้าร่วม | เลือกชื่อ → เห็นงาน+กล่อง → ส่งด้วย PIN |
+| Admin เห็น | รายการ + สร้าง/แก้ | ตารางตรวจงาน **แถว=ครู คอลัมน์=กล่อง** + Excel/ZIP/เตือน |
+
+### 8.2 Migration (ต้องรันก่อน deploy)
+
+```bash
+cd backend
+python _run_migration.py ../scripts/010_portal_v2.sql
+```
+
+- ⚠️ **DROP TABLE** ตาราง `portal_*` 7 ตัว แล้วสร้างใหม่ (ตรวจแล้วว่าว่าง 0 rows ก่อนรัน)
+- คงเดิม: `portal_config`, `portal_teachers`, `portal_settings`
+- ใหม่: `portal_tasks`, `portal_task_slots`, `portal_audience`
+- เปลี่ยน: `portal_events` (กิจกรรมล้วน), `portal_submissions` (UNIQUE `slot_id`+`teacher_id`),
+  `portal_submission_history`, `portal_notifications` (+`task_id`)
+- รันซ้ำได้ (DROP IF EXISTS + CREATE)
+
+### 8.3 Environment variables (Render)
+
+| Variable | ค่า | หมายเหตุ |
+|---|---|---|
+| `PORTAL_STORAGE` | `drive` \| `local` \| (ว่าง = auto) | auto = `drive` เมื่อตั้งค่า Drive, ไม่งั้น `local` |
+| `PORTAL_UPLOAD_DIR` | เช่น `/var/data/uploads` | ใช้เมื่อ `PORTAL_STORAGE=local` |
+| `PORTAL_MAX_UPLOAD_MB` | `25` | ค่าเริ่มต้นของกล่องใหม่ (แต่ละกล่องปรับได้) |
+| `PORTAL_ALLOWED_EXT` | `.pdf,.docx,.xlsx,.zip` | ค่าเริ่มต้นของกล่องใหม่ |
+| `PORTAL_TZ` | `Asia/Bangkok` | ใช้ตัดสิน "ส่งช้า" |
+| `PORTAL_WEBHOOK_SECRET` | (ไม่บังคับ) | ใช้เซ็น `X-Portal-Signature` (HMAC-SHA256) |
+| `GOOGLE_DRIVE_CLIENT_ID` / `_SECRET` | ว่าง = ใช้ `GOOGLE_CLIENT_ID/SECRET` | ใช้กับ OAuth ของ Drive |
+| `GOOGLE_DRIVE_REFRESH_TOKEN` | (ไม่บังคับ) | ทางเลือกแทนการกดเชื่อมใน UI |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | path หรือ JSON | ทางเลือก: SA + Shared Drive |
+
+⚠️ **Render filesystem เป็น ephemeral** — ถ้า `PORTAL_STORAGE=local` ไฟล์ที่ครูส่งจะหาย
+ทุกครั้งที่ redeploy หน้าตรวจงานจะขึ้นแบนเนอร์เตือนเมื่อพอร์ทัลถูกเผยแพร่
+
+### 8.4 เชื่อม Google Drive (แนะนำ)
+
+กด **ตั้งค่า → เชื่อม Drive** ในหน้า `/admin` (ต้องเพิ่ม redirect URI ใน Google Cloud Console):
+
+```
+https://<render-app>.onrender.com/api/v1/portal/drive/callback
+```
+
+**ต้องตั้ง OAuth consent screen เป็น User type = Internal** (Google Workspace for Education)
+ถ้าตั้งเป็น External + Testing → **refresh token จะหมดอายุใน 7 วัน** และระบบจะขึ้น
+`invalid_grant` ให้กดเชื่อมใหม่
+
+ทางเลือกอื่น:
+
+| ทางเลือก | ใช้เมื่อ | ข้อควรรู้ |
+|---|---|---|
+| **OAuth (Internal)** | มี Google Workspace | ไม่ต้อง verification, token อยู่ยาว |
+| **Service account + Shared Drive** | มี Workspace + Shared Drive | SA ที่สร้างหลัง 15 เม.ย. 2025 **ไม่มี storage quota** — ต้องเพิ่ม SA เป็น Content Manager ใน Shared Drive |
+| **Cloudflare R2** | ไม่มี Workspace | ถูกกว่า, ไม่มี quota, แต่ไฟล์ไม่อยู่ใน Drive |
+| **Local disk** | dev / self-host | ต้องมี persistent disk |
+
+หลังเชื่อมแล้ว วางลิงก์โฟลเดอร์ปลายทาง (เช่น
+`https://drive.google.com/drive/folders/1AbC...`) ในช่อง **Google Drive ปลายทาง** →
+ไฟล์จะถูกเก็บเป็น `โฟลเดอร์/<วันที่>_<ชื่องาน>/<รหัสครู>_<ชื่อครู>_<กล่อง>_<ชื่อไฟล์>`
+
+### 8.5 งานที่อยู่ในเบราว์เซอร์ (local snapshot) → ต้องบันทึกขึ้นคลาวด์ก่อน
+
+พอร์ทัลทำงานฝั่งเซิร์ฟเวอร์และผูกกับ `timetables.short_code` — งานที่บันทึกใน
+IndexedDB/localStorage ยังไม่มี short_code จึงซิงก์ครูไม่ได้
+
+กดปุ่ม **พอร์ทัล** (ในแถบงานปัจจุบันหรือการ์ดหน้าแรก) ระบบจะ:
+1. ถ้ายังไม่ login → ให้เข้าสู่ระบบ Google ก่อน (admin ต้องใช้ JWT) แล้วทำต่อให้อัตโนมัติ
+2. บันทึกงานนี้ขึ้นคลาวด์ (`POST /save-workspace` — คืน `short_code` แล้วตั้งแต่ v2)
+3. เปิด `/admin?w=<short_code>` → ทะเบียนครูซิงก์จากงานนั้นทันที
+
+### 8.6 ทะเบียนครู (auto-sync + เดากลุ่มสาระ)
+
+- เปิดแท็บ **ทะเบียนครู** ครั้งแรก ระบบจะ **ซิงก์รายชื่อจาก workspace อัตโนมัติ**
+- ระบบ **เดากลุ่มสาระ** จากวิชาที่ครูสอนมากที่สุด (เช่น สอนคณิตศาสตร์ 4 คาบ → dept = คณิตศาสตร์)
+  เติมเฉพาะช่องที่ว่าง — แก้ไขได้ตลอด หรือกดปุ่ม "เดากลุ่มสาระ" ใหม่
+- PIN เริ่มต้น = **เลข 4 ตัวท้ายของเบอร์โทร** (กรอกเบอร์แล้วระบบตั้งให้)
+- ถ้าครูย้าย/เพิ่มในตารางสอน → กด "ซิงก์จาก workspace" อีกครั้ง (คนที่หายไปจะถูกปิดใช้งาน ไม่ลบ)
+
+### 8.7 Webhook (แจ้งเตือนออกนอกระบบ)
+
+ตั้ง URL ในหน้า ตั้งค่า — ระบบจะ POST JSON:
+
+```json
+{
+  "source": "sro-portal",
+  "type": "submission | reminder",
+  "workspace": { "short_code": "ABC123", "title": "..." },
+  "task": { "id": "...", "title": "...", "due_datetime": "..." },
+  "event": null,
+  "message": "ข้อความภาษาไทย",
+  "portal_url": "https://.../portal?w=ABC123",
+  "recipients": [{ "teacher_id": "T1", "name": "...", "dept": "..." }]
+}
+```
+
+ถ้าตั้ง `PORTAL_WEBHOOK_SECRET` จะมี header `X-Portal-Signature: sha256=<hex>`
+(ต่อกับ n8n / Make / LINE relay ได้) — ถ้าไม่ตั้ง webhook ก็ยังใช้ปุ่ม
+"คัดลอกข้อความ" แล้ววางในกลุ่ม LINE ได้
+
+### 8.8 API (สรุป)
+
+| Method | Path | สิทธิ์ |
+|---|---|---|
+| GET | `/api/v1/portal/{code}` | public (ต้อง publish) |
+| GET | `/api/v1/portal/{code}/calendar?from&to&teacher_id` | public |
+| GET | `/api/v1/portal/{code}/events/{id}?teacher_id` | public |
+| GET | `/api/v1/portal/{code}/tasks?teacher_id` | public |
+| POST | `/api/v1/portal/{code}/submissions` | public + PIN (teacher_id, task_id, slot_id, file) |
+| GET | `/api/v1/portal/{code}/submissions?teacher_id` | public |
+| GET | `/api/v1/portal/{code}/substitutions?date` | public |
+| GET/POST | `/api/v1/portal/{code}/notifications…` | public |
+| CRUD | `/api/v1/portal/{code}/admin/events` | owner/editor |
+| CRUD | `/api/v1/portal/{code}/admin/tasks` (+ `slots`, `audience`) | owner/editor |
+| GET | `/api/v1/portal/{code}/admin/tasks/{id}/matrix` | owner/editor |
+| GET | `/api/v1/portal/{code}/admin/tasks/{id}/export.xlsx` `/download-zip` | owner/editor |
+| POST | `/api/v1/portal/{code}/admin/tasks/{id}/remind` | owner/editor |
+| GET | `/api/v1/portal/{code}/admin/teachers?auto_sync=true` | owner/editor |
+| POST | `/api/v1/portal/{code}/admin/teachers/sync` `/infer-depts` | owner/editor |
+| PUT | `/api/v1/portal/{code}/admin/teachers/{id}` · `/pin` | owner/editor |
+| GET/PUT | `/api/v1/portal/{code}/admin/config` | owner/editor |
+| GET/POST | `/api/v1/portal/{code}/admin/drive/*` | owner/editor |
+
+---
+
+## 9. การย้อนรุ่น (rollback) และการติด tag
+
+`main` ผูก auto-deploy ทั้ง Render และ Cloudflare Workers → **push ขึ้น `main` = ขึ้น production ทันที**
+งานที่ยังไม่พร้อมจึงควรอยู่บน branch (`feat/...`) แล้ว merge เมื่อผ่านการตรวจ
+
+### 9.1 tag ที่ใช้เป็นจุดย้อนกลับ
+
+| tag | หมายถึง |
+|---|---|
+| `v0.1.0` | ระบบตารางสอน ก่อนมีพอร์ทัล (baseline) |
+| `v0.2.0-portal` | เพิ่มพอร์ทัล: กิจกรรมโรงเรียน + งานส่งไฟล์ + ตรวจงาน |
+
+```bash
+git tag -a v0.2.0-portal -m "Portal: แจ้งเตือน + ส่งงาน"   # หลัง merge
+git push origin v0.2.0-portal
+git tag -l                                                 # ดูทั้งหมด
+```
+
+### 9.2 ย้อนรุ่นหลัง deploy แล้วพบปัญหา
+
+```bash
+# 1) ถอยเร็วที่สุด — revert merge commit (history ยังอยู่ครบ)
+git switch main && git pull
+git revert -m 1 <merge-sha>      # merge-sha = commit ที่ merge PR เข้า main
+git push origin main             # auto-deploy กลับสภาพก่อน merge
+
+# 2) ไม่แตะ git เลย — ใช้ Render dashboard
+#    Service → Deploys → เลือก commit เก่า → "Redeploy"
+#    (Cloudflare Workers: `npx wrangler rollback` หรือ deploy commit เก่า)
+
+# 3) ดู/รันโค้ดรุ่นเก่าในเครื่อง
+git switch --detach v0.1.0
+git switch -                           # กลับ branch เดิม
+```
+
+### 9.3 ข้อควรระวัง
+
+- **migration ไม่ย้อนตามโค้ด** — `009_portal.sql` / `010_portal_v2.sql` เป็น additive
+  การ rollback โค้ดจะไม่ลบตาราง/ข้อมูลที่พอร์ทัลสร้าง ถ้าต้องถอย DB ด้วย
+  ต้องเขียน migration ย้อนกลับแยกและรันเอง
+- **Render filesystem เป็น ephemeral** — ไฟล์ที่เก็บแบบ `PORTAL_STORAGE=local`
+  หายทุกครั้งที่ redeploy/rollback ต้องใช้ Google Drive สำหรับไฟล์จริง
+- อย่า `git reset --hard` บน `main` ที่ push แล้ว — ใช้ `git revert` เท่านั้น

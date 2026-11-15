@@ -784,6 +784,9 @@ class TeamInfo(BaseModel):
 class WorkspaceSaveResult(BaseModel):
     """Response for POST /save-workspace."""
     id: str
+    short_code: str = Field(
+        description="รหัสพอร์ทัล/ลิงก์ของ workspace นี้ — ใช้เปิด /portal?w= และ /admin?w="
+    )
     title: str
     updated_at: Optional[str] = None
 

@@ -48,3 +48,13 @@ SYSTEM_REPORT.md
 # Editor/OS scratch files
 *.bak
 nul
+
+# Portal module runtime data (local dev)
+backend/data/portal/
+backend/data/uploads/
+
+# Local scratch / media (ไม่ commit)
+fb/
+pic*.png
+port-kit-timetable.rar
+port-timetable/

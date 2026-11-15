@@ -3,6 +3,7 @@ import {
   Plus, FolderOpen, Check, AlertCircle, Zap,
   Printer, ShieldCheck, Cloud, Loader2, Trash2,
   History, Download, Rocket, CalendarDays, Users, X, Lock, Globe, GraduationCap,
+  BellRing, ClipboardCheck,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import TeamDialog from '../components/modals/TeamDialog.jsx'
@@ -10,6 +11,9 @@ import WorkspaceMembersDialog from '../components/modals/WorkspaceMembersDialog.
 import { formatSnapshotDate } from '../utils/versionManager.js'
 import { formatLastSync } from '../utils/cache.js'
 import { listMyTraineeWorkspaces } from '../api/client.js'
+import {
+  clearPendingPortal, markPendingPortal, portalEntryState, readPendingPortal,
+} from '../features/portal/portalUtils.js'
 
 const FEATURES = [
   {
@@ -50,7 +54,50 @@ export default function LandingPage() {
     fixtureData, result, setStep, updateManagerEmails, updateWorkspaceAccess,
     teamInfo, activeWorkspace, activeTraineeWorkspace, setActiveTraineeWorkspace,
     canEditWorkspace, myWorkspaceRole, myTraineeRole,
+    openPortal, login,
   } = useApp()
+  const portalWorkspaces = cloudWorkspaces.filter((w) => w.short_code)
+  const portalEntry = portalEntryState({ workspace: activeWorkspace, user, cloudWorkspaces })
+  const activePortalCode = portalEntry.shortCode
+  const [portalPick, setPortalPick] = useState('')
+  const portalShortCode =
+    activePortalCode || portalPick || portalWorkspaces[0]?.short_code || ''
+  const portalTitle =
+    portalWorkspaces.find((w) => w.short_code === portalShortCode)?.title || activeWorkspace?.title || ''
+  const pendingPortalRef = useRef(false)
+
+  const PORTAL_ERRORS = {
+    no_workspace: 'ยังไม่มีงานที่เปิดอยู่ — เลือกงานก่อน',
+    saved_without_code: 'บันทึกขึ้นคลาวด์แล้วแต่ไม่ได้รับรหัสพอร์ทัล — ลองโหลดงานใหม่',
+  }
+
+  async function handleOpenPortal() {
+    const result = await openPortal()
+    if (result.ok) {
+      window.location.href = `/admin?w=${result.shortCode}`
+      return
+    }
+    if (result.error === 'need_login') {
+      markPendingPortal()
+      try {
+        await login()
+      } catch (e) {
+        showToast('err', e.message)
+      }
+      return
+    }
+    showToast('err', PORTAL_ERRORS[result.error] || result.error || 'เปิดพอร์ทัลไม่สำเร็จ')
+  }
+
+  // หลัง login เสร็จ (กลับมาหน้านี้) ให้ทำ flow ที่ค้างไว้ต่อให้เอง
+  useEffect(() => {
+    if (pendingPortalRef.current) return
+    if (!readPendingPortal() || !user || !activeWorkspace) return
+    pendingPortalRef.current = true
+    clearPendingPortal()
+    handleOpenPortal()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, activeWorkspace])
   const fileInputRef = useRef(null)
   const [toast, setToast] = useState(null) // { type: 'ok'|'err', msg }
   const [showCloudModal, setShowCloudModal] = useState(false)
@@ -395,6 +442,91 @@ export default function LandingPage() {
               ยังไม่มีงานปัจจุบัน — สร้างตารางใหม่หรือเลือกงานจากรายการด้านล่าง
             </div>
           )}
+        </div>
+
+        {/* ── พอร์ทัลแจ้งเตือน & ส่งงาน ─────────────────────────────── */}
+        <div className="w-full max-w-4xl mx-auto mb-6">
+          <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 flex flex-wrap items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-white ring-1 ring-indigo-100 flex items-center justify-center shrink-0">
+              <BellRing className="w-5 h-5 text-indigo-600" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-bold text-indigo-900">พอร์ทัลแจ้งเตือน &amp; ส่งงาน</h3>
+              <p className="text-xs text-indigo-700 leading-relaxed">
+                ครูเปิดลิงก์ดูงาน/สอนแทน/ส่งไฟล์ด้วย PIN · ฝ่ายวิชาการตรวจงาน ดาวน์โหลด ZIP/Excel
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {portalWorkspaces.length > 1 && !activePortalCode && (
+                <select
+                  value={portalShortCode}
+                  onChange={(e) => setPortalPick(e.target.value)}
+                  className="min-h-[38px] max-w-[220px] rounded-lg border border-indigo-300 bg-white px-2 text-xs font-semibold text-indigo-800"
+                  title="เลือก workspace ที่จะเปิดพอร์ทัล"
+                >
+                  {portalWorkspaces.map((w) => (
+                    <option key={w.id} value={w.short_code}>
+                      {w.title || w.short_code} ({w.short_code})
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {portalEntry.state === 'save_then_open' || portalEntry.state === 'need_login' ? (
+                <>
+                  <button
+                    onClick={handleOpenPortal}
+                    disabled={cloudSyncing}
+                    className="min-h-[38px] px-3 rounded-lg bg-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-60"
+                  >
+                    {cloudSyncing
+                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      : <Cloud className="w-3.5 h-3.5" />}
+                    {portalEntry.state === 'need_login'
+                      ? 'เข้าสู่ระบบเพื่อเปิดพอร์ทัล'
+                      : 'บันทึกขึ้นคลาวด์ + เปิดพอร์ทัล'}
+                  </button>
+                  <span className="text-[11px] font-medium text-indigo-700">
+                    {portalEntry.state === 'need_login'
+                      ? 'ต้องเข้าสู่ระบบ Google เพื่อผูกเจ้าของงานก่อน'
+                      : 'งานนี้ยังอยู่ในเบราว์เซอร์ — บันทึกขึ้นคลาวด์ก่อนเพื่อให้ครูเปิดลิงก์ได้'}
+                  </span>
+                </>
+              ) : portalShortCode ? (
+                <>
+                  <button
+                    onClick={() => {
+                      const url = `${window.location.origin}/portal?w=${portalShortCode}`
+                      try { navigator.clipboard.writeText(url) } catch { /* ignore */ }
+                      showToast('ok', 'คัดลอกลิงก์พอร์ทัลสำหรับครูแล้ว')
+                    }}
+                    className="min-h-[38px] px-3 rounded-lg border border-indigo-300 bg-white text-xs font-semibold text-indigo-700"
+                    title={portalTitle}
+                  >
+                    คัดลอกลิงก์ครู
+                  </button>
+                  <a
+                    href={`/admin?w=${portalShortCode}`}
+                    className="min-h-[38px] px-3 rounded-lg bg-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    <ClipboardCheck className="w-3.5 h-3.5" /> เปิดหน้าตรวจงาน
+                  </a>
+                </>
+              ) : (
+                <>
+                  <a
+                    href="/portal"
+                    className="min-h-[38px] px-3 rounded-lg bg-indigo-600 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    <ClipboardCheck className="w-3.5 h-3.5" /> เปิดพอร์ทัลด้วยรหัส
+                  </a>
+                  <span className="text-[11px] font-medium text-indigo-700">
+                    หรือเลือกงานด้านล่างเพื่อสร้างลิงก์
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* ── เลือกงานที่จะทำ (4 การ์ด) ────────────────────────────── */}

@@ -227,6 +227,29 @@ class D1Client:
             return None
         return self._row_to_record(rows[0])
 
+    async def get_workspace_by_short_code(
+        self, short_code: str, include_private: bool = False
+    ) -> dict | None:
+        """Fetch a workspace by short_code, optionally including non-public rows.
+
+        The portal module keeps its own publish flag (`portal_config.is_published`)
+        so it must be able to read a workspace that is not publicly shared.
+        """
+        sql = """
+            SELECT t.*, u.email AS owner_email, u.name AS owner_name
+            FROM timetables t
+            LEFT JOIN users u ON u.id = t.user_id
+            WHERE t.short_code = ?
+        """
+        if not include_private:
+            sql += " AND t.is_public = 1"
+        sql += " LIMIT 1"
+        result = await self.execute_query(sql, [short_code])
+        rows = result.get("results") or []
+        if not rows:
+            return None
+        return self._row_to_record(rows[0])
+
     async def _attach_workspace_roles(self, record: dict, user_id: str, email: str | None) -> dict:
         """Attach effective workspace/trainee roles to a TimetableRecord dict."""
         members = await self.get_workspace_members(record["id"])

@@ -14,6 +14,8 @@ import PublicViewerPage from './pages/PublicViewerPage.jsx'
 import SubstituteViewerPage from './pages/SubstituteViewerPage.jsx'
 import TraineeViewerPage from './pages/TraineeViewerPage.jsx'
 import AuthCallback from './pages/AuthCallback.jsx'
+import PortalPage from './features/portal/PortalPage.jsx'
+import PortalAdminPage from './features/portal/PortalAdminPage.jsx'
 
 function AppContent() {
   const { activeStep } = useApp()
@@ -21,6 +23,16 @@ function AppContent() {
   // Auth callback route: /auth/callback?token=... — standalone, no Layout needed
   if (window.location.pathname === '/auth/callback') {
     return <AuthCallback />
+  }
+
+  // Portal routes (แจ้งเตือน + ส่งงาน) — standalone, no AppContext needed
+  //   /portal?w=<short_code>  ครู (มือถือ, ไม่ต้อง login)
+  //   /admin?w=<short_code>   ฝ่ายวิชาการ (ต้อง login + สิทธิ์ workspace)
+  if (window.location.pathname === '/portal') {
+    return <PortalPage />
+  }
+  if (window.location.pathname === '/admin') {
+    return <PortalAdminPage />
   }
 
   // Public viewer route: /view?d=<base64> — standalone, no AppContext needed

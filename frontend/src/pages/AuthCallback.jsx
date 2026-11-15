@@ -73,9 +73,17 @@ export default function AuthCallback() {
         }
 
         setStatus('ok')
-        // Redirect home after a brief delay so the user sees the success state
+        // Return to the page that started the login (e.g. /admin?w=CODE),
+        // falling back to the home page. Only same-origin paths are allowed.
+        let target = '/'
+        try {
+          const back = sessionStorage.getItem('sro_auth_return')
+          sessionStorage.removeItem('sro_auth_return')
+          if (back && back.startsWith('/') && !back.startsWith('//')) target = back
+        } catch { /* private mode */ }
+        // Redirect after a brief delay so the user sees the success state
         setTimeout(() => {
-          window.location.href = '/'
+          window.location.href = target
         }, 800)
       })
       .catch(() => {

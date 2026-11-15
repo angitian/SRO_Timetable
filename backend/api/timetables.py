@@ -358,6 +358,7 @@ async def save_workspace(
     saved = await store.get_timetable_by_id(record_id, identity.user_id, identity.email)
     return WorkspaceSaveResult(
         id=record_id,
+        short_code=short_code,
         title=body.title,
         updated_at=saved["updated_at"] if saved else None,
     )

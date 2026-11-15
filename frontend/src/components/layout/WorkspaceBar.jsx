@@ -1,5 +1,7 @@
-import { CalendarDays, Cloud, Home, Lock } from 'lucide-react'
+import { useState } from 'react'
+import { BellRing, CalendarDays, Cloud, Home, Loader2, Lock } from 'lucide-react'
 import { useApp } from '../../context/AppContext.jsx'
+import { markPendingPortal } from '../../features/portal/portalUtils.js'
 
 const ROLE_LABEL = {
   owner: 'เจ้าของ',
@@ -7,13 +9,39 @@ const ROLE_LABEL = {
   viewer: 'อ่านอย่างเดียว',
 }
 
+const PORTAL_ERRORS = {
+  no_workspace: 'ยังไม่มีงานที่เปิดอยู่ — เลือกงานก่อน',
+  saved_without_code: 'บันทึกขึ้นคลาวด์แล้วแต่ไม่ได้รับรหัสพอร์ทัล — ลองโหลดงานใหม่',
+}
+
 export default function WorkspaceBar() {
   const {
     activeStep, activeWorkspace, activeTraineeWorkspace,
-    myWorkspaceRole, setStep,
+    myWorkspaceRole, setStep, openPortal, login, cloudSyncing,
   } = useApp()
+  const [portalError, setPortalError] = useState(null)
 
   if (activeStep === 0) return null
+
+  async function handlePortal() {
+    setPortalError(null)
+    const result = await openPortal()
+    if (result.ok) {
+      window.location.href = `/admin?w=${result.shortCode}`
+      return
+    }
+    if (result.error === 'need_login') {
+      // กลับมาทำ flow ต่อหลัง login (AuthCallback redirect กลับ '/' แล้ว LandingPage จะ resume)
+      markPendingPortal()
+      try {
+        await login()
+      } catch (e) {
+        setPortalError(e.message)
+      }
+      return
+    }
+    setPortalError(PORTAL_ERRORS[result.error] || result.error || 'เปิดพอร์ทัลไม่สำเร็จ')
+  }
 
   const title = activeWorkspace?.title || activeTraineeWorkspace?.linkedTimetableTitle || activeTraineeWorkspace?.title
   const isCloud = activeWorkspace?.kind === 'cloud'
@@ -44,6 +72,26 @@ export default function WorkspaceBar() {
           </span>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
+          {portalError && (
+            <span className="text-[11px] font-medium text-rose-600 max-w-[40vw] truncate" title={portalError}>
+              {portalError}
+            </span>
+          )}
+          {activeWorkspace && (
+            <button
+              onClick={handlePortal}
+              disabled={cloudSyncing}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors disabled:opacity-60"
+              title={
+                isCloud
+                  ? 'พอร์ทัลแจ้งเตือน & ส่งงานของ workspace นี้'
+                  : 'บันทึกงานนี้ขึ้นคลาวด์ก่อน แล้วเปิดพอร์ทัลให้ครู'
+              }
+            >
+              {cloudSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BellRing className="w-3.5 h-3.5" />}
+              พอร์ทัล
+            </button>
+          )}
           <button
             onClick={() => setStep(0)}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"

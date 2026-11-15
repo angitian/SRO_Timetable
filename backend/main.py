@@ -20,6 +20,7 @@ from api.team import router as team_router
 from api.trainees import router as trainees_router
 from api.devtools import router as devtools_router, require_local_dev
 from api.substitutes import router as substitutes_router
+from api.portal import router as portal_router
 from config import settings as app_settings
 from fastapi.responses import FileResponse
 
@@ -63,6 +64,7 @@ app.include_router(team_router)
 app.include_router(trainees_router)
 app.include_router(devtools_router)
 app.include_router(substitutes_router)
+app.include_router(portal_router)
 
 # Surface the OAuth redirect URI at startup: it must be registered verbatim in
 # Google Cloud Console, and a mismatch only shows up later as
