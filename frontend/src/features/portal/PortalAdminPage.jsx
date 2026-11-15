@@ -8,6 +8,7 @@ import {
 } from '../../api/portal.js'
 import { getAuthToken, loginWithGoogle } from '../../api/client.js'
 import PortalCodeEntry from './PortalCodeEntry.jsx'
+import { copyText } from './clipboard.js'
 import AdminEventsTab from './AdminEventsTab.jsx'
 import AdminTasksTab from './AdminTasksTab.jsx'
 import AdminTeachersTab from './AdminTeachersTab.jsx'
@@ -20,21 +21,6 @@ const TABS = [
   { id: 'settings', label: 'ตั้งค่า', icon: Settings2 },
 ]
 
-function copyText(text) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch { /* fall through */ }
-  const area = document.createElement('textarea')
-  area.value = text
-  document.body.appendChild(area)
-  area.select()
-  document.execCommand('copy')
-  area.remove()
-  return true
-}
 
 function LoginWall({ code }) {
   const [busy, setBusy] = useState(false)

@@ -407,3 +407,30 @@ export function joinDateTime(date, time, { fallbackTime = '00:00' } = {}) {
   const safeTime = formatTime24(time) || fallbackTime
   return `${String(date).slice(0, 10)} ${safeTime}`
 }
+
+/**
+ * แยกรหัสโฟลเดอร์จากลิงก์ Google Drive (ตรรกะเดียวกับ backend drive_client)
+ * @returns {{folderId: string, driveId: string|null} | {error: string}}
+ */
+export function parseDriveFolderLink(url) {
+  const raw = String(url || '').trim()
+  if (!raw) return { error: 'ลิงก์โฟลเดอร์ว่าง' }
+  if (raw.includes('/file/d/')) return { error: 'ลิงก์นี้เป็นไฟล์ ไม่ใช่โฟลเดอร์' }
+
+  const parts = raw.split('?')[0].replace(/\/+$/, '').split('/').filter(Boolean)
+  const foldersIndex = parts.indexOf('folders')
+  if (foldersIndex !== -1 && parts[foldersIndex + 1]) {
+    return { folderId: parts[foldersIndex + 1], driveId: null }
+  }
+  if (parts.includes('open')) {
+    const query = raw.split('?')[1] || ''
+    const id = new URLSearchParams(query).get('id')
+    if (id) return { folderId: id, driveId: null }
+  }
+  const driveIndex = parts.indexOf('drive')
+  if (driveIndex !== -1) {
+    const tail = parts.slice(driveIndex + 1).filter((part) => part !== 'u' && !/^\d+$/.test(part))
+    if (tail.length) return { folderId: tail[0], driveId: tail[0] }
+  }
+  return { error: 'ไม่พบรหัสโฟลเดอร์ในลิงก์ (ตัวอย่าง: .../drive/folders/<ID>)' }
+}
