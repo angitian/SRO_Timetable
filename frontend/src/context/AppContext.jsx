@@ -643,6 +643,7 @@ function reducer(state, action) {
           accessMode: action.payload._accessMode || 'team',
           myWorkspaceRole: action.payload._myWorkspaceRole || 'viewer',
           myTraineeRole: action.payload._myTraineeRole || 'none',
+          shortCode: action.payload._shortCode || null,
         },
         activeTraineeWorkspace: null,
         // Stay on landing when opened from the workspace list; otherwise keep
@@ -1852,6 +1853,7 @@ export function AppProvider({ children }) {
         .filter((r) => r.workspace)
         .map((r) => ({
           id: r.id,
+          short_code: r.short_code || null,
           title: r.title,
           academic_year: r.academic_year,
           term: r.term,
@@ -1926,6 +1928,7 @@ export function AppProvider({ children }) {
         payload: {
           kind: 'cloud',
           id: result.id,
+          shortCode: result.short_code || null,
           title: result.title,
           updatedAt: Date.now(),
           ownerId: state.workspaceOwnerId || state.user?.id || null,
@@ -1938,12 +1941,40 @@ export function AppProvider({ children }) {
         localStorage.setItem('sro_last_workspace', JSON.stringify({ kind: 'cloud', id: result.id }))
       } catch { /* best effort */ }
       await doListCloudWorkspaces()
-      return { ok: true, id: result.id, title: result.title }
+      return { ok: true, id: result.id, shortCode: result.short_code || '', title: result.title }
     } catch (e) {
       dispatch({ type: 'SET_CLOUD_SYNCING', payload: false })
       return { ok: false, error: e.message }
     }
   }, [state.fixtureData, state.result, state.userPlacements, state.substitutes, state.solverPreset, state.optimizationMode, state.activeCloudWorkspaceId, state.activeSnapshotLabel, state.managerEmails, state.workspaceAccessMode, state.cloudWorkspaces, state.user, state.activeWorkspace, state.workspaceOwnerId, doListCloudWorkspaces])
+
+  /**
+   * Resolve the portal entry point for the ACTIVE workspace.
+   *
+   * The portal lives on the server and is keyed by `timetables.short_code`, so a
+   * workspace that only exists in this browser (local snapshot) must be saved to
+   * the cloud first — that upload is also what gives the portal its teacher list.
+   *
+   * @returns {Promise<{ok: true, shortCode: string} | {ok: false, error: string}>}
+   */
+  const doOpenPortal = useCallback(async () => {
+    const workspace = state.activeWorkspace
+    if (!workspace) return { ok: false, error: 'no_workspace' }
+
+    const existingCode =
+      workspace.shortCode ||
+      state.cloudWorkspaces.find((w) => w.id === workspace.id)?.short_code ||
+      ''
+    if (existingCode) return { ok: true, shortCode: existingCode }
+    if (workspace.kind !== 'local') return { ok: false, error: 'no_workspace' }
+    // Admin endpoints require a Google JWT — a guest-saved workspace would 403.
+    if (!state.user) return { ok: false, error: 'need_login' }
+
+    const saved = await doSaveToCloud(workspace.title)
+    if (!saved.ok) return saved
+    if (!saved.shortCode) return { ok: false, error: 'saved_without_code' }
+    return { ok: true, shortCode: saved.shortCode }
+  }, [state.activeWorkspace, state.cloudWorkspaces, state.user, doSaveToCloud])
 
   const doLoadFromCloud = useCallback(async (id, opts = {}) => {
     flushPendingSave()
@@ -1956,6 +1987,7 @@ export function AppProvider({ children }) {
         payload: {
           ...ws,
           _cloudId: id,
+          _shortCode: record.short_code || null,
           _title: record.title,
           _updatedAt: record.updated_at ? new Date(record.updated_at).getTime() : Date.now(),
           _managerEmails: record.manager_emails || [],
@@ -2265,6 +2297,7 @@ export function AppProvider({ children }) {
         // Cloud workspaces
         listCloudWorkspaces: doListCloudWorkspaces,
         saveToCloud: doSaveToCloud,
+        openPortal: doOpenPortal,
         loadFromCloud: doLoadFromCloud,
         deleteFromCloud: doDeleteFromCloud,
       }}
