@@ -14,6 +14,17 @@
 - Portal tests: `python -m pytest test_portal_service.py test_portal_api.py test_portal_notifications.py -q`
 - Migrations: `python _run_migration.py ../scripts/00N_name.sql` (tolerates duplicate column/table)
 
+## Trainee module (ระบบตรวจการลงเวลาปฏิบัติงาน)
+- Routes: step 9 `TraineeAttendancePage` (`useTraineeWorkspace` = local cache + cloud sync)
+- **Three grant sources** (precedence in `permissions.resolve_trainee_role`):
+  `owner > trainee_members (สิทธิ์โมดูล dialog) > workspace_members.trainee_role
+  (สิทธิ์การเข้าถึง dialog — 'none' = explicit deny, beats team default) >
+  team_members.default_trainee_role (only when trainee_workspaces.access_mode='team')`
+- `my_trainee_role` on workspace records (`_attach_workspace_roles`) and on
+  `/api/v1/trainees/mine` must agree with the module ACL — keep them in sync.
+- Denials log `trainee_acl_denied ...`; `backend/_diagnose_trainee_access.py <tid> <email>`
+  prints every grant source (works on D1 or local store).
+
 ## Portal module v2 (กิจกรรมโรงเรียน + งานส่งไฟล์)
 - Routes: `/portal?w=<short_code>` (ครู, public) and `/admin?w=<short_code>` (owner/editor)
 - **Two separate concepts** — do not merge them:

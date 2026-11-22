@@ -222,6 +222,203 @@ class TestTraineeModule:
         assert client.delete(f"/api/v1/timetables/workspace/{ws_id}", headers=headers).status_code == 200
         assert client.get(f"/api/v1/trainees/{ws_id}", headers=headers).status_code == 404
 
+    def test_workspace_member_with_trainee_editor_gets_module_access(self, client, jwt_secret):
+        """Regression: workspace_members.trainee_role must grant module access.
+
+        Before the fix, a member added via the workspace members dialog with a
+        trainee role got 404 'Trainee module not found or not yours' and could
+        not create share links, because resolve_trainee_role never consulted
+        workspace_members."""
+        ws_id = _create_workspace(client)
+        owner_headers = _headers()
+        member_headers = _headers("member-1", "member@example.com", "Member")
+
+        # Owner grants workspace edit + trainee edit via the workspace dialog.
+        added = client.put(
+            f"/api/v1/timetables/workspace/{ws_id}/members",
+            json={"members": [{"email": "member@example.com", "workspace_role": "editor", "trainee_role": "editor"}]},
+            headers=owner_headers,
+        )
+        assert added.status_code == 200, added.text
+
+        # Owner creates + populates the module.
+        assert client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 0},
+            headers=owner_headers,
+        ).status_code == 200
+
+        loaded = client.get(f"/api/v1/trainees/{ws_id}", headers=member_headers)
+        assert loaded.status_code == 200, loaded.text
+        assert loaded.json()["my_trainee_role"] == "editor"
+        assert loaded.json()["can_edit_trainees"] is True
+
+        updated = client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 1},
+            headers=member_headers,
+        )
+        assert updated.status_code == 200, updated.text
+
+        # And can create the public summary link (the reported symptom).
+        share = client.post(
+            f"/api/v1/trainees/{ws_id}/share",
+            json={"payload": {"v": 1}},
+            headers=member_headers,
+        )
+        assert share.status_code == 200, share.text
+        assert share.json()["short_code"]
+
+    def test_workspace_member_with_trainee_viewer_is_read_only(self, client, jwt_secret):
+        ws_id = _create_workspace(client)
+        owner_headers = _headers()
+        viewer_headers = _headers("viewer-1", "viewer@example.com", "Viewer")
+
+        client.put(
+            f"/api/v1/timetables/workspace/{ws_id}/members",
+            json={"members": [{"email": "viewer@example.com", "workspace_role": "editor", "trainee_role": "viewer"}]},
+            headers=owner_headers,
+        )
+        client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 0},
+            headers=owner_headers,
+        )
+
+        loaded = client.get(f"/api/v1/trainees/{ws_id}", headers=viewer_headers)
+        assert loaded.status_code == 200, loaded.text
+        assert loaded.json()["my_trainee_role"] == "viewer"
+        assert loaded.json()["can_edit_trainees"] is False
+
+        denied = client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 1},
+            headers=viewer_headers,
+        )
+        assert denied.status_code == 403
+
+    def test_workspace_member_trainee_none_denies_team_default(self, client, jwt_secret):
+        """An explicit workspace member row with trainee_role='none' overrides
+        the owner's team default trainee role for that workspace."""
+        owner_headers = _headers()
+        member_headers = _headers("member-1", "member@example.com", "Member")
+        client.post(
+            "/api/v1/team/members",
+            json={
+                "email": "member@example.com",
+                "default_workspace_role": "editor",
+                "default_trainee_role": "editor",
+            },
+            headers=owner_headers,
+        )
+        ws_id = _create_workspace(client)
+        client.put(
+            f"/api/v1/timetables/workspace/{ws_id}/members",
+            json={"members": [{"email": "member@example.com", "workspace_role": "editor", "trainee_role": "none"}]},
+            headers=owner_headers,
+        )
+        client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 0},
+            headers=owner_headers,
+        )
+        # Opt the module into team sharing — the 'none' override must still win.
+        client.put(
+            f"/api/v1/trainees/{ws_id}/members",
+            json={"members": [], "access_mode": "team"},
+            headers=owner_headers,
+        )
+        denied = client.get(f"/api/v1/trainees/{ws_id}", headers=member_headers)
+        assert denied.status_code == 404
+
+    def test_workspace_member_trainee_editor_can_init_module(self, client, jwt_secret):
+        ws_id = _create_workspace(client)
+        owner_headers = _headers()
+        member_headers = _headers("member-1", "member@example.com", "Member")
+        client.put(
+            f"/api/v1/timetables/workspace/{ws_id}/members",
+            json={"members": [{"email": "member@example.com", "workspace_role": "viewer", "trainee_role": "editor"}]},
+            headers=owner_headers,
+        )
+        # No module yet — the member may initialize it via their trainee role
+        # even though their timetable role is only viewer.
+        loaded = client.get(f"/api/v1/trainees/{ws_id}", headers=member_headers)
+        assert loaded.status_code == 200, loaded.text
+        assert loaded.json()["my_trainee_role"] == "editor"
+        assert loaded.json()["can_edit_trainees"] is True
+
+        created = client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 0},
+            headers=member_headers,
+        )
+        assert created.status_code == 200, created.text
+
+    def test_workspace_editor_trainee_none_cannot_init_module(self, client, jwt_secret):
+        """Inverse of the bug fix: a workspace editor with trainee_role='none'
+        must NOT be able to create/open the module (previously allowed because
+        the init path checked my_workspace_role)."""
+        ws_id = _create_workspace(client)
+        owner_headers = _headers()
+        editor_headers = _headers("editor-1", "editor@example.com", "Editor")
+        client.put(
+            f"/api/v1/timetables/workspace/{ws_id}/members",
+            json={"members": [{"email": "editor@example.com", "workspace_role": "editor", "trainee_role": "none"}]},
+            headers=owner_headers,
+        )
+        denied = client.get(f"/api/v1/trainees/{ws_id}", headers=editor_headers)
+        assert denied.status_code == 403
+        denied_put = client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 0},
+            headers=editor_headers,
+        )
+        assert denied_put.status_code == 403
+
+    def test_trainee_member_beats_workspace_member_none(self, client, jwt_secret):
+        """An explicit module-level grant (trainee_members) wins over a
+        workspace member row whose trainee_role is 'none'."""
+        ws_id = _create_workspace(client)
+        owner_headers = _headers()
+        member_headers = _headers("member-1", "member@example.com", "Member")
+        client.put(
+            f"/api/v1/timetables/workspace/{ws_id}/members",
+            json={"members": [{"email": "member@example.com", "workspace_role": "viewer", "trainee_role": "none"}]},
+            headers=owner_headers,
+        )
+        client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 0},
+            headers=owner_headers,
+        )
+        client.put(
+            f"/api/v1/trainees/{ws_id}/members",
+            json={"members": [{"email": "member@example.com", "role": "editor"}]},
+            headers=owner_headers,
+        )
+        loaded = client.get(f"/api/v1/trainees/{ws_id}", headers=member_headers)
+        assert loaded.status_code == 200, loaded.text
+        assert loaded.json()["my_trainee_role"] == "editor"
+
+    def test_list_mine_includes_workspace_member_granted_module(self, client, jwt_secret):
+        ws_id = _create_workspace(client)
+        owner_headers = _headers()
+        member_headers = _headers("member-1", "member@example.com", "Member")
+        client.put(
+            f"/api/v1/timetables/workspace/{ws_id}/members",
+            json={"members": [{"email": "member@example.com", "workspace_role": "editor", "trainee_role": "editor"}]},
+            headers=owner_headers,
+        )
+        client.put(
+            f"/api/v1/trainees/{ws_id}",
+            json={"data": _empty_data(), "base_version": 0},
+            headers=owner_headers,
+        )
+        listed = client.get("/api/v1/trainees/mine", headers=member_headers)
+        assert listed.status_code == 200, listed.text
+        assert len(listed.json()) == 1
+        assert listed.json()[0]["my_trainee_role"] == "editor"
+
     def test_list_mine_includes_owner_and_shared_modules(self, client, jwt_secret):
         ws_id = _create_workspace(client)
         owner_headers = _headers()

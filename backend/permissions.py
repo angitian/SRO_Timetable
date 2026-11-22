@@ -4,7 +4,7 @@ The rules are intentionally small and deterministic so the D1 store, the
 local JSON store, and the API routers all agree:
 
   explicit workspace member > team default > legacy manager_emails
-  trainee member > team default > none
+  trainee member > workspace member trainee_role > team default > none
 
 Workspace owners are always `owner`; trainee module owners are always
 `owner` in the trainee namespace.
@@ -83,8 +83,16 @@ def resolve_trainee_role(
     team_default: dict | None,
     user_id: str | None,
     email: str | None,
+    workspace_members: list[dict] | None = None,
 ) -> str:
-    """Return owner/none/viewer/editor for the trainee module."""
+    """Return owner/none/viewer/editor for the trainee module.
+
+    Precedence: owner > trainee member > workspace member trainee_role
+    > team default (only when the module is shared with the team) > none.
+
+    A workspace member row with `trainee_role='none'` is an explicit deny:
+    it beats the team default so "ไม่เห็นโมดูล นศ." actually hides it.
+    """
     owner_id = trainee_row.get("owner_user_id")
     if owner_id and user_id and owner_id == user_id:
         return "owner"
@@ -92,6 +100,10 @@ def resolve_trainee_role(
     explicit = _member_role(trainee_members, email)
     if explicit:
         return normalize_trainee_role(explicit.get("role"), "none")
+
+    ws_member = _member_role(workspace_members, email)
+    if ws_member:
+        return normalize_trainee_role(ws_member.get("trainee_role"), "none")
 
     mode = (trainee_row.get("access_mode") or "private").strip().lower()
     if mode == "team" and team_default:

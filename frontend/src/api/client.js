@@ -546,6 +546,8 @@ export async function saveTraineeWorkspace(timetableId, data, baseVersion) {
     err.current = payload?.detail?.current || null
     throw err
   }
+  if (res.status === 404) throw new Error('ไม่พบโมดูลนักศึกษา หรือไม่มีสิทธิ์เข้าถึง')
+  if (res.status === 403) throw new Error(await _readError(res, 'คุณมีสิทธิ์อ่านโมดูลนี้เท่านั้น'))
   if (!res.ok) throw new Error(await _readError(res, `บันทึกไม่สำเร็จ (HTTP ${res.status})`))
   return res.json()
 }

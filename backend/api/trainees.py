@@ -19,6 +19,7 @@ Endpoints (prefix /api/v1/trainees):
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import uuid
 from typing import Any
@@ -38,12 +39,14 @@ from models import (
 )
 from permissions import (
     can_edit_trainees,
+    normalize_trainee_role,
     resolve_trainee_role,
     team_default_for,
 )
 from timetable_store import get_timetable_store
 
 router = APIRouter(prefix="/api/v1/trainees", tags=["trainees"])
+logger = logging.getLogger(__name__)
 
 MAX_TRAINEE_DATA_BYTES = 2 * 1024 * 1024
 MAX_SHARE_PAYLOAD_BYTES = 2 * 1024 * 1024
@@ -92,16 +95,47 @@ def _count_records(data: dict) -> tuple[int, int]:
 
 
 async def _trainee_role(store: Any, row: dict, identity: UserIdentity) -> str:
-    members = await store.get_trainee_members(row["timetable_id"])
+    timetable_id = row["timetable_id"]
+    members = await store.get_trainee_members(timetable_id)
+    workspace_members = await store.get_workspace_members(timetable_id)
     team_members = await store.get_team_members(row.get("owner_user_id")) if row.get("owner_user_id") else []
     team_default = team_default_for(team_members, row.get("owner_user_id"), identity.email)
-    return resolve_trainee_role(
+    role = resolve_trainee_role(
         trainee_row=row,
         trainee_members=members,
+        workspace_members=workspace_members,
         team_default=team_default,
         user_id=identity.user_id,
         email=identity.email,
     )
+    if role == "none":
+        # Makes "not found or not yours" diagnosable from server logs: which
+        # grant source was missing/mismatched for this caller.
+        logger.warning(
+            "trainee_acl_denied timetable_id=%s email=%s owner_user_id=%s "
+            "workspace_member=%s trainee_member=%s team_default=%s access_mode=%s",
+            timetable_id,
+            identity.email,
+            row.get("owner_user_id"),
+            _member_brief(workspace_members, identity.email),
+            _member_brief(members, identity.email),
+            (team_default or {}).get("default_trainee_role") if team_default else None,
+            row.get("access_mode"),
+        )
+    return role
+
+
+def _member_brief(members: list[dict] | None, email: str | None) -> str:
+    """One-line summary of a member row for `email` (for deny logging)."""
+    normalized = (email or "").strip().lower()
+    match = next(
+        (m for m in members or [] if (m.get("email") or "").strip().lower() == normalized),
+        None,
+    )
+    if not match:
+        return "absent"
+    role = match.get("trainee_role", match.get("role"))
+    return f"present(role={role})"
 
 
 def _response(row: dict, role: str) -> TraineeWorkspaceResponse:
@@ -190,14 +224,14 @@ async def get_trainee_workspace(
             raise HTTPException(status_code=404, detail="Trainee module not found or not yours")
         return _response(row, role)
 
-    # No module yet: only someone who can edit the timetable workspace may
-    # initialize one (and thereby capture the reference snapshot).
+    # No module yet: only someone the workspace grants a trainee role to may
+    # initialize one (owner, or a member whose trainee_role permits it).
     workspace = await store.get_timetable_by_id(timetable_id, identity.user_id, identity.email)
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found or not yours")
-    workspace_role = workspace.get("my_workspace_role")
-    if workspace_role not in ("owner", "editor"):
-        raise HTTPException(status_code=403, detail="ต้องมีสิทธิ์แก้ไข workspace เพื่อสร้างโมดูลนักศึกษา")
+    trainee_role = normalize_trainee_role(workspace.get("my_trainee_role"), "none")
+    if trainee_role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="ต้องมีสิทธิ์แก้ไขโมดูลนักศึกษาเพื่อสร้างโมดูลนี้")
     return TraineeWorkspaceResponse(
         timetable_id=timetable_id,
         title=workspace.get("title") or "",
@@ -210,9 +244,9 @@ async def get_trainee_workspace(
         version=0,
         trainee_count=0,
         attendance_count=0,
-        my_trainee_role="owner" if workspace_role == "owner" else "editor",
+        my_trainee_role=trainee_role,
         can_edit_trainees=True,
-        is_owner=workspace_role == "owner",
+        is_owner=trainee_role == "owner",
     )
 
 
@@ -245,8 +279,8 @@ async def save_trainee_workspace(
         workspace = await store.get_timetable_by_id(timetable_id, identity.user_id, identity.email)
         if not workspace:
             raise HTTPException(status_code=404, detail="Workspace not found or not yours")
-        if workspace.get("my_workspace_role") not in ("owner", "editor"):
-            raise HTTPException(status_code=403, detail="ต้องมีสิทธิ์แก้ไข workspace เพื่อสร้างโมดูลนักศึกษา")
+        if normalize_trainee_role(workspace.get("my_trainee_role"), "none") not in ("owner", "editor"):
+            raise HTTPException(status_code=403, detail="ต้องมีสิทธิ์แก้ไขโมดูลนักศึกษาเพื่อสร้างโมดูลนี้")
         owner_user_id = workspace.get("user_id") or identity.user_id
         access_mode = "private"
 

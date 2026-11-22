@@ -709,6 +709,10 @@ class D1Client:
                                       WHERE tm.timetable_id = tw.timetable_id AND lower(tm.email) = ?)
                            THEN (SELECT tm.role FROM trainee_members tm
                                  WHERE tm.timetable_id = tw.timetable_id AND lower(tm.email) = ? LIMIT 1)
+                         WHEN EXISTS (SELECT 1 FROM workspace_members wm
+                                      WHERE wm.timetable_id = tw.timetable_id AND lower(wm.email) = ?)
+                           THEN (SELECT wm.trainee_role FROM workspace_members wm
+                                 WHERE wm.timetable_id = tw.timetable_id AND lower(wm.email) = ? LIMIT 1)
                          WHEN tw.access_mode = 'team'
                               AND EXISTS (SELECT 1 FROM team_members tmem
                                           WHERE tmem.owner_user_id = tw.owner_user_id
@@ -723,16 +727,22 @@ class D1Client:
                 WHERE tw.owner_user_id = ?
                    OR EXISTS (SELECT 1 FROM trainee_members tm
                               WHERE tm.timetable_id = tw.timetable_id AND lower(tm.email) = ?)
+                   OR EXISTS (SELECT 1 FROM workspace_members wm
+                              WHERE wm.timetable_id = tw.timetable_id AND lower(wm.email) = ?)
                    OR (tw.access_mode = 'team'
                        AND EXISTS (SELECT 1 FROM team_members tmem
                                    WHERE tmem.owner_user_id = tw.owner_user_id
                                      AND lower(tmem.member_email) = ?))
                 ORDER BY tw.updated_at DESC
                 """,
-                [user_id, email, email, email, email, user_id, email, email],
+                [user_id, email, email, email, email, email, email, user_id, email, email, email],
             )
         except D1Error as e:
-            if "trainee_workspaces" not in str(e) and "trainee_members" not in str(e):
+            if (
+                "trainee_workspaces" not in str(e)
+                and "trainee_members" not in str(e)
+                and "workspace_members" not in str(e)
+            ):
                 raise
             return []
         out = []

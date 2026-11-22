@@ -71,7 +71,7 @@ function SyncBadge({ cloudEnabled, syncState }) {
 export default function TraineeAttendancePage() {
   const {
     activeWorkspace, activeTraineeWorkspace, fixtureData, user,
-    canEditWorkspace, setStep,
+    canEditTrainees, setStep,
   } = useApp()
 
   const timetableId = activeTraineeWorkspace?.timetableId || activeWorkspace?.id || null
@@ -80,7 +80,7 @@ export default function TraineeAttendancePage() {
     : activeWorkspace?.kind === 'cloud' && !!user
   const localCanEdit = activeTraineeWorkspace
     ? ['owner', 'editor'].includes(activeTraineeWorkspace.myTraineeRole)
-    : canEditWorkspace
+    : canEditTrainees
 
   const liveReference = useMemo(() => {
     const sameWorkspace = !activeTraineeWorkspace || activeWorkspace?.id === activeTraineeWorkspace.timetableId

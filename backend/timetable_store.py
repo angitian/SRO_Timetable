@@ -723,17 +723,19 @@ class LocalTimetableStore:
         email = normalize_email(email)
         rows = await self._load_trainee_workspaces()
         all_trainee_members = await self._load_trainee_members()
+        all_workspace_members = await self._load_workspace_members()
         team_rows = await self._load_team_members()
         timetables = {r.get("id"): r for r in await self._load_all()}
         out = []
         for row in rows:
             timetable_id = row.get("timetable_id")
             owner_id = row.get("owner_user_id")
-            explicit = next(
-                (m for m in all_trainee_members
-                 if m.get("timetable_id") == timetable_id and normalize_email(m.get("email")) == email),
-                None,
-            )
+            module_members = [
+                m for m in all_trainee_members if m.get("timetable_id") == timetable_id
+            ]
+            ws_members = [
+                m for m in all_workspace_members if m.get("timetable_id") == timetable_id
+            ]
             team_default = team_default_for(team_rows, owner_id, email)
             record = _row_to_trainee_workspace({
                 **row,
@@ -743,7 +745,8 @@ class LocalTimetableStore:
             })
             record["my_trainee_role"] = resolve_trainee_role(
                 trainee_row=row,
-                trainee_members=all_trainee_members,
+                trainee_members=module_members,
+                workspace_members=ws_members,
                 team_default=team_default,
                 user_id=user_id,
                 email=email,
